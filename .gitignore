@@ -1,0 +1,10 @@
+/.idea
+/.venv
+/full_tesla.json
+/full_tesla_video.mp4
+/generated_audio
+/generated_images
+/mid_tesla.json
+/mid_tesla_video.mp4
+/test_tesla.json
+/test_tesla_video.mp4
