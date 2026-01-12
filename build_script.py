@@ -13,7 +13,7 @@ from openai import OpenAI
 load_dotenv()  # Load API key from .env file
 client = OpenAI()
 
-SCRIPT_MODEL = "gpt-5.2"  # Using gpt-4o for better quality and longer context
+SCRIPT_MODEL = "gpt-5-mini"  # Using gpt-4o for better quality and longer context
 IMG_MODEL = "gpt-image-1-mini"
 
 THUMBNAILS_DIR = Path("thumbnails")
@@ -30,9 +30,9 @@ class Config:
     scenes_per_chapter = 4  # Scenes per chapter (total = chapters * scenes_per_chapter)
     generate_main = True    # Whether to generate main video
     
-    # Shorts settings (chapter-based like main video)
+    # Shorts settings
     num_shorts = 3              # Number of YouTube Shorts
-    short_chapters = 2          # Chapters per short (build, cliffhanger)
+    short_chapters = 1          # Chapters per short (keep at 1 for now: hook → build → build → cliffhanger)
     short_scenes_per_chapter = 4  # Scenes per chapter in shorts
     
     generate_thumbnails = True  # Whether to generate thumbnail images
@@ -115,11 +115,11 @@ For each of the {config.chapters} chapters, provide:
 - "recurring_threads": Which themes/motifs from earlier chapters appear here
 
 STORY ARC REQUIREMENTS:
-1. Chapter 1: Establish the WORLD and plant seeds of future conflict
-2. Chapters 2-4: Rising action - struggles, first successes, growing stakes
+1. Chapter 1 - THE HOOK: A rapid-fire "trailer" of their life. Tease the MOST interesting facts, achievements, controversies, and dramatic moments that will be covered. Make viewers think "I NEED to know more." This is NOT chronological - it's a highlight reel that hooks the audience. End with something like "But how did they get here? Let's start from the beginning..."
+2. Chapters 2-4: Early life and rising action - origins, struggles, first successes, growing stakes
 3. Chapters 5-7: Peak conflict - major breakthroughs AND major crises
 4. Chapters 8-9: Resolution and consequences
-5. Chapter 10: Legacy and emotional conclusion that echoes the beginning
+5. Chapter 10: Legacy and emotional conclusion that echoes the hook
 
 CRITICAL:
 - Every chapter must CONNECT to what came before and set up what comes after
@@ -176,12 +176,20 @@ def generate_scenes_for_chapter(person: str, chapter: dict, scenes_per_chapter: 
     """Generate scenes for a single chapter of the outline with continuity context."""
     
     # Build context from previous chapter for smooth transitions
+    chapter_num = chapter.get('chapter_num', 1)
+    is_hook_chapter = (chapter_num == 1)
+    
     if prev_chapter:
         prev_context = f"""PREVIOUS CHAPTER (for continuity):
 Chapter {prev_chapter['chapter_num']}: "{prev_chapter['title']}" ({prev_chapter['year_range']})
 Summary: {prev_chapter['summary']}
 Emotional Tone: {prev_chapter['emotional_tone']}
 """
+    elif is_hook_chapter:
+        prev_context = """THIS IS THE HOOK CHAPTER - a rapid-fire "trailer" for the documentary.
+Tease the most shocking, interesting, and dramatic moments from their ENTIRE life.
+This is NOT chronological - jump around to the highlights that will make viewers stay.
+End with a transition like "But how did it all begin?" to set up Chapter 2."""
     else:
         prev_context = "This is the OPENING chapter - establish the story with impact!"
     
@@ -220,12 +228,17 @@ Key Events to Dramatize:
 
 Generate EXACTLY {scenes_per_chapter} scenes that FLOW CONTINUOUSLY.
 
-CONTINUOUS FLOW REQUIREMENTS:
-- Scene 1 should TRANSITION smoothly from where the last chapter ended
+{"HOOK CHAPTER SPECIAL RULES:" if is_hook_chapter else "CONTINUOUS FLOW REQUIREMENTS:"}
+{'''- This is the "trailer" - rapid-fire highlights from their ENTIRE life
+- Jump between their most interesting achievements, controversies, and moments
+- NOT chronological - pick the most jaw-dropping facts regardless of when they happened
+- Each scene should make the viewer think "Wait, WHAT? I need to know more"
+- Final scene should transition to "Let's go back to the beginning..."
+- Pacing: fast, punchy, exciting - like a movie trailer''' if is_hook_chapter else '''- Scene 1 should TRANSITION smoothly from where the last chapter ended
 - Each scene should CONNECT to the next - end with forward momentum
 - Reference recurring themes/motifs from earlier in the documentary
 - The final scene should SET UP the next chapter's content
-- Think of scenes as continuous shots in a film, not separate segments
+- Think of scenes as continuous shots in a film, not separate segments'''}
 
 SCENE-TO-SCENE TRANSITIONS:
 - Use temporal connectors: "Days later...", "That same evening...", "Meanwhile..."
@@ -234,25 +247,29 @@ SCENE-TO-SCENE TRANSITIONS:
 - Avoid abrupt topic changes - each scene should feel inevitable after the last
 
 SCENE REQUIREMENTS:
-1. VIVID and SPECIFIC - not generic summaries
-2. SENSORY details - what do we see, hear, feel?
-3. CONCRETE specifics - dates, names, places, numbers
-4. EMOTION - what was the person feeling in this moment?
-5. TENSION - what was at stake? What could go wrong?
-6. DIALOGUE or QUOTES when impactful (paraphrased naturally)
-7. Vary PACING - mix intimate moments with bigger events
+1. SPECIFIC FACTS - names, dates, places, numbers, amounts
+2. CONCRETE details - what exactly happened, who was there, what was said
+3. INTERESTING information the viewer likely doesn't know
+4. CAUSE and EFFECT - why did this happen, what resulted
+5. NO filler, NO fluff, NO vague statements
+6. Every sentence must contain NEW information
 
-NARRATION STYLE:
-- Write like a master storyteller, not a textbook
-- Use present tense for immediacy: "Einstein stands alone in his study..."
-- Create vivid mental images
-- Build emotional connection to the subject
-- 2-4 sentences per scene (~15-25 seconds of narration)
+NARRATION STYLE - CRITICAL:
+- SIMPLE, CLEAR language. Write for a general audience.
+- AVOID flowery, artistic, or poetic language
+- AVOID vague phrases like "little did he know", "destiny awaited", "the world would never be the same"
+- NO dramatic pauses or buildup - just deliver the facts engagingly
+- Use present tense: "Einstein submits his paper to the journal..."
+- 2-3 sentences per scene (~12-18 seconds of narration)
+- Pack MAXIMUM information into minimum words
 - CRITICAL: This is SPOKEN narration for text-to-speech. Do NOT include:
   * Film directions like "Smash cut—", "Hard cut to", "Cut to:", "Fade in:"
   * Camera directions like "Close-up of", "Wide shot:", "Pan to"
   * Any production/editing terminology
   Write ONLY words that should be spoken by a narrator's voice.
+
+BAD example: "In the quiet of his study, a revolution was brewing in Einstein's mind."
+GOOD example: "In 1905, Einstein publishes four papers that redefine physics - including E=mc², proving mass and energy are the same thing."
 
 IMAGE PROMPT STYLE:
 - Cinematic, dramatic lighting
@@ -290,7 +307,7 @@ Respond with JSON array:
 
 
 def generate_short_outline(person: str, main_outline: dict, short_num: int, total_shorts: int) -> dict:
-    """Generate a focused outline for a single YouTube Short with chapter structure."""
+    """Generate a focused outline for a single YouTube Short."""
     
     chapters_context = "\n".join([
         f"• {ch['title']} ({ch['year_range']}): {ch['summary']}"
@@ -299,77 +316,49 @@ def generate_short_outline(person: str, main_outline: dict, short_num: int, tota
     
     # Different focus for each short
     focus_options = [
-        "the most SHOCKING or little-known fact that will make viewers gasp",
-        "the most DRAMATIC conflict, rivalry, or betrayal in their life",
-        "their most MIND-BLOWING achievement or genius moment",
-        "a TRAGIC or heartbreaking moment that humanizes them",
-        "a MYSTERIOUS or unexplained aspect of their life",
+        "the most SHOCKING or little-known fact",
+        "the most DRAMATIC conflict or rivalry",
+        "their most MIND-BLOWING achievement",
+        "a TRAGIC or heartbreaking moment",
+        "a MYSTERIOUS or unexplained aspect",
     ]
     focus = focus_options[(short_num - 1) % len(focus_options)]
     
-    outline_prompt = f"""You're creating a VIRAL YouTube Short about {person}.
+    outline_prompt = f"""Create a VIRAL YouTube Short about {person}.
 
-This is Short #{short_num} of {total_shorts}. Focus on: {focus}
+Short #{short_num} of {total_shorts}. Focus on: {focus}
 
 Their life story (for context):
 {chapters_context}
 
-Create a {config.short_chapters}-chapter outline for a ~60 second viral Short that tells ONE CONTINUOUS MINI-STORY:
-- HOOK viewers instantly with something jaw-dropping
-- Build TENSION through cause-and-effect storytelling
-- End on a CLIFFHANGER that drives them to the full documentary
+This Short has EXACTLY 4 scenes with this structure:
+1. HOOK: Start with the most surprising/shocking fact. Grab attention in 3 seconds.
+2. BUILD 1: Add context that makes the hook more interesting. Specific details.
+3. BUILD 2: Escalate - another surprising fact or consequence. Keep stacking interesting info.
+4. CLIFFHANGER: End with unresolved tension or "but that's not even the craziest part..."
 
-THE SHORT MUST FEEL LIKE A CONTINUOUS NARRATIVE, not disconnected facts.
+CRITICAL RULES:
+- Every scene must contain a SPECIFIC, INTERESTING FACT
+- NO vague statements or filler
+- NO artistic/poetic language
+- Simple, clear sentences packed with information
+- The short should feel like rapid-fire interesting facts that connect together
 
-NARRATIVE STRUCTURE:
-1. THE BUILD (Chapter 1): Hook + rapidly escalating stakes. Each moment causes the next.
-2. THE CLIFFHANGER (Chapter 2): Peak drama + unresolved tension. "But what happened next..."
-
-For each chapter provide:
+Provide JSON:
 {{
-  "chapter_num": 1-{config.short_chapters},
-  "title": "Punchy chapter title",
-  "purpose": "build" | "cliffhanger",
-  "key_moments": ["specific dramatic moment 1", "moment 2", ...],
-  "emotional_arc": "what emotion should viewers feel",
-  "pacing": "explosive" | "building" | "suspenseful",
-  "connects_to_next": "How this flows into the next chapter"
-}}
-
-Also provide:
-- "short_title": VIRAL title (max 50 chars) - curiosity gaps, shocking claims, mysteries
-- "short_description": YouTube description (100-150 words) with hashtags, ending with "🎬 Full story: [LINK]"
-- "tags": 10-15 SEO tags separated by commas (person name, topic, related keywords, trending terms for Shorts)
-- "thumbnail_prompt": Vertical 9:16, dramatic single image, high contrast, mobile-optimized
-- "hook_type": "shocking_fact" | "mystery" | "untold_story" | "what_if" | "betrayal" | "genius_moment"
-- "teaser_line": One sentence that makes people NEED to watch
-- "central_tension": The ONE driving question/conflict that runs through the entire short
-- "narrative_thread": How the story connects from first scene to last
-
-VIRAL TITLE FORMULAS:
-- "The [X] Nobody Talks About"
-- "[Person] Did WHAT?!"
-- "This Changed Everything..."
-- "The $X Mistake"
-- "Why [Person] [Shocking Action]"
-
-Respond with JSON:
-{{
-  "short_title": "...",
-  "short_description": "...",
-  "tags": "...",
-  "thumbnail_prompt": "...",
-  "hook_type": "...",
-  "teaser_line": "...",
-  "central_tension": "...",
-  "narrative_thread": "...",
-  "chapters": [...]
+  "short_title": "VIRAL title (max 50 chars) - shocking, specific",
+  "short_description": "YouTube description (100 words) with hashtags",
+  "tags": "10-15 SEO tags comma-separated",
+  "thumbnail_prompt": "Vertical 9:16, dramatic, mobile-optimized",
+  "hook_fact": "The ONE shocking fact that opens the short",
+  "story_angle": "What specific story/incident are we telling",
+  "key_facts": ["4-6 specific facts to include across the 4 scenes"]
 }}"""
 
     response = client.chat.completions.create(
         model=SCRIPT_MODEL,
         messages=[
-            {"role": "system", "content": "You create viral content that gets millions of views. Every word must earn its place. Respond with valid JSON only."},
+            {"role": "system", "content": "You create viral content. Every word must deliver value. No fluff. Respond with valid JSON only."},
             {"role": "user", "content": outline_prompt}
         ],
         temperature=0.9,
@@ -379,110 +368,56 @@ Respond with JSON:
     return json.loads(clean_json_response(response.choices[0].message.content))
 
 
-def generate_short_scenes(person: str, short_outline: dict, chapter: dict, start_id: int, 
-                          all_chapters: list, previous_scenes: list) -> list[dict]:
-    """Generate scenes for one chapter of a YouTube Short with full context."""
+def generate_short_scenes(person: str, short_outline: dict) -> list[dict]:
+    """Generate all 4 scenes for a YouTube Short (hook, build, build, cliffhanger)."""
     
-    # Build context of all chapters so the model understands the full arc
-    chapters_overview = "\n".join([
-        f"  {i+1}. {ch.get('title', 'Untitled')} ({ch.get('purpose', 'build')}) - {ch.get('summary', '')[:100] if ch.get('summary') else 'Key moments: ' + ', '.join(ch.get('key_moments', [])[:2])}"
-        for i, ch in enumerate(all_chapters)
-    ])
+    key_facts = short_outline.get('key_facts', [])
+    facts_str = "\n".join(f"• {fact}" for fact in key_facts)
     
-    current_chapter_num = chapter.get('chapter_num', 1)
-    
-    # Build context of what's already been covered
-    if previous_scenes:
-        prev_context = "SCENES ALREADY WRITTEN (don't repeat this content):\n"
-        for sc in previous_scenes:
-            prev_context += f"  - Scene {sc.get('id')}: {sc.get('title')} - \"{sc.get('narration', '')[:80]}...\"\n"
-    else:
-        prev_context = "This is the OPENING of the Short - start with maximum impact!"
-    
-    # Get narrative context from outline
-    central_tension = short_outline.get('central_tension', '')
-    narrative_thread = short_outline.get('narrative_thread', '')
-    connects_to_next = chapter.get('connects_to_next', '')
-    
-    scene_prompt = f"""You're writing scenes for a VIRAL YouTube Short about {person}.
+    scene_prompt = f"""Write 4 scenes for a YouTube Short about {person}.
 
-This Short tells ONE CONTINUOUS MINI-STORY. Every scene must connect to the next like a chain.
+TITLE: "{short_outline.get('short_title', '')}"
+OPENING HOOK: {short_outline.get('hook_fact', '')}
+STORY ANGLE: {short_outline.get('story_angle', '')}
 
-SHORT TITLE: "{short_outline.get('short_title', '')}"
-TEASER: {short_outline.get('teaser_line', '')}
-CENTRAL TENSION: {central_tension}
-NARRATIVE THREAD: {narrative_thread}
+KEY FACTS TO USE:
+{facts_str}
 
-FULL SHORT STRUCTURE (2-act: build → cliffhanger):
-{chapters_overview}
+STRUCTURE (exactly 4 scenes):
+1. HOOK: Open with the most shocking/surprising fact. Grab attention immediately.
+2. BUILD 1: Add context - why is this interesting? Specific details.
+3. BUILD 2: Escalate - another surprising consequence or related fact.
+4. CLIFFHANGER: End with "But that's not even the craziest part..." or similar hook to full video.
 
-{prev_context}
+NARRATION RULES - CRITICAL:
+- 1-2 SHORT sentences per scene (~8-10 seconds when spoken)
+- SIMPLE language - no fancy words, no poetry
+- SPECIFIC facts - names, numbers, dates, places
+- NO filler phrases like "little did he know" or "destiny awaited"
+- NO vague statements - every sentence must have concrete information
+- Present tense: "Einstein walks into the patent office..."
+- CRITICAL: Do NOT include film directions (Cut to, Fade, Smash cut) or camera directions.
 
-NOW WRITING CHAPTER {current_chapter_num}: "{chapter['title']}"
-Purpose: {chapter.get('purpose', 'build')}
-Emotional Arc: {chapter.get('emotional_tone', chapter.get('emotional_arc', 'engaging'))}
-Pacing: {chapter.get('pacing', 'dynamic')}
-Flows Into: {connects_to_next}
-
-Key Moments for This Chapter:
-{chr(10).join(f"• {m}" for m in chapter.get('key_moments', []))}
-
-Generate EXACTLY {config.short_scenes_per_chapter} scenes that FLOW AS ONE CONTINUOUS STORY.
-
-CONTINUOUS NARRATIVE REQUIREMENTS:
-- Each scene must CAUSE the next scene (action → consequence)
-- Use transitions: "But then...", "What he didn't know was...", "That's when..."
-- The CENTRAL TENSION should thread through every scene
-- Build emotional momentum - each scene more intense than the last
-- If chapter 1: Hook → escalate → set up the crisis
-- If chapter 2: Crisis peaks → twist/revelation → cliffhanger to full video
-
-SCENE-TO-SCENE FLOW:
-- End each scene with forward momentum (question, tension, or setup)
-- Start each scene by building on the previous one
-- NO scene should feel disconnected from the story
-- Think: "Because of Scene 1, Scene 2 happens. Because of Scene 2, Scene 3 happens..."
-
-VIRAL SHORT SCENE RULES:
-1. EVERY second counts - no filler, no fluff
-2. SPECIFIC details that create vivid mental images
-3. Each scene creates CURIOSITY for the next
-4. Conversational but dramatic - like telling a friend an incredible story
-5. Build TENSION - what's at stake? What could go wrong?
-
-NARRATION STYLE:
-- 1-2 punchy sentences per scene (~8-10 seconds spoken)
-- Present tense for immediacy: "He stares at the letter. His hands shake."
-- Conversational but dramatic
-- Include sensory details
-- CRITICAL: This is SPOKEN narration for text-to-speech. Do NOT include:
-  * Film directions like "Smash cut—", "Hard cut to", "Cut to:", "Fade in:"
-  * Camera directions like "Close-up of", "Wide shot:", "Pan to"
-  * Any production/editing terminology
-  Write ONLY words that should be spoken by a narrator's voice.
+BAD: "The genius stood on the precipice of destiny, unaware that fate had other plans."
+GOOD: "Einstein is 26 years old, working at a patent office, and about to change physics forever."
 
 IMAGE PROMPTS:
-- Vertical 9:16 composition
-- Dramatic, mobile-optimized
-- High contrast, bold composition
-- Single clear focal point
-- End with ", 9:16 vertical dramatic"
+- Vertical 9:16, dramatic, mobile-optimized
+- High contrast, single clear subject
+- End with ", 9:16 vertical"
 
-Respond with JSON array:
+Respond with JSON array of exactly 4 scenes:
 [
-  {{
-    "id": {start_id},
-    "title": "2-4 word punchy title",
-    "narration": "Gripping narration...",
-    "image_prompt": "Vertical dramatic composition, 9:16 vertical dramatic"
-  }},
-  ...
+  {{"id": 1, "title": "2-4 words", "narration": "...", "image_prompt": "..."}},
+  {{"id": 2, "title": "...", "narration": "...", "image_prompt": "..."}},
+  {{"id": 3, "title": "...", "narration": "...", "image_prompt": "..."}},
+  {{"id": 4, "title": "...", "narration": "...", "image_prompt": "..."}}
 ]"""
 
     response = client.chat.completions.create(
         model=SCRIPT_MODEL,
         messages=[
-            {"role": "system", "content": "You write viral content. Every word must hook, engage, or create curiosity. Respond with valid JSON array only."},
+            {"role": "system", "content": "You write viral content. Simple words, specific facts, no fluff. Respond with valid JSON array only."},
             {"role": "user", "content": scene_prompt}
         ],
         temperature=0.85,
@@ -497,14 +432,14 @@ Respond with JSON array:
 
 
 def generate_shorts(person_of_interest: str, main_title: str, global_block: str, outline: dict, base_output_path: str):
-    """Generate YouTube Shorts using chapter-based structure like main video."""
+    """Generate YouTube Shorts (4 scenes each: hook, build, build, cliffhanger)."""
     if config.num_shorts == 0:
         print("\n[SHORTS] Skipped (--shorts 0)")
         return []
     
     print(f"\n{'='*60}")
     print(f"[SHORTS] Generating {config.num_shorts} YouTube Short(s)")
-    print(f"[SHORTS] Structure: {config.short_chapters} chapters × {config.short_scenes_per_chapter} scenes = {config.total_short_scenes} scenes each")
+    print(f"[SHORTS] Structure: {config.total_short_scenes} scenes each (hook → build → build → cliffhanger)")
     print(f"{'='*60}")
     
     SHORTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -526,36 +461,21 @@ def generate_shorts(person_of_interest: str, main_title: str, global_block: str,
         
         short_title = short_outline.get("short_title", f"Short {short_num}")
         print(f"[SHORT {short_num}] Title: {short_title}")
-        print(f"[SHORT {short_num}] Hook: {short_outline.get('hook_type', 'unknown')}")
+        print(f"[SHORT {short_num}] Hook: {short_outline.get('hook_fact', '')[:60]}...")
         
-        chapters = short_outline.get("chapters", [])
-        print(f"[SHORT {short_num}] Chapters: {len(chapters)}")
+        # Step 2: Generate all scenes
+        print(f"[SHORT {short_num}] Generating {config.total_short_scenes} scenes...")
         
-        # Step 2: Generate scenes for each chapter (with full context)
-        all_scenes = []
-        for chapter in chapters:
-            start_id = len(all_scenes) + 1
-            ch_num = chapter.get("chapter_num", "?")
-            ch_title = chapter.get("title", "Untitled")
+        try:
+            all_scenes = generate_short_scenes(
+                person=person_of_interest,
+                short_outline=short_outline
+            )
+            print(f"[SHORT {short_num}] → {len(all_scenes)} scenes generated")
             
-            print(f"[SHORT {short_num}] Chapter {ch_num}: {ch_title} ({chapter.get('purpose', 'build')})")
-            
-            try:
-                scenes = generate_short_scenes(
-                    person=person_of_interest,
-                    short_outline=short_outline,
-                    chapter=chapter,
-                    start_id=start_id,
-                    all_chapters=chapters,           # Full chapter structure for context
-                    previous_scenes=list(all_scenes) # What's been written so far
-                )
-                
-                all_scenes.extend(scenes)
-                print(f"[SHORT {short_num}]   → {len(scenes)} scenes (total: {len(all_scenes)})")
-                
-            except Exception as e:
-                print(f"[SHORT {short_num}] ERROR generating scenes: {e}")
-                raise
+        except Exception as e:
+            print(f"[SHORT {short_num}] ERROR generating scenes: {e}")
+            raise
         
         # Fix scene IDs
         for i, scene in enumerate(all_scenes):
@@ -576,14 +496,13 @@ def generate_shorts(person_of_interest: str, main_title: str, global_block: str,
                 "title": short_title,
                 "description": short_outline.get("short_description", ""),
                 "tags": short_outline.get("tags", ""),
-                "teaser_line": short_outline.get("teaser_line", ""),
+                "hook_fact": short_outline.get("hook_fact", ""),
                 "thumbnail_path": str(thumbnail_path) if thumbnail_path else None,
-                "hook_type": short_outline.get("hook_type", ""),
+                "story_angle": short_outline.get("story_angle", ""),
                 "person_of_interest": person_of_interest,
                 "main_video_title": main_title,
                 "global_block": global_block,
                 "num_scenes": len(all_scenes),
-                "chapters": len(chapters),
                 "outline": short_outline
             },
             "scenes": all_scenes
@@ -598,8 +517,7 @@ def generate_shorts(person_of_interest: str, main_title: str, global_block: str,
         generated_shorts.append({
             "file": str(short_file),
             "title": short_title,
-            "scenes": len(all_scenes),
-            "chapters": len(chapters)
+            "scenes": len(all_scenes)
         })
     
     return generated_shorts
@@ -616,7 +534,7 @@ def generate_script(person_of_interest: str, output_path: str):
     else:
         print(f"[CONFIG] Main video: SKIPPED")
     if config.num_shorts > 0:
-        print(f"[CONFIG] Shorts: {config.num_shorts} × ({config.short_chapters} chapters × {config.short_scenes_per_chapter} scenes) = {config.num_shorts * config.total_short_scenes} scenes")
+        print(f"[CONFIG] Shorts: {config.num_shorts} × {config.total_short_scenes} scenes = {config.num_shorts * config.total_short_scenes} scenes")
     else:
         print(f"[CONFIG] Shorts: SKIPPED")
     print(f"[CONFIG] Thumbnails: {'Yes' if config.generate_thumbnails else 'No'}")
@@ -771,17 +689,17 @@ def parse_args():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Full production run (100 scenes, 3 shorts with 12 scenes each)
+  # Full production run (40 scenes main video, 3 shorts with 4 scenes each)
   python build_script.py "Albert Einstein"
 
-  # Quick test (4 scenes, 1 short with 4 scenes, no thumbnails)
+  # Quick test (4 scenes main, 1 short with 4 scenes, no thumbnails)
   python build_script.py "Albert Einstein" --test
 
   # Custom main video settings
   python build_script.py "Albert Einstein" --chapters 5 --scenes 3
 
   # Custom shorts settings  
-  python build_script.py "Albert Einstein" --shorts 1 --short-chapters 2 --short-scenes 3
+  python build_script.py "Albert Einstein" --shorts 2 --short-scenes 4
 
   # No thumbnails (faster iteration)
   python build_script.py "Albert Einstein" --no-thumbnails
@@ -816,10 +734,8 @@ Examples:
     # Shorts settings (defaults from Config class)
     parser.add_argument("--shorts", type=int, default=Config.num_shorts,
                         help=f"Number of YouTube Shorts (default: {Config.num_shorts}, use 0 to skip)")
-    parser.add_argument("--short-chapters", type=int, default=Config.short_chapters,
-                        help=f"Chapters per short (default: {Config.short_chapters}: build, cliffhanger)")
     parser.add_argument("--short-scenes", type=int, default=Config.short_scenes_per_chapter,
-                        help=f"Scenes per short chapter (default: {Config.short_scenes_per_chapter}, total per short = short-chapters × short-scenes)")
+                        help=f"Scenes per short (default: {Config.short_scenes_per_chapter}: hook, build, build, cliffhanger)")
     
     parser.add_argument("--no-thumbnails", action="store_true",
                         help="Skip thumbnail generation")
@@ -837,15 +753,14 @@ if __name__ == "__main__":
         config.chapters = 2
         config.scenes_per_chapter = 2
         config.num_shorts = 1
-        config.short_chapters = 2
-        config.short_scenes_per_chapter = 2
+        config.short_chapters = 1
+        config.short_scenes_per_chapter = 4
         config.generate_thumbnails = False
         print("[MODE] Test mode enabled")
     else:
         config.chapters = args.chapters
         config.scenes_per_chapter = args.scenes
         config.num_shorts = args.shorts
-        config.short_chapters = args.short_chapters
         config.short_scenes_per_chapter = args.short_scenes
         config.generate_thumbnails = not args.no_thumbnails
     
@@ -891,10 +806,9 @@ if __name__ == "__main__":
         if shorts_info:
             print(f"\n📱 YOUTUBE SHORTS ({len(shorts_info)}):")
             for short in shorts_info:
-                ch = short.get('chapters', '?')
                 sc = short.get('scenes', '?')
                 print(f"   • {short.get('title', 'Untitled')}")
-                print(f"     {ch} chapters, {sc} scenes → {short.get('file', '')}")
+                print(f"     {sc} scenes → {short.get('file', '')}")
         
         print(f"\n🎬 Build video:")
         if config.generate_main:

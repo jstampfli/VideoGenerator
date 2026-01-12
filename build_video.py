@@ -16,12 +16,113 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # ------------- CONFIG -------------
 
-load_dotenv()  # Load API key from .env file
+load_dotenv()  # Load API keys from .env file
 client = OpenAI()
 
 # OpenAI models
 IMG_MODEL = "gpt-image-1-mini"
-TTS_MODEL = "gpt-4o-mini-tts"
+
+# TTS Provider: "openai", "elevenlabs", or "google"
+TTS_PROVIDER = os.getenv("TTS_PROVIDER", "google").lower()
+
+# OpenAI TTS settings
+OPENAI_TTS_MODEL = "gpt-4o-mini-tts"
+OPENAI_TTS_VOICE = "cedar"
+
+# ElevenLabs TTS settings
+ELEVENLABS_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID", "JBFqnCBsd6RMkjVDRZzb")  # Default: George (narrative)
+ELEVENLABS_MODEL = os.getenv("ELEVENLABS_MODEL", "eleven_multilingual_v2")
+
+# Google Cloud TTS settings
+# Voice options: en-US-Wavenet-D (male), en-US-Wavenet-F (female), en-US-Neural2-D (male), en-US-Neural2-F (female)
+# See full list: https://cloud.google.com/text-to-speech/docs/voices
+GOOGLE_TTS_VOICE = os.getenv("GOOGLE_TTS_VOICE", "en-US-Studio-Q")  # High quality studio voice
+GOOGLE_TTS_LANGUAGE = os.getenv("GOOGLE_TTS_LANGUAGE", "en-US")
+GOOGLE_TTS_SPEAKING_RATE = float(os.getenv("GOOGLE_TTS_SPEAKING_RATE", "0.92"))  # 0.25 to 4.0 (slightly slower for clarity)
+GOOGLE_TTS_PITCH = float(os.getenv("GOOGLE_TTS_PITCH", "-1.0"))  # -20.0 to 20.0 semitones (slightly deeper)
+
+
+def text_to_ssml(text: str) -> str:
+    """
+    Convert plain text to SSML with natural pauses and pacing.
+    This makes Google Cloud TTS sound more natural and documentary-like.
+    """
+    import re
+    
+    # Escape special XML characters
+    text = text.replace("&", "&amp;")
+    text = text.replace("<", "&lt;")
+    text = text.replace(">", "&gt;")
+    text = text.replace('"', "&quot;")
+    text = text.replace("'", "&apos;")
+    
+    # Add pauses after sentences (periods, exclamation, question marks)
+    # Handle both mid-text (followed by space) and end-of-text cases
+    text = re.sub(r'\.(\s+)', r'.<break time="400ms"/>\1', text)
+    text = re.sub(r'\.$', r'.<break time="400ms"/>', text)  # End of text
+    text = re.sub(r'\!(\s+)', r'!<break time="350ms"/>\1', text)
+    text = re.sub(r'\!$', r'!<break time="350ms"/>', text)  # End of text
+    text = re.sub(r'\?(\s+)', r'?<break time="350ms"/>\1', text)
+    text = re.sub(r'\?$', r'?<break time="350ms"/>', text)  # End of text
+    
+    # Add shorter pauses after commas
+    text = re.sub(r',(\s+)', r',<break time="200ms"/>\1', text)
+    text = re.sub(r',$', r',<break time="200ms"/>', text)  # End of text (rare but possible)
+    
+    # Add pauses after colons and semicolons
+    text = re.sub(r':(\s+)', r':<break time="300ms"/>\1', text)
+    text = re.sub(r';(\s+)', r';<break time="250ms"/>\1', text)
+    
+    # Add pause after em-dashes (dramatic pause)
+    text = re.sub(r'—(\s*)', r'<break time="350ms"/>—<break time="200ms"/>', text)
+    text = re.sub(r' - ', r'<break time="250ms"/> - <break time="150ms"/>', text)
+    
+    # Add pause after ellipsis
+    text = re.sub(r'\.\.\.(\s*)', r'<break time="500ms"/>...\1', text)
+    
+    # Emphasize numbers/years (slightly slower)
+    text = re.sub(r'\b(1[89]\d{2}|20\d{2})\b', r'<prosody rate="95%">\1</prosody>', text)
+    
+    # Wrap in speak tags
+    ssml = f'<speak>{text}</speak>'
+    
+    return ssml
+
+# Initialize TTS clients
+elevenlabs_client = None
+google_tts_client = None
+
+if TTS_PROVIDER == "elevenlabs":
+    try:
+        from elevenlabs import ElevenLabs
+        elevenlabs_client = ElevenLabs(api_key=os.getenv("ELEVENLABS_API_KEY"))
+        print(f"[TTS] Using ElevenLabs (voice: {ELEVENLABS_VOICE_ID})")
+    except ImportError:
+        print("[WARNING] elevenlabs not installed. Run: py -m pip install elevenlabs")
+        print("[WARNING] Falling back to OpenAI TTS")
+        TTS_PROVIDER = "openai"
+    except Exception as e:
+        print(f"[WARNING] ElevenLabs init failed: {e}")
+        print("[WARNING] Falling back to OpenAI TTS")
+        TTS_PROVIDER = "openai"
+
+elif TTS_PROVIDER == "google":
+    try:
+        from google.cloud import texttospeech
+        google_tts_client = texttospeech.TextToSpeechClient()
+        print(f"[TTS] Using Google Cloud TTS (voice: {GOOGLE_TTS_VOICE})")
+    except ImportError:
+        print("[WARNING] google-cloud-texttospeech not installed. Run: py -m pip install google-cloud-texttospeech")
+        print("[WARNING] Falling back to OpenAI TTS")
+        TTS_PROVIDER = "openai"
+    except Exception as e:
+        print(f"[WARNING] Google Cloud TTS init failed: {e}")
+        print("[WARNING] Make sure GOOGLE_APPLICATION_CREDENTIALS is set to your service account key JSON file")
+        print("[WARNING] Falling back to OpenAI TTS")
+        TTS_PROVIDER = "openai"
+
+if TTS_PROVIDER == "openai":
+    print(f"[TTS] Using OpenAI ({OPENAI_TTS_MODEL}, voice: {OPENAI_TTS_VOICE})")
 
 # Final video resolution (we'll crop/scale images to this)
 OUTPUT_RESOLUTION_LANDSCAPE = (1920, 1080)  # 16:9 for main videos
@@ -52,13 +153,11 @@ config = Config()
 
 MAX_PREV_SUMMARY_CHARS = 300  # keep it short so prompts don't blow up
 
-TTS_SCENE_STYLE_PROMPT = (
+OPENAI_TTS_STYLE_PROMPT = (
     "Read the following text in a calm, neutral, and consistent tone. "
     "Maintain stable volume and pitch throughout. Do not add emotional "
     "inflection, dramatic emphasis, or noticeable changes in speaking speed. "
 )
-
-TTS_VOICE = "cedar"
 
 
 def build_image_prompt(scene: dict, prev_scene: dict | None, global_block_override: str | None = None) -> str:
@@ -229,6 +328,7 @@ def generate_image_for_scene(scene: dict, prev_scene: dict | None, global_block_
 def generate_audio_for_scene(scene: dict) -> Path:
     """
     Generate TTS audio for the given scene's narration.
+    Uses ElevenLabs or OpenAI based on TTS_PROVIDER setting.
     If config.save_assets is True, caches to generated_audio/. Otherwise uses temp directory.
     """
     if config.save_assets:
@@ -242,15 +342,57 @@ def generate_audio_for_scene(scene: dict) -> Path:
         audio_path = Path(config.temp_dir) / f"scene_{scene['id']:02d}.mp3"
 
     text = scene["narration"]
-    print(f"[AUDIO] Scene {scene['id']}: generating audio...")
+    print(f"[AUDIO] Scene {scene['id']}: generating audio ({TTS_PROVIDER})...")
 
-    with client.audio.speech.with_streaming_response.create(
-        model=TTS_MODEL,
-        voice=TTS_VOICE,
-        input=text,
-        instructions=TTS_SCENE_STYLE_PROMPT,
-    ) as response:
-        response.stream_to_file(str(audio_path))
+    if TTS_PROVIDER == "elevenlabs" and elevenlabs_client:
+        # ElevenLabs TTS
+        audio_generator = elevenlabs_client.text_to_speech.convert(
+            voice_id=ELEVENLABS_VOICE_ID,
+            text=text,
+            model_id=ELEVENLABS_MODEL,
+        )
+        # Write the audio chunks to file
+        with open(audio_path, "wb") as f:
+            for chunk in audio_generator:
+                f.write(chunk)
+    elif TTS_PROVIDER == "google" and google_tts_client:
+        # Google Cloud TTS with SSML for natural pacing
+        from google.cloud import texttospeech
+        
+        # Convert text to SSML for natural pauses and emphasis
+        ssml_text = text_to_ssml(text)
+        synthesis_input = texttospeech.SynthesisInput(ssml=ssml_text)
+        
+        voice = texttospeech.VoiceSelectionParams(
+            language_code=GOOGLE_TTS_LANGUAGE,
+            name=GOOGLE_TTS_VOICE,
+        )
+        
+        audio_config = texttospeech.AudioConfig(
+            audio_encoding=texttospeech.AudioEncoding.MP3,
+            speaking_rate=GOOGLE_TTS_SPEAKING_RATE,
+            pitch=GOOGLE_TTS_PITCH,
+            # Add effects for richer sound
+            effects_profile_id=["headphone-class-device"],
+        )
+        
+        response = google_tts_client.synthesize_speech(
+            input=synthesis_input,
+            voice=voice,
+            audio_config=audio_config,
+        )
+        
+        with open(audio_path, "wb") as f:
+            f.write(response.audio_content)
+    else:
+        # OpenAI TTS (fallback)
+        with client.audio.speech.with_streaming_response.create(
+            model=OPENAI_TTS_MODEL,
+            voice=OPENAI_TTS_VOICE,
+            input=text,
+            instructions=OPENAI_TTS_STYLE_PROMPT,
+        ) as response:
+            response.stream_to_file(str(audio_path))
 
     if config.save_assets:
         print(f"[AUDIO] Scene {scene['id']}: saved {audio_path.name}")
