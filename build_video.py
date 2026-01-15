@@ -20,7 +20,7 @@ load_dotenv()  # Load API keys from .env file
 client = OpenAI()
 
 # OpenAI models
-IMG_MODEL = "gpt-image-1-mini"
+IMG_MODEL = "gpt-image-1.5"
 
 # TTS Provider: "openai", "elevenlabs", or "google"
 TTS_PROVIDER = os.getenv("TTS_PROVIDER", "google").lower()
@@ -56,8 +56,17 @@ def text_to_ssml(text: str) -> str:
     text = text.replace('"', "&quot;")
     text = text.replace("'", "&apos;")
     
+    # IMPORTANT: Handle ellipsis FIRST, before processing individual periods
+    # Replace ellipsis with dramatic pause (don't keep the dots - TTS will read them otherwise)
+    # Handle both three-dot ellipsis (...) and Unicode ellipsis character (…)
+    text = re.sub(r'\.\.\.(\s+)', r'<break time="600ms"/>\1', text)  # Mid-text with space after
+    text = re.sub(r'\.\.\.$', r'<break time="600ms"/>', text)  # End of text
+    text = re.sub(r'…(\s+)', r'<break time="600ms"/>\1', text)  # Unicode ellipsis mid-text
+    text = re.sub(r'…$', r'<break time="600ms"/>', text)  # Unicode ellipsis end of text
+    
     # Add pauses after sentences (periods, exclamation, question marks)
     # Handle both mid-text (followed by space) and end-of-text cases
+    # Note: This won't match periods that are part of ellipsis since we handled those above
     text = re.sub(r'\.(\s+)', r'.<break time="400ms"/>\1', text)
     text = re.sub(r'\.$', r'.<break time="400ms"/>', text)  # End of text
     text = re.sub(r'\!(\s+)', r'!<break time="350ms"/>\1', text)
@@ -73,12 +82,17 @@ def text_to_ssml(text: str) -> str:
     text = re.sub(r':(\s+)', r':<break time="300ms"/>\1', text)
     text = re.sub(r';(\s+)', r';<break time="250ms"/>\1', text)
     
-    # Add pause after em-dashes (dramatic pause)
-    text = re.sub(r'—(\s*)', r'<break time="350ms"/>—<break time="200ms"/>', text)
-    text = re.sub(r' - ', r'<break time="250ms"/> - <break time="150ms"/>', text)
+    # Handle dashes/hyphens as pauses (remove the dash, add pause)
+    # Em-dash (—) - dramatic pause, remove the dash character completely
+    text = re.sub(r'—', r'<break time="400ms"/>', text)
     
-    # Add pause after ellipsis
-    text = re.sub(r'\.\.\.(\s*)', r'<break time="500ms"/>...\1', text)
+    # Regular hyphen/dash - replace with pause when used as separator (with spaces)
+    # This handles: "word - word" or "word -word" or "word- word" patterns
+    text = re.sub(r'(\s+)-(\s+)', r'\1<break time="300ms"/>\2', text)  # Space-dash-space
+    text = re.sub(r'(\s+)-(\w)', r'\1<break time="300ms"/>\2', text)  # Space-dash-word
+    text = re.sub(r'(\w)-(\s+)', r'\1<break time="300ms"/>\2', text)  # Word-dash-space
+    text = re.sub(r'(\s+)-$', r'\1<break time="300ms"/>', text)  # Space-dash at end
+    text = re.sub(r'^-(\s+)', r'<break time="300ms"/>\1', text)  # Dash-space at start
     
     # Emphasize numbers/years (slightly slower)
     text = re.sub(r'\b(1[89]\d{2}|20\d{2})\b', r'<prosody rate="95%">\1</prosody>', text)
@@ -288,10 +302,57 @@ def load_scenes(path: str):
     return scenes, metadata
 
 
-def generate_image_for_scene(scene: dict, prev_scene: dict | None, global_block_override: str | None = None) -> Path:
+class SafetyViolationError(Exception):
+    """Custom exception for safety violations with metadata."""
+    def __init__(self, message, violation_type=None, original_prompt=None):
+        super().__init__(message)
+        self.violation_type = violation_type
+        self.original_prompt = original_prompt
+
+
+def sanitize_prompt_for_safety(prompt: str, violation_type: str = None) -> str:
+    """
+    Sanitize an image prompt to avoid safety violations.
+    When a safety violation occurs, we modify the prompt to be more abstract,
+    focus on achievements rather than struggles, and add explicit safety instructions.
+    """
+    # Add explicit safety constraints
+    safety_instruction = " Safe, appropriate, educational content only. Focus on achievements, intellectual work, and positive moments. Avoid graphic or disturbing imagery."
+    
+    # If we know the violation type, we can be more specific
+    if violation_type == "self-harm":
+        # For self-harm violations, focus on positive aspects, achievements, and abstract representations
+        prompt = prompt.replace("suffering", "contemplation")
+        prompt = prompt.replace("pain", "challenge")
+        prompt = prompt.replace("struggle", "journey")
+        prompt = prompt.replace("death", "legacy")
+        prompt = prompt.replace("illness", "health challenges")
+        # Add instruction to focus on positive aspects
+        safety_instruction = " Safe, appropriate, educational content. Focus on achievements, intellectual work, contemplation, and positive moments. Use symbolic or abstract representation if needed. Avoid any graphic or disturbing imagery."
+    
+    # General sanitization: remove or soften potentially problematic words
+    problematic_patterns = [
+        (r'\b(harm|hurt|pain|suffering|death|suicide|cut|bleed|violence)\b', 'challenge'),
+        (r'\b(depression|despair|hopeless)\b', 'contemplation'),
+    ]
+    
+    import re
+    for pattern, replacement in problematic_patterns:
+        prompt = re.sub(pattern, replacement, prompt, flags=re.IGNORECASE)
+    
+    # Append safety instruction
+    sanitized = prompt + safety_instruction
+    
+    return sanitized
+
+
+def generate_image_for_scene(scene: dict, prev_scene: dict | None, global_block_override: str | None = None, sanitize_attempt: int = 0) -> Path:
     """
     Generate an image for the given scene using OpenAI Images API.
     If config.save_assets is True, caches to generated_images/. Otherwise uses temp directory.
+    
+    Args:
+        sanitize_attempt: Number of times we've tried to sanitize the prompt (0 = original, 1+ = sanitized)
     """
     if config.save_assets:
         IMAGES_DIR.mkdir(parents=True, exist_ok=True)
@@ -304,25 +365,47 @@ def generate_image_for_scene(scene: dict, prev_scene: dict | None, global_block_
         img_path = Path(config.temp_dir) / f"scene_{scene['id']:02d}.png"
 
     prompt = build_image_prompt(scene, prev_scene, global_block_override)
+    
+    # Sanitize prompt if this is a retry after safety violation
+    if sanitize_attempt > 0:
+        print(f"[IMAGE] Scene {scene['id']}: sanitizing prompt (attempt {sanitize_attempt})...")
+        prompt = sanitize_prompt_for_safety(prompt)
+    
     print(f"[IMAGE] Scene {scene['id']}: generating image...")
 
-    resp = client.images.generate(
-        model=IMG_MODEL,
-        prompt=prompt,
-        size=config.image_size,  # vertical for shorts, landscape for main
-        n=1
-    )
+    try:
+        resp = client.images.generate(
+            model=IMG_MODEL,
+            prompt=prompt,
+            size=config.image_size,  # vertical for shorts, landscape for main
+            n=1
+        )
 
-    b64_data = resp.data[0].b64_json
-    img_bytes = base64.b64decode(b64_data)
-    with open(img_path, "wb") as f:
-        f.write(img_bytes)
+        b64_data = resp.data[0].b64_json
+        img_bytes = base64.b64decode(b64_data)
+        with open(img_path, "wb") as f:
+            f.write(img_bytes)
 
-    if config.save_assets:
-        print(f"[IMAGE] Scene {scene['id']}: saved {img_path.name}")
-    else:
-        print(f"[IMAGE] Scene {scene['id']}: generated (temp)")
-    return img_path
+        if config.save_assets:
+            print(f"[IMAGE] Scene {scene['id']}: saved {img_path.name}")
+        else:
+            print(f"[IMAGE] Scene {scene['id']}: generated (temp)")
+        return img_path
+    
+    except Exception as e:
+        # Check if this is a safety violation error
+        error_str = str(e)
+        if 'safety' in error_str.lower() or 'moderation' in error_str.lower() or 'rejected' in error_str.lower():
+            # Extract violation type if available
+            violation_type = None
+            if 'self-harm' in error_str.lower():
+                violation_type = "self-harm"
+            
+            # Re-raise with violation info so retry mechanism can handle it
+            raise SafetyViolationError(f"Safety violation detected: {error_str}", violation_type=violation_type, original_prompt=prompt)
+        else:
+            # Re-raise other errors as-is
+            raise
 
 
 def generate_audio_for_scene(scene: dict) -> Path:
@@ -455,15 +538,40 @@ def retry_call(name: str, func, *args, max_attempts: int = 3, base_delay: float 
 
 
 def generate_image_for_scene_with_retry(scene: dict, prev_scene: dict | None, global_block_override: str | None = None) -> Path:
-    return retry_call(
-        "image",
-        generate_image_for_scene,
-        scene,
-        prev_scene,
-        global_block_override,
-        max_attempts=3,
-        base_delay=2.0,
-    )
+    """
+    Generate image with retry logic that handles safety violations by sanitizing prompts.
+    """
+    attempt = 1
+    max_attempts = 3  # More attempts for safety violations
+    base_delay = 2.0
+    
+    while True:
+        try:
+            sanitize_attempt = attempt - 1  # First attempt is 0 (no sanitization), subsequent attempts sanitize
+            return generate_image_for_scene(scene, prev_scene, global_block_override, sanitize_attempt=sanitize_attempt)
+        except SafetyViolationError as e:
+            if attempt >= max_attempts:
+                print(f"[RETRY][image] Scene {scene['id']}: Failed after {attempt} attempts with safety violations")
+                print(f"[RETRY][image] Original prompt: {e.original_prompt[:200]}...")
+                raise Exception(f"Image generation failed due to safety violations after {attempt} attempts. Scene {scene['id']} may need manual prompt adjustment.")
+            
+            print(f"[RETRY][image] Scene {scene['id']}: Safety violation detected (attempt {attempt}/{max_attempts})")
+            if e.violation_type:
+                print(f"[RETRY][image] Violation type: {e.violation_type}")
+            print(f"[RETRY][image] Sanitizing prompt and retrying...")
+            
+            delay = base_delay * (2 ** (attempt - 1)) * (0.8 + 0.4 * random.random())
+            time.sleep(delay)
+            attempt += 1
+        except Exception as e:
+            if attempt >= max_attempts:
+                print(f"[RETRY][image] Scene {scene['id']}: Failed after {attempt} attempts: {e}")
+                raise
+            
+            delay = base_delay * (2 ** (attempt - 1)) * (0.8 + 0.4 * random.random())
+            print(f"[RETRY][image] Scene {scene['id']}: Attempt {attempt} failed: {e}. Retrying in {delay:.1f} seconds...")
+            time.sleep(delay)
+            attempt += 1
 
 
 def generate_audio_for_scene_with_retry(scene: dict) -> Path:
@@ -497,6 +605,24 @@ def build_video(scenes_path: str, out_video_path: str, save_assets: bool = False
         print(f"[FORMAT] Vertical 9:16 (YouTube Short)")
     else:
         print(f"[FORMAT] Landscape 16:9 (Main video)")
+    
+    # Set output directory based on video type
+    from pathlib import Path
+    if is_short:
+        output_dir = Path("finished_shorts")
+    else:
+        output_dir = Path("finished_videos")
+    
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    # If output path is just a filename, put it in the appropriate directory
+    out_path = Path(out_video_path)
+    if not out_path.is_absolute() and str(out_path.parent) == ".":
+        # Just a filename, put it in the appropriate directory
+        out_video_path = str(output_dir / out_path.name)
+    elif not out_path.is_absolute() and str(out_path.parent) not in ["finished_shorts", "finished_videos"]:
+        # Relative path but not in the right directory, move it
+        out_video_path = str(output_dir / out_path.name)
     
     # Set up temp directory if not saving assets
     if not config.save_assets:
@@ -638,7 +764,7 @@ def find_shorts_for_script(script_path: str) -> list[Path]:
 
 def find_all_shorts() -> list[Path]:
     """Find all JSON files in the shorts directory."""
-    shorts_dir = Path("shorts")
+    shorts_dir = Path("shorts_scripts")
     if not shorts_dir.exists():
         return []
     
@@ -709,7 +835,8 @@ if __name__ == "__main__":
         
         for i, short_path in enumerate(shorts, 1):
             # Generate output name from JSON filename: einstein_short1.json → einstein_short1.mp4
-            short_output = short_path.stem + ".mp4"
+            # Output goes to finished_shorts/ directory
+            short_output = f"finished_shorts/{short_path.stem}.mp4"
             
             print(f"\n{'='*60}")
             print(f"[SHORT {i}/{len(shorts)}] Building: {short_output}")
@@ -743,20 +870,18 @@ if __name__ == "__main__":
         else:
             print(f"\n[SHORTS] Found {len(shorts)} short(s) to build")
             
-            # Derive output directory from main output file
-            output_dir = Path(args.output_file).parent
-            
             for i, short_path in enumerate(shorts, 1):
                 # Generate output name: einstein.mp4 → einstein_short1.mp4
+                # Output goes to finished_shorts/ directory
                 base_name = Path(args.output_file).stem
-                short_output = output_dir / f"{base_name}_short{i}.mp4"
+                short_output = f"finished_shorts/{base_name}_short{i}.mp4"
                 
                 print(f"\n{'='*60}")
                 print(f"[SHORT {i}/{len(shorts)}] Building: {short_output}")
                 print(f"{'='*60}")
                 
                 # Shorts are always vertical
-                build_video(str(short_path), str(short_output), save_assets=args.save_assets, is_short=True)
+                build_video(str(short_path), short_output, save_assets=args.save_assets, is_short=True)
         
         print(f"\n{'='*60}")
         print("[COMPLETE] All videos built!")

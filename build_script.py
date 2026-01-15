@@ -13,11 +13,12 @@ from openai import OpenAI
 load_dotenv()  # Load API key from .env file
 client = OpenAI()
 
-SCRIPT_MODEL = "gpt-5-mini"  # Using gpt-4o for better quality and longer context
-IMG_MODEL = "gpt-image-1-mini"
+SCRIPT_MODEL = "gpt-5.2"  # Using gpt-4o for better quality and longer context
+IMG_MODEL = "gpt-image-1.5"
 
 THUMBNAILS_DIR = Path("thumbnails")
-SHORTS_DIR = Path("shorts")
+SHORTS_DIR = Path("shorts_scripts")
+SCRIPTS_DIR = Path("scripts")
 
 NO_TEXT_CONSTRAINT = """
 CRITICAL: Do NOT include any text, words, letters, numbers, titles, labels, watermarks, or any written content in the image. The image must be completely text-free."""
@@ -26,16 +27,17 @@ CRITICAL: Do NOT include any text, words, letters, numbers, titles, labels, wate
 # Generation settings (can be overridden via command line)
 class Config:
     # Main video settings
-    chapters = 10           # Number of outline chapters
+    chapters = 7           # Number of outline chapters
     scenes_per_chapter = 4  # Scenes per chapter (total = chapters * scenes_per_chapter)
     generate_main = True    # Whether to generate main video
     
     # Shorts settings
     num_shorts = 3              # Number of YouTube Shorts
-    short_chapters = 1          # Chapters per short (keep at 1 for now: hook → build → build → cliffhanger)
-    short_scenes_per_chapter = 4  # Scenes per chapter in shorts
+    short_chapters = 1          # Chapters per short (1 chapter: build → build → cliffhanger)
+    short_scenes_per_chapter = 3  # Scenes per chapter in shorts (build, build, cliffhanger)
     
-    generate_thumbnails = True  # Whether to generate thumbnail images
+    generate_thumbnails = True  # Whether to generate thumbnail images (main video)
+    generate_short_thumbnails = False  # Whether to generate thumbnails for shorts (usually not needed)
     
     @property
     def total_scenes(self):
@@ -60,32 +62,107 @@ def clean_json_response(content: str) -> str:
     return content.strip()
 
 
+def sanitize_prompt_for_safety(prompt: str, violation_type: str = None) -> str:
+    """
+    Sanitize an image prompt to avoid safety violations.
+    When a safety violation occurs, we modify the prompt to be more abstract,
+    focus on achievements rather than struggles, and add explicit safety instructions.
+    """
+    # Add explicit safety constraints
+    safety_instruction = " Safe, appropriate, educational content only. Focus on achievements, intellectual work, and positive moments. Avoid graphic or disturbing imagery."
+    
+    # If we know the violation type, we can be more specific
+    if violation_type == "self-harm":
+        # For self-harm violations, focus on positive aspects, achievements, and abstract representations
+        prompt = prompt.replace("suffering", "contemplation")
+        prompt = prompt.replace("pain", "challenge")
+        prompt = prompt.replace("struggle", "journey")
+        prompt = prompt.replace("death", "legacy")
+        prompt = prompt.replace("illness", "health challenges")
+        # Add instruction to focus on positive aspects
+        safety_instruction = " Safe, appropriate, educational content. Focus on achievements, intellectual work, contemplation, and positive moments. Use symbolic or abstract representation if needed. Avoid any graphic or disturbing imagery."
+    
+    # General sanitization: remove or soften potentially problematic words
+    import re
+    problematic_patterns = [
+        (r'\b(harm|hurt|pain|suffering|death|suicide|cut|bleed|violence)\b', 'challenge'),
+        (r'\b(depression|despair|hopeless)\b', 'contemplation'),
+    ]
+    
+    for pattern, replacement in problematic_patterns:
+        prompt = re.sub(pattern, replacement, prompt, flags=re.IGNORECASE)
+    
+    # Append safety instruction
+    sanitized = prompt + safety_instruction
+    
+    return sanitized
+
+
+class SafetyViolationError(Exception):
+    """Custom exception for safety violations with metadata."""
+    def __init__(self, message, violation_type=None, original_prompt=None):
+        super().__init__(message)
+        self.violation_type = violation_type
+        self.original_prompt = original_prompt
+
+
 def generate_thumbnail(prompt: str, output_path: Path, size: str = "1024x1024") -> Path | None:
-    """Generate a thumbnail image and save it."""
+    """Generate a thumbnail image and save it with safety violation handling."""
     if not config.generate_thumbnails:
         print(f"[THUMBNAIL] Skipped (--no-thumbnails)")
         return None
     
     full_prompt = prompt + NO_TEXT_CONSTRAINT
+    max_attempts = 5
+    attempt = 1
     
-    try:
-        resp = client.images.generate(
-            model=IMG_MODEL,
-            prompt=full_prompt,
-            size=size,
-            n=1
-        )
-        
-        b64_data = resp.data[0].b64_json
-        img_bytes = base64.b64decode(b64_data)
-        with open(output_path, "wb") as f:
-            f.write(img_bytes)
-        
-        print(f"[THUMBNAIL] Saved: {output_path}")
-        return output_path
-    except Exception as e:
-        print(f"[WARNING] Failed to generate thumbnail: {e}")
-        return None
+    while attempt <= max_attempts:
+        try:
+            # Sanitize prompt if this is a retry after safety violation
+            current_prompt = full_prompt
+            if attempt > 1:
+                print(f"[THUMBNAIL] Sanitizing prompt (attempt {attempt}/{max_attempts})...")
+                current_prompt = sanitize_prompt_for_safety(full_prompt)
+            
+            resp = client.images.generate(
+                model=IMG_MODEL,
+                prompt=current_prompt,
+                size=size,
+                n=1
+            )
+            
+            b64_data = resp.data[0].b64_json
+            img_bytes = base64.b64decode(b64_data)
+            with open(output_path, "wb") as f:
+                f.write(img_bytes)
+            
+            print(f"[THUMBNAIL] Saved: {output_path}")
+            return output_path
+            
+        except Exception as e:
+            error_str = str(e)
+            # Check if this is a safety violation error
+            if 'safety' in error_str.lower() or 'moderation' in error_str.lower() or 'rejected' in error_str.lower():
+                violation_type = None
+                if 'self-harm' in error_str.lower():
+                    violation_type = "self-harm"
+                
+                if attempt >= max_attempts:
+                    print(f"[WARNING] Failed to generate thumbnail after {max_attempts} attempts due to safety violations: {e}")
+                    return None
+                
+                print(f"[THUMBNAIL] Safety violation detected (attempt {attempt}/{max_attempts}). Sanitizing and retrying...")
+                if violation_type:
+                    print(f"[THUMBNAIL] Violation type: {violation_type}")
+                attempt += 1
+                import time
+                time.sleep(2.0 * attempt)  # Exponential backoff
+            else:
+                # Non-safety errors: just fail
+                print(f"[WARNING] Failed to generate thumbnail: {e}")
+                return None
+    
+    return None
 
 
 def generate_outline(person_of_interest: str) -> dict:
@@ -115,11 +192,11 @@ For each of the {config.chapters} chapters, provide:
 - "recurring_threads": Which themes/motifs from earlier chapters appear here
 
 STORY ARC REQUIREMENTS:
-1. Chapter 1 - THE HOOK: A rapid-fire "trailer" of their life. Tease the MOST interesting facts, achievements, controversies, and dramatic moments that will be covered. Make viewers think "I NEED to know more." This is NOT chronological - it's a highlight reel that hooks the audience. End with something like "But how did they get here? Let's start from the beginning..."
-2. Chapters 2-4: Early life and rising action - origins, struggles, first successes, growing stakes
-3. Chapters 5-7: Peak conflict - major breakthroughs AND major crises
-4. Chapters 8-9: Resolution and consequences
-5. Chapter 10: Legacy and emotional conclusion that echoes the hook
+1. Chapter 1 - THE HOOK: Start by introducing the person with context: "This is the story of [Name]..." or "Meet [Name]..." Then present a rapid-fire "trailer" of their MOST interesting facts, achievements, controversies, and dramatic moments that will be covered. Give viewers context for who we're talking about before diving into the highlights. Make viewers think "I NEED to know more." This is NOT chronological - it's a highlight reel that hooks the audience. End with something like "But how did they get here? Let's start from the beginning..."
+2. Chapters 2: Early life and rising action - origins, struggles, first successes, growing stakes
+3. Chapters 3-5: Peak conflict - major breakthroughs AND major crises
+4. Chapters 6: Resolution and consequences
+5. Chapter 7: Legacy and emotional conclusion that echoes the hook
 
 CRITICAL:
 - Every chapter must CONNECT to what came before and set up what comes after
@@ -172,12 +249,29 @@ Respond with JSON:
 
 
 def generate_scenes_for_chapter(person: str, chapter: dict, scenes_per_chapter: int, start_id: int, 
-                                 global_style: str, prev_chapter: dict = None, prev_scenes: list = None) -> list[dict]:
+                                 global_style: str, prev_chapter: dict = None, prev_scenes: list = None,
+                                 central_theme: str = None, narrative_arc: str = None, 
+                                 planted_seeds: list[str] = None, is_retention_hook_point: bool = False) -> list[dict]:
     """Generate scenes for a single chapter of the outline with continuity context."""
+    
+    if planted_seeds is None:
+        planted_seeds = []
     
     # Build context from previous chapter for smooth transitions
     chapter_num = chapter.get('chapter_num', 1)
     is_hook_chapter = (chapter_num == 1)
+    
+    # Determine pacing based on emotional tone and dramatic tension
+    emotional_tone = chapter.get('emotional_tone', '').lower()
+    dramatic_tension = chapter.get('dramatic_tension', '').lower()
+    
+    # Fast pacing for action/excitement, slower for emotional weight
+    if any(word in emotional_tone for word in ['propulsive', 'energetic', 'intense', 'thrilling', 'action']):
+        pacing_instruction = "FAST PACING: Scenes should be punchy and energetic. Use 1-2 sentences per scene (~8-12 seconds). Quick cuts, high energy."
+    elif any(word in emotional_tone for word in ['contemplative', 'somber', 'reflective', 'melancholic', 'weighty']):
+        pacing_instruction = "SLOWER PACING: Scenes should have emotional weight. Use 3-4 sentences per scene (~18-24 seconds). Allow moments to breathe."
+    else:
+        pacing_instruction = "MODERATE PACING: Use 2-3 sentences per scene (~12-18 seconds). Match pacing to the emotional beats of the story."
     
     if prev_chapter:
         prev_context = f"""PREVIOUS CHAPTER (for continuity):
@@ -208,9 +302,35 @@ End with a transition like "But how did it all begin?" to set up Chapter 2."""
     recurring_threads = chapter.get('recurring_threads', [])
     threads_str = ', '.join(recurring_threads) if recurring_threads else 'none specified'
     
-    scene_prompt = f"""You are writing scenes {start_id}-{start_id + scenes_per_chapter - 1} of a {config.total_scenes}-scene documentary about {person}.
+    # Build central theme and narrative arc context
+    theme_context = ""
+    if central_theme:
+        theme_context += f"\nCENTRAL THEME (connect all scenes to this): {central_theme}\n"
+    if narrative_arc:
+        theme_context += f"NARRATIVE ARC (we are at this point in the journey): {narrative_arc}\n"
+    
+    # Build callback context for planted seeds
+    callback_context = ""
+    if planted_seeds:
+        callback_context = f"""
+PLANTED SEEDS TO REFERENCE (create satisfying callbacks):
+{chr(10).join(f"• {seed}" for seed in planted_seeds)}
 
-This is a CONTINUOUS NARRATIVE - scenes should flow like a movie, not feel like separate segments.
+These details were mentioned in earlier chapters. Reference them naturally in your scenes to create "aha moments" when earlier details suddenly matter. Don't force it - weave them in organically."""
+    
+    # Build retention hook instruction
+    retention_hook_instruction = ""
+    if is_retention_hook_point:
+        retention_hook_instruction = """
+CRITICAL RETENTION HOOK: This scene falls at a key retention point (~30s, 60s, or 90s mark). 
+The FINAL scene in this chapter MUST end with a compelling hook:
+- A surprising reveal or twist
+- An unresolved question that makes viewers NEED to see what happens next
+- A moment of high tension or conflict
+- A "wait, what?" moment that creates curiosity
+This hook is essential for YouTube algorithm performance - viewers must stay past this point."""
+    
+    scene_prompt = f"""You are writing scenes {start_id}-{start_id + scenes_per_chapter - 1} of a {config.total_scenes}-scene documentary about {person}.
 
 {prev_context}
 {scenes_context}
@@ -220,6 +340,10 @@ Emotional Tone: {chapter['emotional_tone']}
 Dramatic Tension: {chapter['dramatic_tension']}
 Recurring Themes: {threads_str}
 Sets Up Next Chapter: {connects_to_next}
+{theme_context}
+{callback_context}
+{pacing_instruction}
+{retention_hook_instruction}
 
 Chapter Summary: {chapter['summary']}
 
@@ -228,38 +352,50 @@ Key Events to Dramatize:
 
 Generate EXACTLY {scenes_per_chapter} scenes that FLOW CONTINUOUSLY.
 
-{"HOOK CHAPTER SPECIAL RULES:" if is_hook_chapter else "CONTINUOUS FLOW REQUIREMENTS:"}
-{'''- This is the "trailer" - rapid-fire highlights from their ENTIRE life
-- Jump between their most interesting achievements, controversies, and moments
-- NOT chronological - pick the most jaw-dropping facts regardless of when they happened
-- Each scene should make the viewer think "Wait, WHAT? I need to know more"
-- Final scene should transition to "Let's go back to the beginning..."
-- Pacing: fast, punchy, exciting - like a movie trailer''' if is_hook_chapter else '''- Scene 1 should TRANSITION smoothly from where the last chapter ended
+{"HOOK CHAPTER - INTRODUCTION/PREVIEW (NOT A STORY):" if is_hook_chapter else "CONTINUOUS NARRATIVE - scenes should flow like a movie, not feel like separate segments:"}
+{'''CRITICAL: This is an INTRODUCTION/PREVIEW, not a story. It should quickly answer "Why should I watch this?"
+
+STRUCTURE:
+- SCENE 1 (COLD OPEN - FIRST 15 SECONDS): Start with the MOST shocking, intriguing, or compelling moment or question. DO NOT start with "This is the story of..." - that's generic. Instead, lead with intrigue: "In 1905, a 26-year-old patent clerk publishes a paper that will change everything. But first, he must survive the criticism of his own father." OR start with a compelling question: "What if everything you knew about time and space was wrong?" OR start with the most dramatic moment: "The letter arrives in June 1858. Darwin's hands tremble as he reads his own theory in another man's words." The first 15 seconds are CRITICAL for YouTube - this is what viewers see in search/preview. Hook them immediately, THEN introduce who this person is.
+- SCENES 2-4: Rapid-fire preview of the most shocking, interesting, or impactful moments from their entire life - achievements, controversies, dramatic moments, surprising facts
+- NOT chronological - pick jaw-dropping highlights from any point in their life
+- Each scene should hook the viewer: "You'll discover how...", "You'll see the moment when...", "Wait until you hear about..."
+- FINAL SCENE: Natural bridge to the chronological story. DO NOT say "now the story rewinds" or "let's go back" or "rewind to the beginning" - that's awkward. Instead, use something like: "But it all started when...", "It begins with...", or simply start the chronological narrative: "[Birth year/early life context]. This is where our story begins."
+- Tone: Exciting, intriguing preview. Fast-paced like a trailer. NOT a narrative story.
+
+NARRATION STYLE FOR INTRO:
+- Speak directly to the viewer about what they'll discover
+- Use phrases like "You'll discover...", "This is the story of...", "Wait until you learn...", "Here's why this matters..."
+- Present facts as previews, not as events happening in real-time
+- Make it clear this is a preview/introduction, not the actual story''' if is_hook_chapter else '''- Scene 1 should TRANSITION smoothly from where the last chapter ended
 - Each scene should CONNECT to the next - end with forward momentum
 - Reference recurring themes/motifs from earlier in the documentary
 - The final scene should SET UP the next chapter's content
 - Think of scenes as continuous shots in a film, not separate segments'''}
 
-SCENE-TO-SCENE TRANSITIONS:
-- Use temporal connectors: "Days later...", "That same evening...", "Meanwhile..."
-- Use emotional connectors: build on feelings from the previous scene
-- Use narrative connectors: cause → effect, action → consequence
-- Avoid abrupt topic changes - each scene should feel inevitable after the last
+{"" if is_hook_chapter else "SCENE-TO-SCENE FLOW:\n- Flow naturally through the story using ACTUAL events and their consequences\n- Connect scenes through cause-and-effect, not artificial transitions\n- DO NOT use made-up temporal transitions like \"Days later...\", \"Later that week...\", \"That afternoon...\", \"The next morning...\", \"Weeks passed...\"\n- Instead, let the story flow through what actually happened: \"The paper is published. Physicists worldwide take notice.\"\n- Each scene should feel inevitable because of what came before, not because of a transition phrase\n- Build narrative momentum through actual events, not filler words"}
 
-SCENE REQUIREMENTS:
-1. SPECIFIC FACTS - names, dates, places, numbers, amounts
-2. CONCRETE details - what exactly happened, who was there, what was said
-3. INTERESTING information the viewer likely doesn't know
-4. CAUSE and EFFECT - why did this happen, what resulted
-5. NO filler, NO fluff, NO vague statements
-6. Every sentence must contain NEW information
+SCENE REQUIREMENTS - DOCUMENTARY DEPTH:
+1. SPECIFIC FACTS - names, dates, places, numbers, amounts, exact details
+2. CONCRETE EVENTS - what exactly happened, step-by-step, who was involved, what was said, how it unfolded
+3. CONTEXT and BACKGROUND - why this matters, what led to this moment, what the stakes were
+4. HUMAN DETAILS - emotions, reactions, relationships, personal motivations, conflicts
+5. CONSEQUENCES - what happened as a result, how it changed things, who was affected
+6. INTERESTING information the viewer likely doesn't know - surprising details, behind-the-scenes facts
+7. NO filler, NO fluff, NO vague statements, NO bullet-point style
+8. Every sentence must contain NEW information that moves the story forward
+9. PLANT SEEDS (Early chapters only): If this is an early chapter (1-3), include specific details, objects, relationships, or concepts that could pay off later. Examples: a specific notebook mentioned, a relationship that will matter later, a fear or promise that will be relevant, a small detail that seems unimportant now but will become significant. These create satisfying "aha moments" when referenced later.
 
 NARRATION STYLE - CRITICAL:
 - SIMPLE, CLEAR language. Write for a general audience.
 - AVOID flowery, artistic, or poetic language
 - AVOID vague phrases like "little did he know", "destiny awaited", "the world would never be the same"
 - NO dramatic pauses or buildup - just deliver the facts engagingly
-- Use present tense: "Einstein submits his paper to the journal..."
+{("- HOOK CHAPTER (INTRO): Speak directly to the viewer about what they'll discover. Use preview language: \"You'll discover...\", \"This is the story of...\", \"Wait until you learn...\", \"Here's why this matters...\" Present facts as teasers, not as events happening in real-time.\n" +
+"- TRANSITION TO STORY: The final scene should naturally bridge to the chronological narrative without saying \"rewind\" or \"go back\". Simply start with the beginning context: \"[Early life context]. This is where our story begins.\" or \"It all started when...\"") if is_hook_chapter else ("- NO made-up temporal transitions - stick to what actually happened\n" +
+"- Use present tense: \"Einstein submits his paper to the journal...\"\n" +
+"- Tell a DEEP story with DETAILS - not just \"he did X\" but \"he did X because Y, and here's how it happened, and here's what it meant\"\n" +
+"- Think like a documentary: show the viewer what happened, why it mattered, and how it felt")}
 - 2-3 sentences per scene (~12-18 seconds of narration)
 - Pack MAXIMUM information into minimum words
 - CRITICAL: This is SPOKEN narration for text-to-speech. Do NOT include:
@@ -268,14 +404,21 @@ NARRATION STYLE - CRITICAL:
   * Any production/editing terminology
   Write ONLY words that should be spoken by a narrator's voice.
 
-BAD example: "In the quiet of his study, a revolution was brewing in Einstein's mind."
-GOOD example: "In 1905, Einstein publishes four papers that redefine physics - including E=mc², proving mass and energy are the same thing."
+{("HOOK CHAPTER EXAMPLES:\n" +
+"BAD (reads like a story): \"In 1905, Einstein publishes four papers that redefine physics. The physics community is stunned.\"\n" +
+"GOOD (reads like an intro): \"This is Albert Einstein. You'll discover how he published four papers in 1905 that redefined physics, leaving the scientific community stunned.\"\n" +
+"BAD transition: \"Now the story rewinds to the beginning...\"\n" +
+"GOOD transition: \"It all started in Ulm, Germany, in 1879, when Einstein was born.\"") if is_hook_chapter else ("BAD example: \"In the quiet of his study, a revolution was brewing in Einstein's mind.\"\n" +
+"BAD example: \"Days later, Einstein would submit his groundbreaking paper.\"\n" +
+"GOOD example: \"In 1905, Einstein publishes four papers that redefine physics - including E=mc², proving mass and energy are the same thing. The physics community is stunned. Max Planck, the leading physicist of the era, immediately recognizes the significance and invites Einstein to Berlin.\"")}
 
 IMAGE PROMPT STYLE:
 - Cinematic, dramatic lighting
 - Specific composition (close-up, wide shot, over-shoulder, etc.)
 - Mood and atmosphere matching the scene
 - Period-accurate details
+- VISUAL THEME REINFORCEMENT: If recurring themes include concepts like "isolation", "ambition", "conflict", etc., incorporate visual motifs that reinforce these themes through composition, lighting, or symbolism. For example, if "isolation" is a theme, use wide shots with the subject alone, or shadows that emphasize separation.
+- Recurring Themes to Consider Visually: {threads_str}
 - End with ", 16:9 cinematic"
 
 Respond with JSON array:
@@ -292,7 +435,7 @@ Respond with JSON array:
     response = client.chat.completions.create(
         model=SCRIPT_MODEL,
         messages=[
-            {"role": "system", "content": "You are a master documentary storyteller. Create vivid, emotionally engaging scenes. Respond with valid JSON array only."},
+            {"role": "system", "content": "You are a master documentary storyteller. Create deep, detailed narratives with specific events and human stories. Avoid fluff and made-up transitions. Focus on what actually happened, why it mattered, and how it felt. Respond with valid JSON array only."},
             {"role": "user", "content": scene_prompt}
         ],
         temperature=0.85,
@@ -306,8 +449,13 @@ Respond with JSON array:
     return scenes
 
 
-def generate_short_outline(person: str, main_outline: dict, short_num: int, total_shorts: int) -> dict:
+def generate_short_outline(person: str, main_outline: dict, short_num: int, total_shorts: int, previously_covered_stories: list[str] = None, scene_highlights: list = None) -> dict:
     """Generate a focused outline for a single YouTube Short."""
+    
+    if previously_covered_stories is None:
+        previously_covered_stories = []
+    if scene_highlights is None:
+        scene_highlights = []
     
     chapters_context = "\n".join([
         f"• {ch['title']} ({ch['year_range']}): {ch['summary']}"
@@ -324,25 +472,52 @@ def generate_short_outline(person: str, main_outline: dict, short_num: int, tota
     ]
     focus = focus_options[(short_num - 1) % len(focus_options)]
     
+    # Build context about previously covered stories
+    previously_covered_text = ""
+    if previously_covered_stories:
+        previously_covered_text = f"""
+
+CRITICAL: You must choose a DIFFERENT story than what was already covered in previous shorts.
+Previously covered stories (DO NOT repeat these):
+{chr(10).join(f"• {story}" for story in previously_covered_stories)}
+
+Choose a COMPLETELY DIFFERENT story/incident/event from {person}'s life. Make sure it's distinct and doesn't overlap with the above."""
+    
+    # Build scene highlights context for shorts
+    scene_highlights_text = ""
+    if scene_highlights:
+        scene_highlights_text = f"""
+KEY MOMENTS FROM MAIN VIDEO (reference these to create connections):
+{chr(10).join(f"• Scene {s.get('id')}: {s.get('title')} - {s.get('narration_preview', '')}" for s in scene_highlights[:15])}
+
+IMPORTANT: This short should feel like a TEASER that drives viewers to the main video. Reference specific moments from the main video and create intrigue: "Wait until you see how this plays out in the full documentary" or "This moment from the main story gets explored in depth..." Make viewers want to watch the full video to see how this story connects to the bigger picture."""
+    
     outline_prompt = f"""Create a VIRAL YouTube Short about {person}.
 
 Short #{short_num} of {total_shorts}. Focus on: {focus}
+{previously_covered_text}
 
 Their life story (for context):
 {chapters_context}
+{scene_highlights_text}
 
-This Short has EXACTLY 4 scenes with this structure:
-1. HOOK: Start with the most surprising/shocking fact. Grab attention in 3 seconds.
-2. BUILD 1: Add context that makes the hook more interesting. Specific details.
-3. BUILD 2: Escalate - another surprising fact or consequence. Keep stacking interesting info.
-4. CLIFFHANGER: End with unresolved tension or "but that's not even the craziest part..."
+This Short tells ONE CONTINUOUS STORY from their life - not disconnected facts, but a single narrative arc.
+
+IMPORTANT: This must be a COMPLETELY DIFFERENT story from any previous shorts. Choose a distinct incident, event, moment, or period from their life that hasn't been covered yet. For example, if a previous short covered their early breakthrough in 1905, choose a different story like a later conflict, a different achievement from another period, a personal relationship story, or a different challenge they faced. Each short should feel like a standalone story from a different part of their life.
+
+This Short has EXACTLY 3 scenes with this structure:
+1. BUILD 1: Start the story. Set up a specific incident, moment, or event from their life. Give context and specific details.
+2. BUILD 2: Escalate the story. Show what happened next, the consequences, or how it developed. Keep the narrative flowing.
+3. CLIFFHANGER: End with a natural unresolved question or tension that makes viewers want to watch the full documentary. This should flow naturally from the story - NOT a forced tagline like "But that's not even the craziest part..." Instead, end with a genuine question, unresolved tension, or intriguing "what happened next?" moment that relates to the story you just told.
 
 CRITICAL RULES:
-- Every scene must contain a SPECIFIC, INTERESTING FACT
+- Tell ONE continuous story - scenes must flow like a mini-narrative, not separate facts
+- Every scene must contain SPECIFIC, INTERESTING FACTS
 - NO vague statements or filler
 - NO artistic/poetic language
 - Simple, clear sentences packed with information
-- The short should feel like rapid-fire interesting facts that connect together
+- The short should feel like watching a mini-story, not a list of facts
+- The ending should be a NATURAL cliffhanger that makes sense for the story being told
 
 Provide JSON:
 {{
@@ -350,15 +525,15 @@ Provide JSON:
   "short_description": "YouTube description (100 words) with hashtags",
   "tags": "10-15 SEO tags comma-separated",
   "thumbnail_prompt": "Vertical 9:16, dramatic, mobile-optimized",
-  "hook_fact": "The ONE shocking fact that opens the short",
-  "story_angle": "What specific story/incident are we telling",
-  "key_facts": ["4-6 specific facts to include across the 4 scenes"]
+  "hook_fact": "The opening fact that starts the story (for context, but we start with the story, not just the fact)",
+  "story_angle": "What specific continuous story/incident are we telling (ONE narrative arc)",
+  "key_facts": ["3-5 specific facts to include across the 3 scenes that tell ONE story"]
 }}"""
 
     response = client.chat.completions.create(
         model=SCRIPT_MODEL,
         messages=[
-            {"role": "system", "content": "You create viral content. Every word must deliver value. No fluff. Respond with valid JSON only."},
+            {"role": "system", "content": "You create viral content. Every word must deliver value. No fluff. When generating multiple shorts about the same person, ensure each tells a COMPLETELY DIFFERENT story from their life - different events, different moments, different incidents. Respond with valid JSON only."},
             {"role": "user", "content": outline_prompt}
         ],
         temperature=0.9,
@@ -369,25 +544,33 @@ Provide JSON:
 
 
 def generate_short_scenes(person: str, short_outline: dict) -> list[dict]:
-    """Generate all 4 scenes for a YouTube Short (hook, build, build, cliffhanger)."""
+    """Generate all 3 scenes for a YouTube Short (build, build, cliffhanger)."""
     
     key_facts = short_outline.get('key_facts', [])
     facts_str = "\n".join(f"• {fact}" for fact in key_facts)
     
-    scene_prompt = f"""Write 4 scenes for a YouTube Short about {person}.
+    scene_prompt = f"""Write 3 scenes for a YouTube Short about {person}.
 
 TITLE: "{short_outline.get('short_title', '')}"
-OPENING HOOK: {short_outline.get('hook_fact', '')}
 STORY ANGLE: {short_outline.get('story_angle', '')}
 
 KEY FACTS TO USE:
 {facts_str}
 
-STRUCTURE (exactly 4 scenes):
-1. HOOK: Open with the most shocking/surprising fact. Grab attention immediately.
-2. BUILD 1: Add context - why is this interesting? Specific details.
-3. BUILD 2: Escalate - another surprising consequence or related fact.
-4. CLIFFHANGER: End with "But that's not even the craziest part..." or similar hook to full video.
+CRITICAL: This short tells ONE CONTINUOUS STORY from {person}'s life. The scenes must flow like a mini-narrative, not disconnected facts.
+
+STRUCTURE (exactly 3 scenes):
+1. BUILD 1: Start the story. Set up a specific incident, moment, or event. Give context and specific details. This is the beginning of ONE story.
+2. BUILD 2: Continue the story. Show what happened next, the consequences, or how it developed. Keep the narrative flowing forward.
+3. CLIFFHANGER: End with a NATURAL unresolved question or tension that makes viewers want to watch the full documentary. This must flow naturally from the story you just told - NOT a forced tagline. Examples of good endings:
+   - "But what happened next would change everything..."
+   - "The consequences of this decision would haunt him for years..."
+   - "Little did he know, this was just the beginning..."
+   - A genuine question that makes sense: "But could he really pull it off?"
+   
+   BAD endings (DO NOT USE):
+   - "But that's not even the craziest part..." (forced, doesn't make sense)
+   - Generic taglines that don't relate to the story
 
 NARRATION RULES - CRITICAL:
 - 1-2 SHORT sentences per scene (~8-10 seconds when spoken)
@@ -395,29 +578,33 @@ NARRATION RULES - CRITICAL:
 - SPECIFIC facts - names, numbers, dates, places
 - NO filler phrases like "little did he know" or "destiny awaited"
 - NO vague statements - every sentence must have concrete information
+- NO made-up temporal transitions like "Days later...", "Later that week...", "That afternoon..."
 - Present tense: "Einstein walks into the patent office..."
+- DEEP storytelling - not just what happened, but details about how it happened, why it mattered, who was involved
+- Tell a continuous story with specific events and their consequences
 - CRITICAL: Do NOT include film directions (Cut to, Fade, Smash cut) or camera directions.
 
 BAD: "The genius stood on the precipice of destiny, unaware that fate had other plans."
+BAD: "Days later, Einstein would make a discovery."
 GOOD: "Einstein is 26 years old, working at a patent office, and about to change physics forever."
+GOOD: "Einstein publishes his paper on relativity. Physicists worldwide are stunned. Max Planck invites him to Berlin, recognizing the work will reshape science."
 
 IMAGE PROMPTS:
 - Vertical 9:16, dramatic, mobile-optimized
 - High contrast, single clear subject
 - End with ", 9:16 vertical"
 
-Respond with JSON array of exactly 4 scenes:
+Respond with JSON array of exactly 3 scenes:
 [
   {{"id": 1, "title": "2-4 words", "narration": "...", "image_prompt": "..."}},
   {{"id": 2, "title": "...", "narration": "...", "image_prompt": "..."}},
-  {{"id": 3, "title": "...", "narration": "...", "image_prompt": "..."}},
-  {{"id": 4, "title": "...", "narration": "...", "image_prompt": "..."}}
+  {{"id": 3, "title": "...", "narration": "...", "image_prompt": "..."}}
 ]"""
 
     response = client.chat.completions.create(
         model=SCRIPT_MODEL,
         messages=[
-            {"role": "system", "content": "You write viral content. Simple words, specific facts, no fluff. Respond with valid JSON array only."},
+            {"role": "system", "content": "You write viral content. Simple words, specific facts, deep storytelling with details. No fluff, no made-up transitions. Tell continuous stories with actual events. Respond with valid JSON array only."},
             {"role": "user", "content": scene_prompt}
         ],
         temperature=0.85,
@@ -431,8 +618,10 @@ Respond with JSON array of exactly 4 scenes:
     return scenes
 
 
-def generate_shorts(person_of_interest: str, main_title: str, global_block: str, outline: dict, base_output_path: str):
+def generate_shorts(person_of_interest: str, main_title: str, global_block: str, outline: dict, base_output_path: str, scene_highlights: list = None):
     """Generate YouTube Shorts (4 scenes each: hook, build, build, cliffhanger)."""
+    if scene_highlights is None:
+        scene_highlights = []
     if config.num_shorts == 0:
         print("\n[SHORTS] Skipped (--shorts 0)")
         return []
@@ -447,17 +636,25 @@ def generate_shorts(person_of_interest: str, main_title: str, global_block: str,
     
     generated_shorts = []
     base_name = Path(base_output_path).stem.replace("_script", "")
+    previously_covered_stories = []  # Track story angles to ensure diversity
     
     for short_num in range(1, config.num_shorts + 1):
         print(f"\n[SHORT {short_num}/{config.num_shorts}] Creating outline...")
         
-        # Step 1: Generate short outline
+        # Step 1: Generate short outline (pass scene highlights for better connection to main video)
         short_outline = generate_short_outline(
             person=person_of_interest,
             main_outline=outline,
             short_num=short_num,
-            total_shorts=config.num_shorts
+            total_shorts=config.num_shorts,
+            previously_covered_stories=previously_covered_stories,
+            scene_highlights=scene_highlights
         )
+        
+        # Track the story angle to ensure next shorts don't repeat it
+        story_angle = short_outline.get("story_angle", "")
+        if story_angle:
+            previously_covered_stories.append(story_angle)
         
         short_title = short_outline.get("short_title", f"Short {short_num}")
         print(f"[SHORT {short_num}] Title: {short_title}")
@@ -481,13 +678,14 @@ def generate_shorts(person_of_interest: str, main_title: str, global_block: str,
         for i, scene in enumerate(all_scenes):
             scene["id"] = i + 1
         
-        # Step 3: Generate thumbnail
-        thumbnail_prompt = short_outline.get("thumbnail_prompt", "")
+        # Step 3: Generate thumbnail (if enabled)
         thumbnail_path = None
-        if thumbnail_prompt:
-            thumbnail_prompt += "\n\nYouTube Shorts thumbnail. Vertical 9:16, bold, dramatic, mobile-optimized, single powerful image."
-            thumb_file = THUMBNAILS_DIR / f"{base_name}_short{short_num}_thumbnail.png"
-            thumbnail_path = generate_thumbnail(thumbnail_prompt, thumb_file, size="1024x1536")
+        if config.generate_short_thumbnails:
+            thumbnail_prompt = short_outline.get("thumbnail_prompt", "")
+            if thumbnail_prompt:
+                thumbnail_prompt += "\n\nYouTube Shorts thumbnail. Vertical 9:16, bold, dramatic, mobile-optimized, single powerful image."
+                thumb_file = THUMBNAILS_DIR / f"{base_name}_short{short_num}_thumbnail.png"
+                thumbnail_path = generate_thumbnail(thumbnail_prompt, thumb_file, size="1024x1536")
         
         # Step 4: Save short
         short_output = {
@@ -548,18 +746,16 @@ def generate_script(person_of_interest: str, output_path: str):
     if config.generate_main and len(chapters) < config.chapters:
         print(f"[WARNING] Got {len(chapters)} chapters, expected {config.chapters}")
     
-    # Step 2: Generate metadata
-    print("\n[STEP 2] Generating video metadata...")
+    # Step 2: Generate initial metadata (title, thumbnail, global_block) - we'll regenerate description after scenes
+    print("\n[STEP 2] Generating initial metadata...")
     
-    metadata_prompt = f"""Create metadata for a documentary about: {person_of_interest}
+    initial_metadata_prompt = f"""Create initial metadata for a documentary about: {person_of_interest}
 
 Their story in one line: {outline.get('tagline', '')}
 
 Generate JSON:
 {{
   "title": "Compelling YouTube title (60-80 chars)",
-  "video_description": "YouTube description (500-800 words) - hook, highlights, key facts, call to action. SEO optimized.",
-  "tags": "15-20 SEO tags separated by commas. Mix of: person's name, key topics, related figures, time periods, achievements, fields (e.g., 'Albert Einstein, physics, relativity, Nobel Prize, Germany, Princeton, E=mc2, quantum mechanics, genius, scientist, 20th century, biography, documentary')",
   "thumbnail_description": "Thumbnail visual: composition, colors, mood, subject appearance. NO TEXT in image.",
   "global_block": "Visual style guide (300-400 words): semi-realistic digital painting style, color palette, dramatic lighting, how {person_of_interest} should appear consistently across {config.total_scenes} scenes."
 }}"""
@@ -568,22 +764,19 @@ Generate JSON:
         model=SCRIPT_MODEL,
         messages=[
             {"role": "system", "content": "Documentary producer. Respond with valid JSON only."},
-            {"role": "user", "content": metadata_prompt}
+            {"role": "user", "content": initial_metadata_prompt}
         ],
         temperature=0.7,
         response_format={"type": "json_object"}
     )
     
-    metadata = json.loads(clean_json_response(response.choices[0].message.content))
+    initial_metadata = json.loads(clean_json_response(response.choices[0].message.content))
     
-    title = metadata["title"]
-    video_description = metadata.get("video_description", "")
-    tags = metadata.get("tags", "")
-    thumbnail_description = metadata["thumbnail_description"]
-    global_block = metadata["global_block"]
+    title = initial_metadata["title"]
+    thumbnail_description = initial_metadata["thumbnail_description"]
+    global_block = initial_metadata["global_block"]
     
     print(f"[METADATA] Title: {title}")
-    print(f"[METADATA] Tags: {tags[:80]}..." if len(tags) > 80 else f"[METADATA] Tags: {tags}")
     
     # Generate main video thumbnail (only if generating main video)
     generated_thumb = None
@@ -600,9 +793,14 @@ YouTube thumbnail. Cinematic, dramatic, high contrast. Optimized for small sizes
     
     # Step 3: Generate scenes chapter by chapter (only if generating main video)
     all_scenes = []
+    planted_seeds = []  # Track details from early chapters for callbacks
     
     if config.generate_main:
         print(f"\n[STEP 3] Generating {config.total_scenes} scenes from {len(chapters)} chapters...")
+        
+        # Get central theme and narrative arc from outline
+        central_theme = outline.get('central_theme', '')
+        narrative_arc = outline.get('narrative_arc', '')
         
         for i, chapter in enumerate(chapters):
             start_id = len(all_scenes) + 1
@@ -610,7 +808,16 @@ YouTube thumbnail. Cinematic, dramatic, high contrast. Optimized for small sizes
             # Get previous chapter and scenes for continuity
             prev_chapter = chapters[i - 1] if i > 0 else None
             
+            # Determine if this is a retention hook point (~30s, 60s, 90s marks)
+            # Assuming ~15 seconds per scene on average
+            estimated_time = start_id * 15
+            is_retention_hook = (estimated_time >= 25 and estimated_time <= 35) or \
+                               (estimated_time >= 55 and estimated_time <= 65) or \
+                               (estimated_time >= 85 and estimated_time <= 95)
+            
             print(f"\n[CHAPTER {chapter['chapter_num']}/{len(chapters)}] {chapter['title']}")
+            if is_retention_hook:
+                print(f"  ⚠ RETENTION HOOK POINT (~{estimated_time}s mark)")
             print(f"  Generating {config.scenes_per_chapter} scenes...")
             
             try:
@@ -621,7 +828,11 @@ YouTube thumbnail. Cinematic, dramatic, high contrast. Optimized for small sizes
                     start_id=start_id,
                     global_style=global_block,
                     prev_chapter=prev_chapter,
-                    prev_scenes=list(all_scenes)  # Copy of scenes so far
+                    prev_scenes=list(all_scenes),  # Copy of scenes so far
+                    central_theme=central_theme,
+                    narrative_arc=narrative_arc,
+                    planted_seeds=planted_seeds if i > 0 else [],  # Only pass seeds after first chapter
+                    is_retention_hook_point=is_retention_hook
                 )
                 
                 if len(scenes) != config.scenes_per_chapter:
@@ -629,6 +840,26 @@ YouTube thumbnail. Cinematic, dramatic, high contrast. Optimized for small sizes
                 
                 all_scenes.extend(scenes)
                 print(f"  ✓ {len(scenes)} scenes (total: {len(all_scenes)})")
+                
+                # Extract "planted seeds" from early chapters (first 3 chapters) for callback mechanism
+                # Look for specific details, objects, relationships, or concepts that could pay off later
+                if i < 3:  # First 3 chapters plant seeds
+                    # Extract seeds from scene narrations - look for specific objects, relationships, concepts
+                    for scene in scenes:
+                        narration = scene.get('narration', '')
+                        title = scene.get('title', '')
+                        # Look for specific details that could be callbacks: objects, relationships, promises, mysteries
+                        # The LLM should be planting these intentionally, but we extract them here
+                        # Add scene title and key phrases as potential seeds
+                        if narration:
+                            # Simple extraction: look for specific nouns, relationships, or concepts
+                            # In a more sophisticated version, we'd ask the LLM to explicitly list planted seeds
+                            planted_seeds.append(f"{title}: {narration[:80]}...")
+                    # Also add chapter's key events as potential seeds
+                    for event in chapter.get('key_events', []):
+                        # Extract specific details that could be callbacks
+                        if any(word in event.lower() for word in ['notebook', 'letter', 'relationship', 'conflict', 'discovery', 'secret', 'promise', 'warning', 'fear']):
+                            planted_seeds.append(event[:120])  # Store as seed
                 
             except Exception as e:
                 print(f"  [ERROR] Failed: {e}")
@@ -642,12 +873,62 @@ YouTube thumbnail. Cinematic, dramatic, high contrast. Optimized for small sizes
             for field in ["title", "narration", "image_prompt"]:
                 if field not in scene:
                     raise ValueError(f"Scene {i+1} missing: {field}")
+        
+        # Step 3.5: Generate final metadata (description and tags) AFTER scenes are generated
+        print("\n[STEP 3.5] Generating final metadata from actual scenes...")
+        
+        # Extract memorable moments from scenes for metadata
+        scene_highlights = []
+        for scene in all_scenes[:10]:  # First 10 scenes for highlights
+            scene_highlights.append(f"Scene {scene['id']}: {scene.get('title', '')} - {scene.get('narration', '')[:80]}...")
+        
+        final_metadata_prompt = f"""Create final metadata for a documentary about: {person_of_interest}
+
+Their story in one line: {outline.get('tagline', '')}
+
+Actual memorable moments from the documentary (use these to make description more accurate):
+{chr(10).join(scene_highlights[:10])}
+
+Generate JSON:
+{{
+  "video_description": "YouTube description (500-800 words) - hook, highlights, key facts, call to action. SEO optimized. Reference specific compelling moments from the actual scenes above to make it accurate and engaging.",
+  "tags": "15-20 SEO tags separated by commas. Mix of: person's name, key topics, related figures, time periods, achievements, fields (e.g., 'Albert Einstein, physics, relativity, Nobel Prize, Germany, Princeton, E=mc2, quantum mechanics, genius, scientist, 20th century, biography, documentary')"
+}}"""
+
+        response = client.chat.completions.create(
+            model=SCRIPT_MODEL,
+            messages=[
+                {"role": "system", "content": "Documentary producer. Create compelling metadata that accurately reflects the actual content. Respond with valid JSON only."},
+                {"role": "user", "content": final_metadata_prompt}
+            ],
+            temperature=0.7,
+            response_format={"type": "json_object"}
+        )
+        
+        final_metadata = json.loads(clean_json_response(response.choices[0].message.content))
+        video_description = final_metadata.get("video_description", "")
+        tags = final_metadata.get("tags", "")
+        
+        print(f"[METADATA] Description generated from {len(all_scenes)} scenes")
+        print(f"[METADATA] Tags: {tags[:80]}..." if len(tags) > 80 else f"[METADATA] Tags: {tags}")
     else:
         print("\n[STEP 3] Skipping main video scene generation...")
+        # Generate basic metadata if not generating main video
+        video_description = ""
+        tags = ""
     
-    # Step 4: Generate Shorts
+    # Step 4: Generate Shorts (pass scene highlights if available)
     print("\n[STEP 4] Generating YouTube Shorts...")
-    shorts_info = generate_shorts(person_of_interest, title, global_block, outline, output_path)
+    scene_highlights_for_shorts = []
+    if config.generate_main and all_scenes:
+        # Extract key scene moments for shorts to reference
+        for scene in all_scenes:
+            scene_highlights_for_shorts.append({
+                "id": scene.get("id"),
+                "title": scene.get("title"),
+                "narration_preview": scene.get("narration", "")[:100]
+            })
+    shorts_info = generate_shorts(person_of_interest, title, global_block, outline, output_path, scene_highlights=scene_highlights_for_shorts)
     
     # Step 5: Save
     print("\n[STEP 5] Saving script...")
@@ -735,10 +1016,12 @@ Examples:
     parser.add_argument("--shorts", type=int, default=Config.num_shorts,
                         help=f"Number of YouTube Shorts (default: {Config.num_shorts}, use 0 to skip)")
     parser.add_argument("--short-scenes", type=int, default=Config.short_scenes_per_chapter,
-                        help=f"Scenes per short (default: {Config.short_scenes_per_chapter}: hook, build, build, cliffhanger)")
+                        help=f"Scenes per short (default: {Config.short_scenes_per_chapter}: build, build, cliffhanger)")
     
     parser.add_argument("--no-thumbnails", action="store_true",
-                        help="Skip thumbnail generation")
+                        help="Skip main video thumbnail generation")
+    parser.add_argument("--short-thumbnails", action="store_true",
+                        help="Generate thumbnails for shorts (disabled by default)")
     
     return parser.parse_args()
 
@@ -754,8 +1037,9 @@ if __name__ == "__main__":
         config.scenes_per_chapter = 2
         config.num_shorts = 1
         config.short_chapters = 1
-        config.short_scenes_per_chapter = 4
+        config.short_scenes_per_chapter = 3
         config.generate_thumbnails = False
+        config.generate_short_thumbnails = False
         print("[MODE] Test mode enabled")
     else:
         config.chapters = args.chapters
@@ -763,6 +1047,7 @@ if __name__ == "__main__":
         config.num_shorts = args.shorts
         config.short_scenes_per_chapter = args.short_scenes
         config.generate_thumbnails = not args.no_thumbnails
+        config.generate_short_thumbnails = args.short_thumbnails
     
     # Handle --main-only and --shorts-only flags
     if args.main_only and args.shorts_only:
@@ -776,13 +1061,17 @@ if __name__ == "__main__":
         config.generate_main = False
         print("[MODE] Shorts only (skipping main video)")
     
-    # Determine output file
+    # Determine output file (goes to scripts/ directory)
+    SCRIPTS_DIR.mkdir(parents=True, exist_ok=True)
     if args.output:
         output_file = args.output
+        # If output doesn't include scripts/ directory, add it
+        if not output_file.startswith("scripts/") and not Path(output_file).is_absolute():
+            output_file = str(SCRIPTS_DIR / output_file)
     else:
         safe_name = "".join(c if c.isalnum() or c in (' ', '-', '_') else '' for c in args.person)
         safe_name = safe_name.replace(' ', '_').lower()
-        output_file = f"{safe_name}_script.json"
+        output_file = str(SCRIPTS_DIR / f"{safe_name}_script.json")
     
     if not os.getenv("OPENAI_API_KEY"):
         print("ERROR: Set OPENAI_API_KEY environment variable first.")
