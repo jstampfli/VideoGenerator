@@ -14,6 +14,8 @@ from openai import OpenAI
 from moviepy import ImageClip, AudioFileClip, concatenate_videoclips
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+from utils import calculate_age_from_year_range
+
 # ------------- CONFIG -------------
 
 load_dotenv()  # Load API keys from .env file
@@ -180,10 +182,23 @@ def build_image_prompt(scene: dict, prev_scene: dict | None, global_block_overri
     - Current scene description (title + narration + image_prompt)
     - Brief memory of the previous scene for continuity
     - Global visual style and constraints (no text, documentary tone)
+    - Age specification when the person appears
     """
     title = scene.get("title", "").strip()
     narration = scene.get("narration", "").strip()
     scene_img_prompt = scene.get("image_prompt", "").strip()
+    
+    # Use the age that was already calculated during script generation or by _build_video_impl
+    # The age is stored in the scene as 'estimated_age' and was calculated from the scene's "year" field
+    estimated_age = scene.get('estimated_age')
+    
+    # Add age specification to image prompt if we have age info
+    age_specification = ""
+    if estimated_age is not None:
+        # Check if the scene mentions the person (likely to appear in image)
+        # We'll add age info to the prompt regardless, as it's better to have it
+        # Extract person name from metadata if available
+        age_specification = f"\n\nAGE SPECIFICATION: The main subject appears as approximately {estimated_age} years old at this time. Include this age-appropriate appearance in the image (facial features, posture, and styling appropriate for a {estimated_age}-year-old)."
 
     # --- Previous scene memory ---
     if prev_scene is None:
@@ -253,6 +268,8 @@ def build_image_prompt(scene: dict, prev_scene: dict | None, global_block_overri
         current_block_parts.append("Narration for this scene:\n" + narration)
     if scene_img_prompt:
         current_block_parts.append("Visual details to emphasize:\n" + scene_img_prompt)
+    if age_specification:
+        current_block_parts.append(age_specification)
     current_block = "\n".join(current_block_parts)
 
     # Final prompt
@@ -650,7 +667,29 @@ def _build_video_impl(scenes_path: str, out_video_path: str):
         print(f"[METADATA] Using global_block from script metadata")
     else:
         print(f"[METADATA] Using default global_block")
-
+    
+    # Extract birth_year from metadata/outline if available and add to scenes that don't have it
+    birth_year = None
+    if metadata:
+        outline = metadata.get("outline")
+        if outline:
+            birth_year = outline.get("birth_year")
+        if not birth_year:
+            birth_year = metadata.get("birth_year")
+    
+    # Add birth_year and calculate ages for scenes that don't have this metadata
+    # Use the scene's "year" field directly for age calculation
+    if birth_year:
+        for scene in scenes:
+            if 'birth_year' not in scene:
+                scene['birth_year'] = birth_year
+            # Calculate age using the scene's "year" field if available
+            if 'estimated_age' not in scene and scene.get('year') and scene.get('birth_year'):
+                scene['estimated_age'] = calculate_age_from_year_range(
+                    scene.get('birth_year'),
+                    scene.get('year')
+                )
+    
     # Previous-scene references for image continuity
     prev_scenes: list[dict | None] = [None] + scenes[:-1]
 
@@ -746,7 +785,7 @@ def find_shorts_for_script(script_path: str) -> list[Path]:
     script_path = Path(script_path)
     base_name = script_path.stem.replace("_script", "")
     
-    shorts_dir = Path("shorts")
+    shorts_dir = Path("shorts_scripts")
     if not shorts_dir.exists():
         return []
     
@@ -788,7 +827,7 @@ Examples:
   # Build main video + all associated shorts
   python build_video.py einstein_script.json einstein.mp4 --with-shorts
 
-  # Build all shorts in the shorts/ directory
+  # Build all shorts in the shorts_scripts/ directory
   python build_video.py --all-shorts
         """
     )
@@ -800,7 +839,7 @@ Examples:
     parser.add_argument("--with-shorts", action="store_true",
                         help="Also build all associated YouTube Shorts after main video")
     parser.add_argument("--all-shorts", action="store_true",
-                        help="Build all JSON files in the shorts/ directory")
+                        help="Build all JSON files in the shorts_scripts/ directory")
     
     args = parser.parse_args()
     
@@ -828,7 +867,7 @@ if __name__ == "__main__":
         shorts = find_all_shorts()
         
         if not shorts:
-            print("\n[ERROR] No JSON files found in shorts/ directory")
+            print("\n[ERROR] No JSON files found in shorts_scripts/ directory")
             sys.exit(1)
         
         print(f"\n[ALL SHORTS] Found {len(shorts)} short(s) to build")
@@ -850,7 +889,10 @@ if __name__ == "__main__":
         sys.exit(0)
 
     # Detect if input is a short based on path
-    is_short = "short" in args.scenes_file.lower()
+    # Check if file is in shorts_scripts directory or has "short" in the name
+    scenes_path = Path(args.scenes_file)
+    is_short = ("short" in args.scenes_file.lower() or 
+                "shorts_scripts" in str(scenes_path.parent).lower())
     
     # Build main video
     print(f"\n{'='*60}")

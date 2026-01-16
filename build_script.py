@@ -8,6 +8,8 @@ from pathlib import Path
 from dotenv import load_dotenv
 from openai import OpenAI
 
+from utils import calculate_age_from_year_range
+
 # ------------- CONFIG -------------
 
 load_dotenv()  # Load API key from .env file
@@ -33,8 +35,8 @@ class Config:
     
     # Shorts settings
     num_shorts = 3              # Number of YouTube Shorts
-    short_chapters = 1          # Chapters per short (1 chapter: build → build → cliffhanger)
-    short_scenes_per_chapter = 3  # Scenes per chapter in shorts (build, build, cliffhanger)
+    short_chapters = 1          # Chapters per short (1 chapter: 5 scenes telling one complete story)
+    short_scenes_per_chapter = 5  # Scenes per chapter in shorts (complete story with natural conclusion)
     
     generate_thumbnails = True  # Whether to generate thumbnail images (main video)
     generate_short_thumbnails = False  # Whether to generate thumbnails for shorts (usually not needed)
@@ -60,6 +62,68 @@ def clean_json_response(content: str) -> str:
     if content.endswith("```"):
         content = content[:-3]
     return content.strip()
+
+
+# ------------- SHARED PROMPT SECTIONS -------------
+
+def get_shared_scene_requirements() -> str:
+    """Shared scene requirements for both main video and shorts."""
+    return """SCENE REQUIREMENTS - DOCUMENTARY DEPTH:
+1. SPECIFIC FACTS - names, dates, places, numbers, amounts, exact details
+2. CONCRETE EVENTS - what exactly happened, step-by-step, who was involved, what was said, how it unfolded
+3. CONTEXT and BACKGROUND - why this matters, what led to this moment, what the stakes were
+4. HUMAN DETAILS - emotions, reactions, relationships, personal motivations, conflicts
+5. CONSEQUENCES - what happened as a result, how it changed things, who was affected
+6. INTERESTING information the viewer likely doesn't know - surprising details, behind-the-scenes facts
+7. NO filler, NO fluff, NO vague statements, NO bullet-point style
+8. Every sentence must contain NEW information that moves the story forward"""
+
+
+def get_shared_narration_style(is_short: bool = False) -> str:
+    """Shared narration style instructions for both main video and shorts."""
+    base_style = """NARRATION STYLE - CRITICAL:
+- SIMPLE, CLEAR language. Write for a general audience.
+- AVOID flowery, artistic, or poetic language
+- AVOID vague phrases like "little did he know", "destiny awaited", "the world would never be the same"
+- NO dramatic pauses or buildup - just deliver the facts engagingly
+- NO made-up temporal transitions - stick to what actually happened
+- Use present tense: "Einstein submits his paper to the journal..."
+- Tell a DEEP story with DETAILS - not just "he did X" but "he did X because Y, and here's how it happened, and here's what it meant"
+- Think like a documentary: show the viewer what happened, why it mattered, and how it felt"""
+    
+    if is_short:
+        base_style += "\n- 1-2 sentences per scene (~8-12 seconds when spoken) - shorts need to be concise but detailed"
+    else:
+        base_style += "\n- 2-3 sentences per scene (~12-18 seconds of narration)"
+    
+    base_style += """
+- Pack MAXIMUM information into minimum words
+- CRITICAL: This is SPOKEN narration for text-to-speech. Do NOT include:
+  * Film directions like "Smash cut—", "Hard cut to", "Cut to:", "Fade in:"
+  * Camera directions like "Close-up of", "Wide shot:", "Pan to"
+  * Any production/editing terminology
+  Write ONLY words that should be spoken by a narrator's voice."""
+    
+    return base_style
+
+
+def get_shared_scene_flow_instructions() -> str:
+    """Shared scene-to-scene flow instructions."""
+    return """SCENE-TO-SCENE FLOW:
+- Flow naturally through the story using ACTUAL events and their consequences
+- Connect scenes through cause-and-effect, not artificial transitions
+- DO NOT use made-up temporal transitions like "Days later...", "Later that week...", "That afternoon...", "The next morning...", "Weeks passed...", "Meanwhile..."
+- Instead, let the story flow through what actually happened: "The paper is published. Physicists worldwide take notice."
+- Each scene should feel inevitable because of what came before, not because of a transition phrase
+- Build narrative momentum through actual events, not filler words"""
+
+
+def get_shared_examples() -> str:
+    """Shared good/bad examples for narration."""
+    return """EXAMPLES:
+BAD: "In the quiet of his study, a revolution was brewing in Einstein's mind."
+BAD: "Days later, Einstein would submit his groundbreaking paper."
+GOOD: "In 1905, Einstein publishes four papers that redefine physics - including E=mc², proving mass and energy are the same thing. The physics community is stunned. Max Planck, the leading physicist of the era, immediately recognizes the significance and invites Einstein to Berlin." """
 
 
 def sanitize_prompt_for_safety(prompt: str, violation_type: str = None) -> str:
@@ -251,7 +315,8 @@ Respond with JSON:
 def generate_scenes_for_chapter(person: str, chapter: dict, scenes_per_chapter: int, start_id: int, 
                                  global_style: str, prev_chapter: dict = None, prev_scenes: list = None,
                                  central_theme: str = None, narrative_arc: str = None, 
-                                 planted_seeds: list[str] = None, is_retention_hook_point: bool = False) -> list[dict]:
+                                 planted_seeds: list[str] = None, is_retention_hook_point: bool = False,
+                                 birth_year: int | None = None, tag_line: str | None = None) -> list[dict]:
     """Generate scenes for a single chapter of the outline with continuity context."""
     
     if planted_seeds is None:
@@ -353,10 +418,10 @@ Key Events to Dramatize:
 Generate EXACTLY {scenes_per_chapter} scenes that FLOW CONTINUOUSLY.
 
 {"HOOK CHAPTER - INTRODUCTION/PREVIEW (NOT A STORY):" if is_hook_chapter else "CONTINUOUS NARRATIVE - scenes should flow like a movie, not feel like separate segments:"}
-{'''CRITICAL: This is an INTRODUCTION/PREVIEW, not a story. It should quickly answer "Why should I watch this?"
+{f'''CRITICAL: This is an INTRODUCTION/PREVIEW, not a story. It should quickly answer "Why should I watch this?"
 
 STRUCTURE:
-- SCENE 1 (COLD OPEN - FIRST 15 SECONDS): Start with the MOST shocking, intriguing, or compelling moment or question. DO NOT start with "This is the story of..." - that's generic. Instead, lead with intrigue: "In 1905, a 26-year-old patent clerk publishes a paper that will change everything. But first, he must survive the criticism of his own father." OR start with a compelling question: "What if everything you knew about time and space was wrong?" OR start with the most dramatic moment: "The letter arrives in June 1858. Darwin's hands tremble as he reads his own theory in another man's words." The first 15 seconds are CRITICAL for YouTube - this is what viewers see in search/preview. Hook them immediately, THEN introduce who this person is.
+- SCENE 1 (COLD OPEN - FIRST 15 SECONDS): The first sentence MUST begin with: "Welcome to Human Footprints. Today we'll talk about {person} - {tag_line if tag_line else ''}." After this introduction, immediately transition to the MOST shocking, intriguing, or compelling moment or question. The tag_line should be short, catchy, and accurate (e.g., "the man who changed the world", "the codebreaker who saved millions", "the mind that rewrote physics"). For example: "Welcome to Human Footprints. Today we'll talk about Albert Einstein - the man who changed the world. In 1905, a 26-year-old patent clerk publishes a paper that will change everything. But first, he must survive the criticism of his own father." OR "Welcome to Human Footprints. Today we'll talk about Charles Darwin - the man who changed the way we understand life. The letter arrives in June 1858. Darwin's hands tremble as he reads his own theory in another man's words." The first 15 seconds are CRITICAL for YouTube - this is what viewers see in search/preview. Hook them immediately after the introduction.
 - SCENES 2-4: Rapid-fire preview of the most shocking, interesting, or impactful moments from their entire life - achievements, controversies, dramatic moments, surprising facts
 - NOT chronological - pick jaw-dropping highlights from any point in their life
 - Each scene should hook the viewer: "You'll discover how...", "You'll see the moment when...", "Wait until you hear about..."
@@ -373,44 +438,22 @@ NARRATION STYLE FOR INTRO:
 - The final scene should SET UP the next chapter's content
 - Think of scenes as continuous shots in a film, not separate segments'''}
 
-{"" if is_hook_chapter else "SCENE-TO-SCENE FLOW:\n- Flow naturally through the story using ACTUAL events and their consequences\n- Connect scenes through cause-and-effect, not artificial transitions\n- DO NOT use made-up temporal transitions like \"Days later...\", \"Later that week...\", \"That afternoon...\", \"The next morning...\", \"Weeks passed...\"\n- Instead, let the story flow through what actually happened: \"The paper is published. Physicists worldwide take notice.\"\n- Each scene should feel inevitable because of what came before, not because of a transition phrase\n- Build narrative momentum through actual events, not filler words"}
+{"" if is_hook_chapter else get_shared_scene_flow_instructions()}
 
-SCENE REQUIREMENTS - DOCUMENTARY DEPTH:
-1. SPECIFIC FACTS - names, dates, places, numbers, amounts, exact details
-2. CONCRETE EVENTS - what exactly happened, step-by-step, who was involved, what was said, how it unfolded
-3. CONTEXT and BACKGROUND - why this matters, what led to this moment, what the stakes were
-4. HUMAN DETAILS - emotions, reactions, relationships, personal motivations, conflicts
-5. CONSEQUENCES - what happened as a result, how it changed things, who was affected
-6. INTERESTING information the viewer likely doesn't know - surprising details, behind-the-scenes facts
-7. NO filler, NO fluff, NO vague statements, NO bullet-point style
-8. Every sentence must contain NEW information that moves the story forward
+{get_shared_scene_requirements()}
+
 9. PLANT SEEDS (Early chapters only): If this is an early chapter (1-3), include specific details, objects, relationships, or concepts that could pay off later. Examples: a specific notebook mentioned, a relationship that will matter later, a fear or promise that will be relevant, a small detail that seems unimportant now but will become significant. These create satisfying "aha moments" when referenced later.
 
-NARRATION STYLE - CRITICAL:
-- SIMPLE, CLEAR language. Write for a general audience.
-- AVOID flowery, artistic, or poetic language
-- AVOID vague phrases like "little did he know", "destiny awaited", "the world would never be the same"
-- NO dramatic pauses or buildup - just deliver the facts engagingly
+{get_shared_narration_style(is_short=False)}
 {("- HOOK CHAPTER (INTRO): Speak directly to the viewer about what they'll discover. Use preview language: \"You'll discover...\", \"This is the story of...\", \"Wait until you learn...\", \"Here's why this matters...\" Present facts as teasers, not as events happening in real-time.\n" +
-"- TRANSITION TO STORY: The final scene should naturally bridge to the chronological narrative without saying \"rewind\" or \"go back\". Simply start with the beginning context: \"[Early life context]. This is where our story begins.\" or \"It all started when...\"") if is_hook_chapter else ("- NO made-up temporal transitions - stick to what actually happened\n" +
-"- Use present tense: \"Einstein submits his paper to the journal...\"\n" +
-"- Tell a DEEP story with DETAILS - not just \"he did X\" but \"he did X because Y, and here's how it happened, and here's what it meant\"\n" +
-"- Think like a documentary: show the viewer what happened, why it mattered, and how it felt")}
-- 2-3 sentences per scene (~12-18 seconds of narration)
-- Pack MAXIMUM information into minimum words
-- CRITICAL: This is SPOKEN narration for text-to-speech. Do NOT include:
-  * Film directions like "Smash cut—", "Hard cut to", "Cut to:", "Fade in:"
-  * Camera directions like "Close-up of", "Wide shot:", "Pan to"
-  * Any production/editing terminology
-  Write ONLY words that should be spoken by a narrator's voice.
+"- TRANSITION TO STORY: The final scene should naturally bridge to the chronological narrative without saying \"rewind\" or \"go back\". Simply start with the beginning context: \"[Early life context]. This is where our story begins.\" or \"It all started when...\"") if is_hook_chapter else ""}
 
 {("HOOK CHAPTER EXAMPLES:\n" +
-"BAD (reads like a story): \"In 1905, Einstein publishes four papers that redefine physics. The physics community is stunned.\"\n" +
-"GOOD (reads like an intro): \"This is Albert Einstein. You'll discover how he published four papers in 1905 that redefined physics, leaving the scientific community stunned.\"\n" +
+"BAD (no intro): \"In 1905, Einstein publishes four papers that redefine physics. The physics community is stunned.\"\n" +
+"GOOD (with intro): \"Welcome to Human Footprints. Today we'll talk about Albert Einstein - the man who changed the world. In 1905, a 26-year-old patent clerk publishes four papers that redefine physics. The scientific community is stunned.\"\n" +
+"GOOD (with intro and hook): \"Welcome to Human Footprints. Today we'll talk about Charles Darwin - the man who changed the way we understand life. The letter arrives in June 1858. Darwin's hands tremble as he reads his own theory in another man's words.\"\n" +
 "BAD transition: \"Now the story rewinds to the beginning...\"\n" +
-"GOOD transition: \"It all started in Ulm, Germany, in 1879, when Einstein was born.\"") if is_hook_chapter else ("BAD example: \"In the quiet of his study, a revolution was brewing in Einstein's mind.\"\n" +
-"BAD example: \"Days later, Einstein would submit his groundbreaking paper.\"\n" +
-"GOOD example: \"In 1905, Einstein publishes four papers that redefine physics - including E=mc², proving mass and energy are the same thing. The physics community is stunned. Max Planck, the leading physicist of the era, immediately recognizes the significance and invites Einstein to Berlin.\"")}
+"GOOD transition: \"It all started in Ulm, Germany, in 1879, when Einstein was born.\"") if is_hook_chapter else get_shared_examples()}
 
 IMAGE PROMPT STYLE:
 - Cinematic, dramatic lighting
@@ -427,7 +470,8 @@ Respond with JSON array:
     "id": {start_id},
     "title": "Evocative 2-5 word title",
     "narration": "Vivid, dramatic narration...",
-    "image_prompt": "Detailed visual description, 16:9 cinematic"
+    "image_prompt": "Detailed visual description, 16:9 cinematic",
+    "year": YYYY or "YYYY-YYYY" or "around YYYY" (the specific year or year range when this scene takes place)
   }},
   ...
 ]"""
@@ -445,6 +489,11 @@ Respond with JSON array:
     
     if not isinstance(scenes, list):
         raise ValueError(f"Expected array, got {type(scenes)}")
+    
+    # Validate that each scene has a "year" field
+    for i, scene in enumerate(scenes):
+        if 'year' not in scene:
+            raise ValueError(f"Scene {i+1} missing required 'year' field")
     
     return scenes
 
@@ -505,10 +554,14 @@ This Short tells ONE CONTINUOUS STORY from their life - not disconnected facts, 
 
 IMPORTANT: This must be a COMPLETELY DIFFERENT story from any previous shorts. Choose a distinct incident, event, moment, or period from their life that hasn't been covered yet. For example, if a previous short covered their early breakthrough in 1905, choose a different story like a later conflict, a different achievement from another period, a personal relationship story, or a different challenge they faced. Each short should feel like a standalone story from a different part of their life.
 
-This Short has EXACTLY 3 scenes with this structure:
-1. BUILD 1: Start the story. Set up a specific incident, moment, or event from their life. Give context and specific details.
-2. BUILD 2: Escalate the story. Show what happened next, the consequences, or how it developed. Keep the narrative flowing.
-3. CLIFFHANGER: End with a natural unresolved question or tension that makes viewers want to watch the full documentary. This should flow naturally from the story - NOT a forced tagline like "But that's not even the craziest part..." Instead, end with a genuine question, unresolved tension, or intriguing "what happened next?" moment that relates to the story you just told.
+This Short has EXACTLY 5 scenes that tell ONE COMPLETE STORY with depth and detail. The final scene should be a NATURAL CONCLUSION, not a hook/cliffhanger.
+
+STRUCTURE (5 scenes):
+1. SCENE 1: Start the story. Set up a specific incident, moment, or event from their life. Give context and specific details. Hook the viewer with the opening of the story.
+2. SCENE 2: Build the story. Show what happened next, the development, or how the situation evolved. Add more depth and specific details.
+3. SCENE 3: Escalate the story. Show the consequences, conflicts, challenges, or complications. This is the rising action - make it engaging and detailed.
+4. SCENE 4: Continue building. Show how the story develops further, what the person does, what happens, and the stakes involved. Add emotional depth.
+5. SCENE 5: NATURAL CONCLUSION. This should provide a satisfying ending to THIS story. Show what happened as a result, how it resolved, or what the outcome was. Do NOT end with a cliffhanger like "But what happened next would change everything..." Instead, provide a natural conclusion that makes the viewer feel the story is complete: "The paper is published in 1859. It sells out in one day. Darwin's theory of evolution becomes the foundation of modern biology." or "This discovery earns him the Nobel Prize. But more importantly, it validates a lifetime of work." The story should feel complete and satisfying on its own.
 
 CRITICAL RULES:
 - Tell ONE continuous story - scenes must flow like a mini-narrative, not separate facts
@@ -527,7 +580,7 @@ Provide JSON:
   "thumbnail_prompt": "Vertical 9:16, dramatic, mobile-optimized",
   "hook_fact": "The opening fact that starts the story (for context, but we start with the story, not just the fact)",
   "story_angle": "What specific continuous story/incident are we telling (ONE narrative arc)",
-  "key_facts": ["3-5 specific facts to include across the 3 scenes that tell ONE story"]
+  "key_facts": ["5-8 specific facts to include across the 5 scenes that tell ONE complete story with depth"]
 }}"""
 
     response = client.chat.completions.create(
@@ -543,13 +596,17 @@ Provide JSON:
     return json.loads(clean_json_response(response.choices[0].message.content))
 
 
-def generate_short_scenes(person: str, short_outline: dict) -> list[dict]:
-    """Generate all 3 scenes for a YouTube Short (build, build, cliffhanger)."""
+def generate_short_scenes(person: str, short_outline: dict, birth_year: int | None = None) -> list[dict]:
+    """Generate all 5 scenes for a YouTube Short (complete story with natural conclusion).
+    
+    Each scene must include a "year" field indicating when it takes place.
+    Age calculation is done automatically using the scene's "year" field.
+    """
     
     key_facts = short_outline.get('key_facts', [])
     facts_str = "\n".join(f"• {fact}" for fact in key_facts)
     
-    scene_prompt = f"""Write 3 scenes for a YouTube Short about {person}.
+    scene_prompt = f"""Write 5 scenes for a YouTube Short about {person}.
 
 TITLE: "{short_outline.get('short_title', '')}"
 STORY ANGLE: {short_outline.get('story_angle', '')}
@@ -557,48 +614,48 @@ STORY ANGLE: {short_outline.get('story_angle', '')}
 KEY FACTS TO USE:
 {facts_str}
 
-CRITICAL: This short tells ONE CONTINUOUS STORY from {person}'s life. The scenes must flow like a mini-narrative, not disconnected facts.
+CRITICAL: This short tells ONE COMPLETE, CONTINUOUS STORY from {person}'s life with DEPTH and DETAIL. The scenes must flow like a mini-narrative, not disconnected facts. This should be high-quality content that is enjoyable on its own.
 
-STRUCTURE (exactly 3 scenes):
-1. BUILD 1: Start the story. Set up a specific incident, moment, or event. Give context and specific details. This is the beginning of ONE story.
-2. BUILD 2: Continue the story. Show what happened next, the consequences, or how it developed. Keep the narrative flowing forward.
-3. CLIFFHANGER: End with a NATURAL unresolved question or tension that makes viewers want to watch the full documentary. This must flow naturally from the story you just told - NOT a forced tagline. Examples of good endings:
-   - "But what happened next would change everything..."
-   - "The consequences of this decision would haunt him for years..."
-   - "Little did he know, this was just the beginning..."
-   - A genuine question that makes sense: "But could he really pull it off?"
+STRUCTURE (exactly 5 scenes):
+1. SCENE 1: Start the story. Set up a specific incident, moment, or event. Give context and specific details. Hook the viewer with the opening of the story.
+2. SCENE 2: Build the story. Show what happened next, the development, or how the situation evolved. Add more depth and specific details about who was involved, what was said, what the stakes were.
+3. SCENE 3: Escalate the story. Show the consequences, conflicts, challenges, or complications. This is the rising action - make it engaging and detailed. Show what made this moment difficult or significant.
+4. SCENE 4: Continue building. Show how the story develops further, what the person does, what happens, and the stakes involved. Add emotional depth and human details. Show relationships, motivations, and the personal impact.
+5. SCENE 5: NATURAL CONCLUSION. This should provide a satisfying ending to THIS story. Show what happened as a result, how it resolved, or what the outcome was. Examples of good conclusions:
+   - "The paper is published in 1859. It sells out in one day. Darwin's theory of evolution becomes the foundation of modern biology."
+   - "This discovery earns him the Nobel Prize. But more importantly, it validates a lifetime of work and changes how scientists think about the world."
+   - "The letter reaches London in June. Within weeks, the scientific community is divided. Some call it heresy. Others call it genius. But Darwin's idea has been unleashed."
    
-   BAD endings (DO NOT USE):
-   - "But that's not even the craziest part..." (forced, doesn't make sense)
-   - Generic taglines that don't relate to the story
+   DO NOT end with a cliffhanger or hook like:
+   - "But what happened next would change everything..." (NO - this is a hook, not a conclusion)
+   - "The consequences of this decision would haunt him for years..." (NO - unresolved)
+   - "Little did he know, this was just the beginning..." (NO - this is a hook)
+   
+   Instead, provide a natural, satisfying conclusion that makes the viewer feel the story is complete.
 
-NARRATION RULES - CRITICAL:
-- 1-2 SHORT sentences per scene (~8-10 seconds when spoken)
-- SIMPLE language - no fancy words, no poetry
-- SPECIFIC facts - names, numbers, dates, places
-- NO filler phrases like "little did he know" or "destiny awaited"
-- NO vague statements - every sentence must have concrete information
-- NO made-up temporal transitions like "Days later...", "Later that week...", "That afternoon..."
-- Present tense: "Einstein walks into the patent office..."
-- DEEP storytelling - not just what happened, but details about how it happened, why it mattered, who was involved
-- Tell a continuous story with specific events and their consequences
-- CRITICAL: Do NOT include film directions (Cut to, Fade, Smash cut) or camera directions.
+{get_shared_scene_flow_instructions()}
 
-BAD: "The genius stood on the precipice of destiny, unaware that fate had other plans."
-BAD: "Days later, Einstein would make a discovery."
-GOOD: "Einstein is 26 years old, working at a patent office, and about to change physics forever."
-GOOD: "Einstein publishes his paper on relativity. Physicists worldwide are stunned. Max Planck invites him to Berlin, recognizing the work will reshape science."
+{get_shared_scene_requirements()}
+
+{get_shared_narration_style(is_short=True)}
+
+{get_shared_examples()}
 
 IMAGE PROMPTS:
 - Vertical 9:16, dramatic, mobile-optimized
 - High contrast, single clear subject
 - End with ", 9:16 vertical"
 
-Respond with JSON array of exactly 3 scenes:
+Respond with JSON array of exactly 5 scenes:
 [
-  {{"id": 1, "title": "2-4 words", "narration": "...", "image_prompt": "..."}},
-  {{"id": 2, "title": "...", "narration": "...", "image_prompt": "..."}},
-  {{"id": 3, "title": "...", "narration": "...", "image_prompt": "..."}}
+  {{"id": 1, "title": "2-4 words", "narration": "...", "image_prompt": "...", "year": "YYYY or YYYY-YYYY"}},
+  {{"id": 2, "title": "...", "narration": "...", "image_prompt": "...", "year": "YYYY or YYYY-YYYY"}},
+  {{"id": 3, "title": "...", "narration": "...", "image_prompt": "...", "year": "YYYY or YYYY-YYYY"}},
+  {{"id": 4, "title": "...", "narration": "...", "image_prompt": "...", "year": "YYYY or YYYY-YYYY"}},
+  {{"id": 5, "title": "...", "narration": "...", "image_prompt": "...", "year": "YYYY or YYYY-YYYY"}}
+]
+
+IMPORTANT: Each scene must include a "year" field indicating when the scene takes place. Use a specific year (e.g., "1905") or a year range (e.g., "1905-1910") or approximate (e.g., "around 1859"). This is critical for accurate age representation in images.
 ]"""
 
     response = client.chat.completions.create(
@@ -615,11 +672,16 @@ Respond with JSON array of exactly 3 scenes:
     if not isinstance(scenes, list):
         raise ValueError(f"Expected array, got {type(scenes)}")
     
+    # Validate that each scene has a "year" field
+    for i, scene in enumerate(scenes):
+        if 'year' not in scene:
+            raise ValueError(f"Scene {i+1} missing required 'year' field")
+    
     return scenes
 
 
 def generate_shorts(person_of_interest: str, main_title: str, global_block: str, outline: dict, base_output_path: str, scene_highlights: list = None):
-    """Generate YouTube Shorts (4 scenes each: hook, build, build, cliffhanger)."""
+    """Generate YouTube Shorts (5 scenes each: complete story with natural conclusion)."""
     if scene_highlights is None:
         scene_highlights = []
     if config.num_shorts == 0:
@@ -628,7 +690,7 @@ def generate_shorts(person_of_interest: str, main_title: str, global_block: str,
     
     print(f"\n{'='*60}")
     print(f"[SHORTS] Generating {config.num_shorts} YouTube Short(s)")
-    print(f"[SHORTS] Structure: {config.total_short_scenes} scenes each (hook → build → build → cliffhanger)")
+    print(f"[SHORTS] Structure: {config.total_short_scenes} scenes each (complete story with natural conclusion)")
     print(f"{'='*60}")
     
     SHORTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -664,9 +726,14 @@ def generate_shorts(person_of_interest: str, main_title: str, global_block: str,
         print(f"[SHORT {short_num}] Generating {config.total_short_scenes} scenes...")
         
         try:
+            # Extract year range from short outline if available, otherwise use a general range
+            # Shorts can span different periods, so we'll use the story angle to estimate
+            # For now, we'll calculate age based on the main outline's overall span
+            # The LLM should include approximate time period in the story_angle
             all_scenes = generate_short_scenes(
                 person=person_of_interest,
-                short_outline=short_outline
+                short_outline=short_outline,
+                birth_year=outline.get('birth_year')
             )
             print(f"[SHORT {short_num}] → {len(all_scenes)} scenes generated")
             
@@ -674,9 +741,18 @@ def generate_shorts(person_of_interest: str, main_title: str, global_block: str,
             print(f"[SHORT {short_num}] ERROR generating scenes: {e}")
             raise
         
-        # Fix scene IDs
+        # Fix scene IDs and add metadata for age calculation
         for i, scene in enumerate(all_scenes):
             scene["id"] = i + 1
+            # Store birth_year in scene for later use in image generation
+            # The scene's "year" field will be used directly for age calculation
+            scene['birth_year'] = outline.get('birth_year')
+            # Calculate estimated age for this scene using the scene's "year" field
+            if outline.get('birth_year') and scene.get('year'):
+                scene['estimated_age'] = calculate_age_from_year_range(
+                    outline.get('birth_year'),
+                    scene.get('year')
+                )
         
         # Step 3: Generate thumbnail (if enabled)
         thumbnail_path = None
@@ -756,6 +832,7 @@ Their story in one line: {outline.get('tagline', '')}
 Generate JSON:
 {{
   "title": "Compelling YouTube title (60-80 chars)",
+  "tag_line": "Short, succinct, catchy tagline (5-10 words) that captures who they are. Examples: 'the man who changed the world', 'the codebreaker who saved millions', 'the mind that rewrote physics', 'the naturalist who explained life'. Should be memorable and accurate.",
   "thumbnail_description": "Thumbnail visual: composition, colors, mood, subject appearance. NO TEXT in image.",
   "global_block": "Visual style guide (300-400 words): semi-realistic digital painting style, color palette, dramatic lighting, how {person_of_interest} should appear consistently across {config.total_scenes} scenes."
 }}"""
@@ -773,10 +850,12 @@ Generate JSON:
     initial_metadata = json.loads(clean_json_response(response.choices[0].message.content))
     
     title = initial_metadata["title"]
+    tag_line = initial_metadata.get("tag_line", f"the story of {person_of_interest}")  # Fallback if not generated
     thumbnail_description = initial_metadata["thumbnail_description"]
     global_block = initial_metadata["global_block"]
     
     print(f"[METADATA] Title: {title}")
+    print(f"[METADATA] Tag line: {tag_line}")
     
     # Generate main video thumbnail (only if generating main video)
     generated_thumb = None
@@ -832,11 +911,23 @@ YouTube thumbnail. Cinematic, dramatic, high contrast. Optimized for small sizes
                     central_theme=central_theme,
                     narrative_arc=narrative_arc,
                     planted_seeds=planted_seeds if i > 0 else [],  # Only pass seeds after first chapter
-                    is_retention_hook_point=is_retention_hook
+                    is_retention_hook_point=is_retention_hook,
+                    tag_line=tag_line if i == 0 else None  # Only pass tag_line for first chapter (hook chapter)
                 )
                 
                 if len(scenes) != config.scenes_per_chapter:
                     print(f"  [WARNING] Got {len(scenes)} scenes, expected {config.scenes_per_chapter}")
+                
+                # Add birth_year metadata to each scene for age calculation
+                # The scene's "year" field will be used directly for age calculation
+                for scene in scenes:
+                    scene['birth_year'] = outline.get('birth_year')
+                    # Calculate age for this scene using the scene's "year" field
+                    if outline.get('birth_year') and scene.get('year'):
+                        scene['estimated_age'] = calculate_age_from_year_range(
+                            outline.get('birth_year'), 
+                            scene.get('year')
+                        )
                 
                 all_scenes.extend(scenes)
                 print(f"  ✓ {len(scenes)} scenes (total: {len(all_scenes)})")
@@ -870,9 +961,9 @@ YouTube thumbnail. Cinematic, dramatic, high contrast. Optimized for small sizes
         # Validate and fix scene IDs
         for i, scene in enumerate(all_scenes):
             scene["id"] = i + 1
-            for field in ["title", "narration", "image_prompt"]:
+            for field in ["title", "narration", "image_prompt", "year"]:
                 if field not in scene:
-                    raise ValueError(f"Scene {i+1} missing: {field}")
+                    raise ValueError(f"Scene {i+1} missing required field: {field}")
         
         # Step 3.5: Generate final metadata (description and tags) AFTER scenes are generated
         print("\n[STEP 3.5] Generating final metadata from actual scenes...")
@@ -936,6 +1027,7 @@ Generate JSON:
     output_data = {
         "metadata": {
             "title": title,
+            "tag_line": tag_line,
             "video_description": video_description,
             "tags": tags,
             "thumbnail_description": thumbnail_description,
