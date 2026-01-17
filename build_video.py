@@ -750,30 +750,57 @@ def _build_video_impl(scenes_path: str, out_video_path: str):
 
     # --- Build video clips (each image synced perfectly to its audio) ---
     print("\n[VIDEO] Assembling clips...")
-    clips = []
-    for i, scene in enumerate(scenes):
+    
+    # Parallelize clip creation for better performance
+    def create_clip(i):
+        scene = scenes[i]
         img_path = image_paths[i]
         scene_audio = scene_audio_clips[i]
-        
         print(f"[CLIP {i}] Scene {scene['id']}: {scene_audio.duration:.3f}s")
-        clip = make_static_clip_with_audio(img_path, scene_audio)
-        clips.append(clip)
+        return i, make_static_clip_with_audio(img_path, scene_audio)
+    
+    clips = [None] * num_scenes
+    # Use ThreadPoolExecutor to create clips in parallel (this helps with image processing)
+    with ThreadPoolExecutor(max_workers=min(4, num_scenes)) as executor:
+        futures = {executor.submit(create_clip, i): i for i in range(num_scenes)}
+        for future in as_completed(futures):
+            i, clip = future.result()
+            clips[i] = clip
 
-    # Concatenate all clips
+    # Concatenate all clips using method="chain" for better performance with static clips
+    # "chain" is faster than "compose" when clips have the same size/dimensions
     print("\n[VIDEO] Concatenating clips...")
-    final = concatenate_videoclips(clips, method="compose")
+    try:
+        # Try "chain" method first (faster for clips with same dimensions)
+        final = concatenate_videoclips(clips, method="chain")
+    except Exception:
+        # Fall back to "compose" if "chain" fails
+        print("[VIDEO] Using compose method instead of chain...")
+        final = concatenate_videoclips(clips, method="compose")
 
     print(f"[VIDEO] Final duration: {final.duration:.3f}s ({final.duration/60:.1f} min)")
 
-    # Write final video
-    print(f"\n[VIDEO] Writing to {out_video_path}...")
+    # Write final video with optimized encoding settings for speed
+    print(f"\n[VIDEO] Encoding video (this may take a while)...")
+    
+    # Use faster preset and more threads for better performance
+    # "fast" preset is ~2-3x faster than "medium" with minimal quality loss
+    # Increase threads based on available CPU cores
+    max_threads = os.cpu_count() or 8  # Use all available CPU cores
+    threads = min(max_threads, 16)  # Cap at 16 to avoid overhead
+    
     final.write_videofile(
         out_video_path,
         fps=FPS,
         codec="libx264",
         audio_codec="aac",
-        preset="medium",
-        threads=4,
+        preset="fast",  # Changed from "medium" to "fast" (~2-3x faster with minimal quality loss)
+        threads=threads,  # Use more CPU cores for faster encoding
+        bitrate=None,  # Let codec choose optimal bitrate
+        ffmpeg_params=[
+            "-movflags", "+faststart",  # Optimize for web streaming
+            "-pix_fmt", "yuv420p",  # Ensure compatibility
+        ],
     )
     print("[VIDEO] Done!")
 

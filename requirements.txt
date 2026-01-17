@@ -29,3 +29,6 @@ tqdm==4.67.1
 typing-inspection==0.4.2
 typing_extensions==4.15.0
 urllib3==2.6.3
+google-api-python-client==2.171.0
+google-auth-httplib2==0.2.0
+google-auth-oauthlib==1.2.1

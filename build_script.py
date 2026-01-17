@@ -4,6 +4,7 @@ import json
 import base64
 import argparse
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from dotenv import load_dotenv
 from openai import OpenAI
@@ -574,10 +575,10 @@ CRITICAL RULES:
 
 Provide JSON:
 {{
-  "short_title": "VIRAL title (max 50 chars) - shocking, specific",
+  "short_title": "VIRAL CLICKBAIT title (max 50 chars). Use power words: SHOCKING, SECRET, EXPOSED, INSANE, UNBELIEVABLE, MIND-BLOWING, CRAZY, BANNED, FORBIDDEN. Create curiosity gaps. Ask questions. Use numbers. Make bold claims. Examples: 'The SHOCKING Secret Nobody Knows', 'How He Did the IMPOSSIBLE', 'This Changed EVERYTHING', 'The Dark Truth Exposed', 'You WON'T Believe This'. Must make viewers NEED to watch immediately while staying accurate.",
   "short_description": "YouTube description (100 words) with hashtags",
   "tags": "10-15 SEO tags comma-separated",
-  "thumbnail_prompt": "Vertical 9:16, dramatic, mobile-optimized",
+  "thumbnail_prompt": "CLICKBAIT thumbnail for mobile (9:16 vertical): EXTREME close-up or dramatic composition, intense emotional expression (not neutral - show passion/conflict/shock), HIGH CONTRAST dramatic lighting (chiaroscuro), bold eye-catching colors (reds/yellows for urgency), subject in MOMENT OF IMPACT or dramatic pose, symbolic elements representing the story's peak moment, movie-poster energy, optimized for small mobile screens - must grab attention instantly when scrolling",
   "hook_fact": "The opening fact that starts the story (for context, but we start with the story, not just the fact)",
   "story_angle": "What specific continuous story/incident are we telling (ONE narrative arc)",
   "key_facts": ["5-8 specific facts to include across the 5 scenes that tell ONE complete story with depth"]
@@ -700,10 +701,12 @@ def generate_shorts(person_of_interest: str, main_title: str, global_block: str,
     base_name = Path(base_output_path).stem.replace("_script", "")
     previously_covered_stories = []  # Track story angles to ensure diversity
     
+    # STEP 1: Generate all outlines sequentially (they depend on previously_covered_stories)
+    print(f"\n[OPTIMIZATION] Step 1: Generating all short outlines sequentially...")
+    short_outlines = []
     for short_num in range(1, config.num_shorts + 1):
         print(f"\n[SHORT {short_num}/{config.num_shorts}] Creating outline...")
         
-        # Step 1: Generate short outline (pass scene highlights for better connection to main video)
         short_outline = generate_short_outline(
             person=person_of_interest,
             main_outline=outline,
@@ -713,23 +716,20 @@ def generate_shorts(person_of_interest: str, main_title: str, global_block: str,
             scene_highlights=scene_highlights
         )
         
-        # Track the story angle to ensure next shorts don't repeat it
         story_angle = short_outline.get("story_angle", "")
         if story_angle:
             previously_covered_stories.append(story_angle)
         
-        short_title = short_outline.get("short_title", f"Short {short_num}")
-        print(f"[SHORT {short_num}] Title: {short_title}")
-        print(f"[SHORT {short_num}] Hook: {short_outline.get('hook_fact', '')[:60]}...")
-        
-        # Step 2: Generate all scenes
-        print(f"[SHORT {short_num}] Generating {config.total_short_scenes} scenes...")
-        
+        short_outlines.append((short_num, short_outline))
+        print(f"[SHORT {short_num}] Title: {short_outline.get('short_title', f'Short {short_num}')}")
+    
+    # STEP 2: Generate all scenes in parallel (independent once outlines are done)
+    print(f"\n[OPTIMIZATION] Step 2: Generating all short scenes in parallel...")
+    
+    def generate_single_short(short_num, short_outline):
+        """Helper function to generate a complete short (scenes + save)."""
         try:
-            # Extract year range from short outline if available, otherwise use a general range
-            # Shorts can span different periods, so we'll use the story angle to estimate
-            # For now, we'll calculate age based on the main outline's overall span
-            # The LLM should include approximate time period in the story_angle
+            print(f"[SHORT {short_num}] Generating {config.total_short_scenes} scenes...")
             all_scenes = generate_short_scenes(
                 person=person_of_interest,
                 short_outline=short_outline,
@@ -737,62 +737,80 @@ def generate_shorts(person_of_interest: str, main_title: str, global_block: str,
             )
             print(f"[SHORT {short_num}] → {len(all_scenes)} scenes generated")
             
-        except Exception as e:
-            print(f"[SHORT {short_num}] ERROR generating scenes: {e}")
-            raise
-        
-        # Fix scene IDs and add metadata for age calculation
-        for i, scene in enumerate(all_scenes):
-            scene["id"] = i + 1
-            # Store birth_year in scene for later use in image generation
-            # The scene's "year" field will be used directly for age calculation
-            scene['birth_year'] = outline.get('birth_year')
-            # Calculate estimated age for this scene using the scene's "year" field
-            if outline.get('birth_year') and scene.get('year'):
-                scene['estimated_age'] = calculate_age_from_year_range(
-                    outline.get('birth_year'),
-                    scene.get('year')
-                )
-        
-        # Step 3: Generate thumbnail (if enabled)
-        thumbnail_path = None
-        if config.generate_short_thumbnails:
-            thumbnail_prompt = short_outline.get("thumbnail_prompt", "")
-            if thumbnail_prompt:
-                thumbnail_prompt += "\n\nYouTube Shorts thumbnail. Vertical 9:16, bold, dramatic, mobile-optimized, single powerful image."
-                thumb_file = THUMBNAILS_DIR / f"{base_name}_short{short_num}_thumbnail.png"
-                thumbnail_path = generate_thumbnail(thumbnail_prompt, thumb_file, size="1024x1536")
-        
-        # Step 4: Save short
-        short_output = {
-            "metadata": {
-                "short_id": short_num,
+            # Fix scene IDs and add metadata for age calculation
+            for i, scene in enumerate(all_scenes):
+                scene["id"] = i + 1
+                scene['birth_year'] = outline.get('birth_year')
+                if outline.get('birth_year') and scene.get('year'):
+                    scene['estimated_age'] = calculate_age_from_year_range(
+                        outline.get('birth_year'),
+                        scene.get('year')
+                    )
+            
+            # Generate thumbnail (if enabled)
+            thumbnail_path = None
+            if config.generate_short_thumbnails:
+                thumbnail_prompt = short_outline.get("thumbnail_prompt", "")
+                if thumbnail_prompt:
+                    thumbnail_prompt += "\n\nCLICKBAIT YouTube Shorts thumbnail - MAXIMIZE SCROLL-STOPPING POWER: Vertical 9:16, EXTREME close-up or dramatic composition, intense emotional expression (shock/passion/conflict), HIGH CONTRAST dramatic lighting (chiaroscuro), bold eye-catching colors (reds/yellows/oranges for urgency), subject in MOMENT OF IMPACT, movie-poster energy, optimized for mobile scrolling - must instantly grab attention when tiny in feed."
+                    thumb_file = THUMBNAILS_DIR / f"{base_name}_short{short_num}_thumbnail.png"
+                    thumbnail_path = generate_thumbnail(thumbnail_prompt, thumb_file, size="1024x1536")
+            
+            # Build short output
+            short_title = short_outline.get("short_title", f"Short {short_num}")
+            short_output = {
+                "metadata": {
+                    "short_id": short_num,
+                    "title": short_title,
+                    "description": short_outline.get("short_description", ""),
+                    "tags": short_outline.get("tags", ""),
+                    "hook_fact": short_outline.get("hook_fact", ""),
+                    "thumbnail_path": str(thumbnail_path) if thumbnail_path else None,
+                    "story_angle": short_outline.get("story_angle", ""),
+                    "person_of_interest": person_of_interest,
+                    "main_video_title": main_title,
+                    "global_block": global_block,
+                    "num_scenes": len(all_scenes),
+                    "outline": short_outline
+                },
+                "scenes": all_scenes
+            }
+            
+            # Save short
+            short_file = SHORTS_DIR / f"{base_name}_short{short_num}.json"
+            with open(short_file, "w", encoding="utf-8") as f:
+                json.dump(short_output, f, indent=2, ensure_ascii=False)
+            
+            print(f"[SHORT {short_num}] ✓ Saved: {short_file} ({len(all_scenes)} scenes)")
+            
+            return {
+                "file": str(short_file),
                 "title": short_title,
-                "description": short_outline.get("short_description", ""),
-                "tags": short_outline.get("tags", ""),
-                "hook_fact": short_outline.get("hook_fact", ""),
-                "thumbnail_path": str(thumbnail_path) if thumbnail_path else None,
-                "story_angle": short_outline.get("story_angle", ""),
-                "person_of_interest": person_of_interest,
-                "main_video_title": main_title,
-                "global_block": global_block,
-                "num_scenes": len(all_scenes),
-                "outline": short_outline
-            },
-            "scenes": all_scenes
+                "scenes": len(all_scenes)
+            }
+        except Exception as e:
+            print(f"[SHORT {short_num}] ERROR: {e}")
+            raise
+    
+    # Generate all shorts in parallel (up to 3 concurrent API calls)
+    max_workers = min(3, config.num_shorts)  # Limit concurrent API calls
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {
+            executor.submit(generate_single_short, short_num, short_outline): short_num 
+            for short_num, short_outline in short_outlines
         }
         
-        short_file = SHORTS_DIR / f"{base_name}_short{short_num}.json"
-        with open(short_file, "w", encoding="utf-8") as f:
-            json.dump(short_output, f, indent=2, ensure_ascii=False)
-        
-        print(f"[SHORT {short_num}] ✓ Saved: {short_file} ({len(all_scenes)} scenes)")
-        
-        generated_shorts.append({
-            "file": str(short_file),
-            "title": short_title,
-            "scenes": len(all_scenes)
-        })
+        for future in as_completed(futures):
+            short_num = futures[future]
+            try:
+                result = future.result()
+                generated_shorts.append(result)
+            except Exception as e:
+                print(f"[SHORT {short_num}] Failed: {e}")
+                raise
+    
+    # Sort by short_id to maintain order
+    generated_shorts.sort(key=lambda x: int(Path(x['file']).stem.split('_short')[1]))
     
     return generated_shorts
 
@@ -831,9 +849,9 @@ Their story in one line: {outline.get('tagline', '')}
 
 Generate JSON:
 {{
-  "title": "Compelling YouTube title (60-80 chars)",
+  "title": "CLICKBAIT YouTube title (60-80 chars). Use power words like: SHOCKING, SECRET, REVEALED, EXPOSED, DARK, UNTOLD, UNBELIEVABLE, INCREDIBLE, INSANE, CRAZY, MIND-BLOWING, BANNED, FORBIDDEN, HIDDEN. Create curiosity gaps, ask questions, use numbers, make bold claims. Examples: 'The SHOCKING Secret That Changed Everything', 'How [Person] Did the IMPOSSIBLE', 'The Dark Truth They DON'T Want You to Know', '[Person]: The Forbidden Discovery', 'This ONE Decision Changed History FOREVER'. Must be engaging and make viewers NEED to click while staying factually accurate.",
   "tag_line": "Short, succinct, catchy tagline (5-10 words) that captures who they are. Examples: 'the man who changed the world', 'the codebreaker who saved millions', 'the mind that rewrote physics', 'the naturalist who explained life'. Should be memorable and accurate.",
-  "thumbnail_description": "Thumbnail visual: composition, colors, mood, subject appearance. NO TEXT in image.",
+  "thumbnail_description": "CLICKBAIT thumbnail visual: Maximize visual impact! Use intense close-ups, dramatic expressions, extreme lighting (chiaroscuro), bold colors (red/yellow for danger/urgency), powerful symbols, emotional moments. Show conflict, tension, or peak dramatic moment. Composition should be bold and arresting - eyes staring directly, hands in dramatic pose, symbolic objects. Use high contrast, dramatic shadows, cinematic lighting. Subject should appear in a MOMENT OF IMPACT - not calm portrait. Think action movie poster, not museum painting. NO TEXT in image, but visually SCREAM importance and drama.",
   "global_block": "Visual style guide (300-400 words): semi-realistic digital painting style, color palette, dramatic lighting, how {person_of_interest} should appear consistently across {config.total_scenes} scenes."
 }}"""
 
@@ -866,7 +884,17 @@ Generate JSON:
         
         thumbnail_prompt = f"""{thumbnail_description}
 
-YouTube thumbnail. Cinematic, dramatic, high contrast. Optimized for small sizes."""
+YouTube CLICKBAIT thumbnail - MUST MAXIMIZE CLICKS:
+- EXTREME close-up or dramatic wide shot with strong composition
+- Intense emotional expression on face - not neutral, show passion/conflict/determination
+- Dramatic lighting with HIGH CONTRAST (chiaroscuro) - bright highlights, deep shadows
+- Bold, eye-catching colors (reds, yellows, oranges for urgency/importance) against darker backgrounds
+- Subject in ACTION or MOMENT OF IMPACT - not passive pose
+- Symbolic elements that represent their greatest achievement or conflict
+- Cinematic, movie-poster quality - think Marvel movie poster energy
+- Optimized for small sizes - subject must be CLEARLY visible even when tiny
+- Background should be dramatic but not distract from subject
+- Overall feeling: URGENT, IMPORTANT, UNMISSABLE"""
         
         generated_thumb = generate_thumbnail(thumbnail_prompt, thumbnail_path)
     
@@ -938,14 +966,14 @@ YouTube thumbnail. Cinematic, dramatic, high contrast. Optimized for small sizes
                     # Extract seeds from scene narrations - look for specific objects, relationships, concepts
                     for scene in scenes:
                         narration = scene.get('narration', '')
-                        title = scene.get('title', '')
+                        scene_title = scene.get('title', '')
                         # Look for specific details that could be callbacks: objects, relationships, promises, mysteries
                         # The LLM should be planting these intentionally, but we extract them here
                         # Add scene title and key phrases as potential seeds
                         if narration:
                             # Simple extraction: look for specific nouns, relationships, or concepts
                             # In a more sophisticated version, we'd ask the LLM to explicitly list planted seeds
-                            planted_seeds.append(f"{title}: {narration[:80]}...")
+                            planted_seeds.append(f"{scene_title}: {narration[:80]}...")
                     # Also add chapter's key events as potential seeds
                     for event in chapter.get('key_events', []):
                         # Extract specific details that could be callbacks
