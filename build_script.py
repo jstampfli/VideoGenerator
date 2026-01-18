@@ -9,7 +9,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dotenv import load_dotenv
 from openai import OpenAI
 
-from utils import calculate_age_from_year_range
 
 # ------------- CONFIG -------------
 
@@ -73,16 +72,25 @@ def get_shared_scene_requirements() -> str:
 1. SPECIFIC FACTS - names, dates, places, numbers, amounts, exact details
 2. CONCRETE EVENTS - what exactly happened, step-by-step, who was involved, what was said, how it unfolded
 3. CONTEXT and BACKGROUND - why this matters, what led to this moment, what the stakes were
-4. HUMAN DETAILS - emotions, reactions, relationships, personal motivations, conflicts
-5. CONSEQUENCES - what happened as a result, how it changed things, who was affected
-6. INTERESTING information the viewer likely doesn't know - surprising details, behind-the-scenes facts
-7. NO filler, NO fluff, NO vague statements, NO bullet-point style
-8. Every sentence must contain NEW information that moves the story forward"""
+4. HUMAN EMOTION AND EXPERIENCE (CRITICAL FOR ENGAGEMENT):
+   - How does this event FEEL to the main character? What are they thinking, fearing, hoping?
+   - What's the EMOTIONAL WEIGHT of this moment? Is it terrifying? Exhilarating? Crushing? Triumphant?
+   - Show INTERNAL EXPERIENCE - not just what happens, but what it MEANS to them personally
+   - What's at stake EMOTIONALLY? What would failure feel like? What does success mean?
+   - Use specific emotional details: "Her hands shake as she writes...", "He can barely breathe from the pressure...", "The weight of what's at stake makes every word matter..."
+   - Connect events to human feelings: isolation, fear, determination, joy, desperation, pride, grief
+   - Make the viewer FEEL what the character feels - pull them into the emotional reality of the moment
+5. SIGNIFICANCE AND IMPACT - why THIS moment matters, how significant it is, what it changes
+6. CONSEQUENCES - what happened as a result, how it changed things, who was affected
+7. INTERESTING information the viewer likely doesn't know - surprising details, behind-the-scenes facts
+8. NO filler, NO fluff, NO vague statements, NO bullet-point style
+9. Every sentence must contain NEW information that moves the story forward AND connects to the human experience"""
 
 
 def get_shared_narration_style(is_short: bool = False) -> str:
     """Shared narration style instructions for both main video and shorts."""
     base_style = """NARRATION STYLE - CRITICAL:
+- PERSPECTIVE: Write from the YouTuber's perspective - this is YOUR script, YOU are telling the story to YOUR audience
 - SIMPLE, CLEAR language. Write for a general audience.
 - AVOID flowery, artistic, or poetic language
 - AVOID vague phrases like "little did he know", "destiny awaited", "the world would never be the same"
@@ -90,7 +98,25 @@ def get_shared_narration_style(is_short: bool = False) -> str:
 - NO made-up temporal transitions - stick to what actually happened
 - Use present tense: "Einstein submits his paper to the journal..."
 - Tell a DEEP story with DETAILS - not just "he did X" but "he did X because Y, and here's how it happened, and here's what it meant"
-- Think like a documentary: show the viewer what happened, why it mattered, and how it felt"""
+- EMOTIONAL ENGAGEMENT - Pull the viewer into the story by making them FEEL what the character feels:
+  * Don't just state events - describe how they FEEL. What's the emotional weight? What's the internal experience?
+  * Show what's at stake emotionally, not just factually. What does this moment mean to them personally?
+  * Use specific emotional details: physical sensations (hands shaking, heart racing), internal thoughts, fears, hopes
+  * Make events feel SIGNIFICANT by connecting them to human feelings - isolation, fear, determination, triumph, despair
+  * Help the viewer understand not just WHAT happened, but how it FELT to experience it
+- NARRATION TONE MUST MATCH SCENE EMOTION (CRITICAL):
+  * The scene's "emotion" field determines narration tone/style - word choice, sentence structure, and pacing
+  * Examples: "desperate" → urgent, short sentences, anxious language; "triumphant" → elevated language, confident rhythm; "contemplative" → slower pace, reflective word choice; "tense" → clipped sentences, heightened awareness; "somber" → measured pace, weighty words
+  * Match the narration's emotional tone to the scene's emotion - if emotion is "desperate", the narration itself should feel urgent and anxious
+- Think like a YouTuber telling a compelling story: show the viewer what happened, why it mattered, and how it FELT - make them experience the emotions alongside the character, and match your narration tone to reflect the scene's emotion
+- ABSOLUTELY NO META REFERENCES - Do NOT mention:
+  * "Chapter" or "chapters" - viewers don't know about chapters
+  * "In this video" or "In this documentary" 
+  * "As we'll see" or "Later in this story" - just tell the story
+  * "Let me tell you" or "I want to show you" - just narrate directly
+  * Any production elements, prompts, outlines, or behind-the-scenes information
+  * References to "the script" or "this episode" or "this part"
+- Write as if you're naturally telling a story, not referencing the structure behind it"""
     
     if is_short:
         base_style += "\n- 1-2 sentences per scene (~8-12 seconds when spoken) - shorts need to be concise but detailed"
@@ -116,7 +142,8 @@ def get_shared_scene_flow_instructions() -> str:
 - DO NOT use made-up temporal transitions like "Days later...", "Later that week...", "That afternoon...", "The next morning...", "Weeks passed...", "Meanwhile..."
 - Instead, let the story flow through what actually happened: "The paper is published. Physicists worldwide take notice."
 - Each scene should feel inevitable because of what came before, not because of a transition phrase
-- Build narrative momentum through actual events, not filler words"""
+- Build narrative momentum through actual events, not filler words
+- CRITICAL: Each scene must cover DIFFERENT, NON-OVERLAPPING events. Do NOT repeat the same event, moment, or action that was already covered in a previous scene. Each scene should advance the story with NEW information, not re-tell what happened before. If an event was already described in detail, move to its consequences or the next significant event instead of describing it again."""
 
 
 def get_shared_examples() -> str:
@@ -277,6 +304,24 @@ Respond with JSON:
   "tagline": "One compelling sentence that captures their story",
   "central_theme": "The overarching theme that ties the whole documentary together",
   "narrative_arc": "Brief description of the emotional journey from start to finish",
+  "overarching_plots": [
+    {{
+      "plot_name": "The main plot thread (e.g., 'The Quest for Recognition', 'The Rivalry with X', 'The Secret That Changed Everything')",
+      "description": "What this plot is about and why it matters",
+      "starts_chapter": 1-{config.chapters},
+      "peaks_chapter": 1-{config.chapters},
+      "resolves_chapter": 1-{config.chapters},
+      "key_moments": ["specific plot points that develop this story"]
+    }}
+  ],
+  "sub_plots": [
+    {{
+      "subplot_name": "A sub-plot that spans 2-4 chapters (e.g., 'The Relationship with Y', 'The Internal Conflict', 'The Personal Cost')",
+      "description": "What this sub-plot is about",
+      "chapters_span": [1-3],  // which chapters this sub-plot appears in
+      "key_moments": ["specific moments that advance this sub-plot"]
+    }}
+  ],
   "chapters": [
     {{
       "chapter_num": 1,
@@ -287,7 +332,9 @@ Respond with JSON:
       "emotional_tone": "...",
       "dramatic_tension": "...",
       "connects_to_next": "...",
-      "recurring_threads": ["...", ...]
+      "recurring_threads": ["...", ...],
+      "plots_active": ["plot names or subplot names that are active/developing in this chapter"],
+      "plot_developments": ["How overarching plots and sub-plots develop in this chapter - what happens to them"]
     }},
     ... ({config.chapters} chapters total)
   ]
@@ -313,11 +360,106 @@ Respond with JSON:
     return outline_data
 
 
+def generate_cta_transition_scene(person: str, tag_line: str | None = None) -> dict:
+    """
+    Generate a CTA transition scene between chapter 1 (hook) and chapter 2 (story begins).
+    This scene transitions from the hook/intro to the chronological story and includes a call-to-action.
+    Only used for main videos, not shorts.
+    """
+    tag_line_text = f" - {tag_line}" if tag_line else ""
+    
+    cta_prompt = f"""Generate a single transition scene for a documentary about {person}.
+
+CONTEXT:
+- This scene appears BETWEEN the hook chapter (preview/trailer) and the chronological story (chapter 2)
+- It transitions from the preview back to where the story begins chronologically
+- It includes a call-to-action (like, subscribe, comment) naturally woven into the narration
+- The tone should be engaging, friendly, and encourage viewer engagement
+
+REQUIREMENTS:
+1. TRANSITION TEXT AND CTA (MUST BE ONE SENTENCE):
+   - Combine transition from hook/preview to chronological beginning WITH call-to-action in a SINGLE sentence
+   - MUST include: request to like, subscribe, and comment
+   - Use phrases like "But how did it all begin?", "Let's start from the beginning", or similar natural transitions
+   - CRITICAL: Must mention "like", "subscribe", and "comment" in this one sentence
+   - Examples: 
+     * "But how did it all begin? Before we dive into the story, if you're enjoying this, make sure to like, subscribe, and comment below."
+     * "Let's start from the very beginning - and don't forget to like, subscribe, and leave a comment if you want to see more documentaries like this."
+   - Keep it short, natural, and conversational - one sentence total (~8-12 seconds when spoken)
+
+2. NARRATION STYLE:
+   - Write from the YouTuber's perspective (YOUR script, YOU telling the story)
+   - Simple, clear language
+   - Friendly and engaging tone
+   - MUST be exactly ONE sentence that combines transition + CTA
+
+4. IMAGE PROMPT:
+   - Bright, happy, upbeat mood - this should feel positive and engaging
+   - Related to {person} and the documentary topic but in a cheerful context
+   - Include visual elements that subtly suggest engagement: perhaps a celebratory moment, an achievement, a positive milestone from their life, or something that makes viewers want to engage
+   - 16:9 cinematic format
+   - Think: an inspiring moment, a breakthrough, a happy scene from their life that's visually appealing
+   - The image should be inviting and make viewers want to continue watching
+
+5. EMOTION: "upbeat" or "engaging"
+
+Respond with JSON:
+{{
+  "id": 0,
+  "title": "3-5 word transition title",
+  "narration": "ONE sentence that transitions from the hook to the story beginning and includes CTA to like, subscribe, and comment. ~8-12 seconds when spoken.",
+  "image_prompt": "Bright, happy, upbeat scene related to {person} - an inspiring moment, achievement, or positive milestone from their life that's visually engaging and makes viewers want to continue. 16:9 cinematic",
+  "emotion": "upbeat",
+  "year": "transition" or a relevant year from early in their story
+}}"""
+
+    response = client.chat.completions.create(
+        model=SCRIPT_MODEL,
+        messages=[
+            {"role": "system", "content": "You are a YouTuber creating engaging content. Write naturally from YOUR perspective. Make the transition smooth and the CTA feel authentic, not forced. Respond with valid JSON only."},
+            {"role": "user", "content": cta_prompt}
+        ],
+        temperature=0.85,
+    )
+    
+    scene = json.loads(clean_json_response(response.choices[0].message.content))
+    
+    if not isinstance(scene, dict):
+        raise ValueError(f"Expected dict, got {type(scene)}")
+    
+    # Ensure all required fields are present
+    if 'title' not in scene:
+        scene['title'] = "Back to the Beginning"
+    if 'narration' not in scene:
+        scene['narration'] = "But how did it all begin? Before we dive into the story, make sure to like, subscribe, and comment below if you're enjoying this documentary."
+    else:
+        # Validate that narration includes CTA (like, subscribe, comment) and is ONE sentence
+        narration_lower = scene['narration'].lower()
+        has_like = 'like' in narration_lower
+        has_subscribe = 'subscribe' in narration_lower
+        has_comment = 'comment' in narration_lower
+        
+        # If CTA is missing, add it to the narration
+        if not (has_like and has_subscribe and has_comment):
+            base_narration = scene['narration'].rstrip('.!?')
+            scene['narration'] = f"{base_narration} Make sure to like, subscribe, and comment below."
+    if 'image_prompt' not in scene:
+        scene['image_prompt'] = f"Bright, happy, upbeat scene related to {person} - an inspiring moment or positive milestone, 16:9 cinematic"
+    if 'emotion' not in scene:
+        scene['emotion'] = "upbeat"
+    if 'year' not in scene:
+        scene['year'] = "transition"
+    
+    return scene
+
+
 def generate_scenes_for_chapter(person: str, chapter: dict, scenes_per_chapter: int, start_id: int, 
                                  global_style: str, prev_chapter: dict = None, prev_scenes: list = None,
                                  central_theme: str = None, narrative_arc: str = None, 
                                  planted_seeds: list[str] = None, is_retention_hook_point: bool = False,
-                                 birth_year: int | None = None, tag_line: str | None = None) -> list[dict]:
+                                 birth_year: int | None = None, death_year: int | None = None,
+                                 tag_line: str | None = None, overarching_plots: list[dict] = None,
+                                 sub_plots: list[dict] = None) -> list[dict]:
     """Generate scenes for a single chapter of the outline with continuity context."""
     
     if planted_seeds is None:
@@ -353,13 +495,14 @@ End with a transition like "But how did it all begin?" to set up Chapter 2."""
     else:
         prev_context = "This is the OPENING chapter - establish the story with impact!"
     
-    # Include last few scenes for continuity
+    # Include last few scenes for continuity and to avoid overlapping events
     if prev_scenes and len(prev_scenes) > 0:
-        # Get last 3 scenes for context
-        recent_scenes = prev_scenes[-3:]
-        scenes_context = "LAST FEW SCENES (maintain continuity, don't repeat):\n"
+        # Get last 5 scenes for context (increased to better track what was covered)
+        recent_scenes = prev_scenes[-5:]
+        scenes_context = "RECENT SCENES - AVOID REPEATING THESE EVENTS, maintain continuity to naturally continue the story:\n"
         for sc in recent_scenes:
-            scenes_context += f"  Scene {sc.get('id')}: {sc.get('title')} - \"{sc.get('narration', '')[:100]}...\"\n"
+            scenes_context += f"  Scene {sc.get('id')}: \"{sc.get('title')}\" - {sc.get('narration', '')[:150]}...\n"
+        scenes_context += "\nCRITICAL: Do NOT repeat or overlap with events already covered in the scenes above. Each scene must cover DIFFERENT events. If an event was already described, move to its consequences or the next significant moment."
     else:
         scenes_context = ""
     
@@ -384,6 +527,85 @@ PLANTED SEEDS TO REFERENCE (create satisfying callbacks):
 
 These details were mentioned in earlier chapters. Reference them naturally in your scenes to create "aha moments" when earlier details suddenly matter. Don't force it - weave them in organically."""
     
+    # Build plot context - this is CRITICAL for making the video feel like a story
+    plot_context = ""
+    if overarching_plots is None:
+        overarching_plots = []
+    if sub_plots is None:
+        sub_plots = []
+    
+    # Get active plots for this chapter
+    active_plots = chapter.get('plots_active', [])
+    plot_developments = chapter.get('plot_developments', [])
+    
+    if active_plots or plot_developments or overarching_plots or sub_plots:
+        plot_context = "\nOVERARCHING PLOTS & SUB-PLOTS - CRITICAL FOR STORY COHESION:\n"
+        
+        # Show all overarching plots
+        if overarching_plots:
+            plot_context += "OVERARCHING PLOTS (spanning multiple chapters):\n"
+            for plot in overarching_plots:
+                plot_name = plot.get('plot_name', '')
+                plot_desc = plot.get('description', '')
+                starts_ch = plot.get('starts_chapter', '?')
+                peaks_ch = plot.get('peaks_chapter', '?')
+                resolves_ch = plot.get('resolves_chapter', '?')
+                current_chapter_num = chapter.get('chapter_num', 0)
+                
+                # Determine plot stage
+                if current_chapter_num < starts_ch:
+                    stage = "NOT YET STARTED"
+                elif current_chapter_num == starts_ch:
+                    stage = "BEGINS HERE - introduce this plot thread"
+                elif starts_ch < current_chapter_num < peaks_ch:
+                    stage = "DEVELOPING - advance this plot"
+                elif current_chapter_num == peaks_ch:
+                    stage = "PEAKS HERE - this is the climax of this plot"
+                elif peaks_ch < current_chapter_num < resolves_ch:
+                    stage = "RESOLVING - consequences unfolding"
+                elif current_chapter_num == resolves_ch:
+                    stage = "RESOLVES HERE - conclude this plot thread"
+                else:
+                    stage = "COMPLETED"
+                
+                plot_context += f"• \"{plot_name}\": {plot_desc} (Starts: Ch {starts_ch}, Peaks: Ch {peaks_ch}, Resolves: Ch {resolves_ch}) [{stage}]\n"
+        
+        # Show active sub-plots for this chapter
+        relevant_subplots = []
+        current_chapter_num = chapter.get('chapter_num', 0)
+        if sub_plots:
+            for subplot in sub_plots:
+                subplot_chapters = subplot.get('chapters_span', [])
+                if current_chapter_num in subplot_chapters:
+                    relevant_subplots.append(subplot)
+        
+        if relevant_subplots:
+            plot_context += "\nACTIVE SUB-PLOTS (developing in this chapter):\n"
+            for subplot in relevant_subplots:
+                subplot_name = subplot.get('subplot_name', '')
+                subplot_desc = subplot.get('description', '')
+                key_moments = subplot.get('key_moments', [])
+                plot_context += f"• \"{subplot_name}\": {subplot_desc}\n"
+                if key_moments:
+                    plot_context += f"  Key moments: {', '.join(key_moments[:3])}\n"
+        
+        # Show plot developments for this chapter
+        if plot_developments:
+            plot_context += "\nPLOT DEVELOPMENTS IN THIS CHAPTER:\n"
+            for dev in plot_developments:
+                plot_context += f"• {dev}\n"
+        
+        plot_context += """
+STORYTELLING REQUIREMENTS:
+- Weave plot elements NATURALLY throughout your scenes - don't make it obvious
+- Show plot threads developing through actual events, not exposition
+- Connect scenes through plot progression, not just chronology
+- Reference plot threads from earlier chapters when relevant
+- Build tension by showing how plots are developing or converging
+- Make viewers feel like they're following a story, not a timeline
+- Each scene should advance at least one plot thread, even if subtly
+- Show how different plots intersect and influence each other"""
+    
     # Build retention hook instruction
     retention_hook_instruction = ""
     if is_retention_hook_point:
@@ -405,8 +627,19 @@ Time Period: {chapter['year_range']}
 Emotional Tone: {chapter['emotional_tone']}
 Dramatic Tension: {chapter['dramatic_tension']}
 Recurring Themes: {threads_str}
-Sets Up Next Chapter: {connects_to_next}
+Sets Up What Comes Next: {connects_to_next}
+
+EMOTION GENERATION (CRITICAL):
+- Each scene MUST include an "emotion" field - a single word or short phrase (e.g., "tense", "triumphant", "desperate", "contemplative", "exhilarating", "somber", "urgent", "defiant")
+- Base the emotion on: what the character is feeling at this moment, the dramatic tension, and the significance of the event
+- The emotion should align with the chapter's emotional tone ({chapter['emotional_tone']}) but be scene-specific
+- Use the emotion to guide both narration tone/style and image mood:
+  * If emotion is "desperate" - narration should feel urgent/anxious with short, sharp sentences; image should show tense atmosphere, frantic expressions
+  * If emotion is "triumphant" - narration should feel uplifting with elevated language; image should show celebration, confident expressions
+  * If emotion is "contemplative" - narration should be slower, reflective; image should show quiet mood, thoughtful expressions
+- The emotion field will be used to ensure narration tone and image mood match the emotional reality of the moment
 {theme_context}
+{plot_context}
 {callback_context}
 {pacing_instruction}
 {retention_hook_instruction}
@@ -418,7 +651,7 @@ Key Events to Dramatize:
 
 Generate EXACTLY {scenes_per_chapter} scenes that FLOW CONTINUOUSLY.
 
-{"HOOK CHAPTER - INTRODUCTION/PREVIEW (NOT A STORY):" if is_hook_chapter else "CONTINUOUS NARRATIVE - scenes should flow like a movie, not feel like separate segments:"}
+{"HOOK CHAPTER - INTRODUCTION/PREVIEW (NOT A STORY):" if is_hook_chapter else "STORYTELLING - this is a STORY, not a timeline:"}
 {f'''CRITICAL: This is an INTRODUCTION/PREVIEW, not a story. It should quickly answer "Why should I watch this?"
 
 STRUCTURE:
@@ -433,20 +666,40 @@ NARRATION STYLE FOR INTRO:
 - Speak directly to the viewer about what they'll discover
 - Use phrases like "You'll discover...", "This is the story of...", "Wait until you learn...", "Here's why this matters..."
 - Present facts as previews, not as events happening in real-time
-- Make it clear this is a preview/introduction, not the actual story''' if is_hook_chapter else '''- Scene 1 should TRANSITION smoothly from where the last chapter ended
-- Each scene should CONNECT to the next - end with forward momentum
-- Reference recurring themes/motifs from earlier in the documentary
-- The final scene should SET UP the next chapter's content
-- Think of scenes as continuous shots in a film, not separate segments'''}
+- Make it clear this is a preview/introduction, not the actual story''' if is_hook_chapter else '''CRITICAL STORYTELLING REQUIREMENTS:
+- This MUST feel like a STORY being told, not a chronological list of events
+- Each scene should ADVANCE a plot thread - show how overarching plots and sub-plots are developing
+- Connect scenes through PLOT PROGRESSION, not just "this happened, then that happened"
+- Show CAUSE AND EFFECT - why this event matters, what it leads to, how it changes things
+- Build NARRATIVE TENSION through plot development - show conflicts developing, stakes rising, problems emerging or resolving
+- Reference plot threads from earlier in the story naturally - make viewers feel like they're following a continuous story
+- Each scene should answer "what's happening with the story?" not just "what happened next?"
+- Think like a novelist: every scene should advance character development, plot, or theme
+- EMOTIONAL ENGAGEMENT (CRITICAL): Make viewers feel emotionally invested by showing:
+  * How events FEEL to the character - their internal experience, fears, hopes, reactions
+  * The EMOTIONAL SIGNIFICANCE - why this moment matters personally, not just historically
+  * What's at stake EMOTIONALLY - what failure would feel like, what success means
+  * Human details that create empathy - physical sensations, internal thoughts, personal costs
+  * Make events feel REAL and SIGNIFICANT by connecting them to human feelings and experiences
+- Make viewers feel emotionally invested in HOW the story unfolds, not just WHAT happened - pull them into the character's emotional reality
+- CRITICAL: Each scene must cover DIFFERENT, NON-OVERLAPPING events. Do NOT repeat events already covered in previous scenes. If Scene X describes Event A in detail, Scene Y should NOT re-describe Event A - instead, move to Event A's consequences, what happens next, or a different event entirely. Review the recent scenes context to ensure you're not overlapping with what was already told.
+
+TRANSITIONS AND FLOW:
+- Scene 1 should TRANSITION smoothly from where the previous scene ended AND advance the story
+- Each scene should CONNECT to the next through plot progression - what happens next in the story?
+- Reference recurring themes/motifs from earlier in the documentary through plot connections
+- The final scene should SET UP what comes next by advancing or introducing plot threads
+- Think of scenes as story beats in a film, not separate fact segments'''
+}
 
 {"" if is_hook_chapter else get_shared_scene_flow_instructions()}
 
 {get_shared_scene_requirements()}
 
-9. PLANT SEEDS (Early chapters only): If this is an early chapter (1-3), include specific details, objects, relationships, or concepts that could pay off later. Examples: a specific notebook mentioned, a relationship that will matter later, a fear or promise that will be relevant, a small detail that seems unimportant now but will become significant. These create satisfying "aha moments" when referenced later.
+9. PLANT SEEDS (Early in the story): If this is early in the documentary, include specific details, objects, relationships, or concepts that could pay off later. Examples: a specific notebook mentioned, a relationship that will matter later, a fear or promise that will be relevant, a small detail that seems unimportant now but will become significant. These create satisfying "aha moments" when referenced later.
 
 {get_shared_narration_style(is_short=False)}
-{("- HOOK CHAPTER (INTRO): Speak directly to the viewer about what they'll discover. Use preview language: \"You'll discover...\", \"This is the story of...\", \"Wait until you learn...\", \"Here's why this matters...\" Present facts as teasers, not as events happening in real-time.\n" +
+{("- HOOK/INTRO: Speak directly to the viewer about what they'll discover. Use preview language: \"You'll discover...\", \"This is the story of...\", \"Wait until you learn...\", \"Here's why this matters...\" Present facts as teasers, not as events happening in real-time.\n" +
 "- TRANSITION TO STORY: The final scene should naturally bridge to the chronological narrative without saying \"rewind\" or \"go back\". Simply start with the beginning context: \"[Early life context]. This is where our story begins.\" or \"It all started when...\"") if is_hook_chapter else ""}
 
 {("HOOK CHAPTER EXAMPLES:\n" +
@@ -459,8 +712,22 @@ NARRATION STYLE FOR INTRO:
 IMAGE PROMPT STYLE:
 - Cinematic, dramatic lighting
 - Specific composition (close-up, wide shot, over-shoulder, etc.)
-- Mood and atmosphere matching the scene
+- CRITICAL - EMOTION AND MOOD (MUST MATCH SCENE'S EMOTION FIELD):
+  * The scene's "emotion" field MUST be reflected in the image_prompt - this is critical for visual consistency
+  * Use the emotion to guide lighting, composition, facial expressions, and overall mood
+  * Examples: "desperate" → tense atmosphere, frantic expressions, harsh shadows, chaotic composition; "triumphant" → bright lighting, confident expressions, celebratory mood; "contemplative" → soft lighting, thoughtful expressions, quiet atmosphere; "tense" → sharp contrasts, wary expressions, claustrophobic framing
+  * Explicitly include the emotion in image description: "tense atmosphere", "triumphant expression", "contemplative mood", "desperate urgency"
+  * The visual mood must match the emotional reality of the moment - if emotion is "desperate", the image should look desperate
 - Period-accurate details
+- CRITICAL - AGE AND APPEARANCE:
+  * ALWAYS include {person}'s age at the time of the scene in the image_prompt (e.g., "a 26-year-old Einstein", "Einstein in his 40s", "young Einstein at age 20")
+  * Include age-relevant physical details: what they looked like at that age, any relevant physical characteristics or conditions
+  * IMPORTANT EXAMPLES: Stephen Hawking should NOT be in a wheelchair as a child (he didn't use one until later). Include only age-appropriate characteristics.
+  * Birth year: {birth_year if birth_year else 'unknown'}
+  * Death year: {death_year if death_year else 'still alive'}
+  * If the scene takes place before the birth year, note that {person} is NOT BORN YET and should not appear in the scene
+  * If the scene takes place after the death year (and death year is known), note that {person} is DECEASED and should not appear in the scene (unless it's a memorial/legacy scene)
+  * Include period-accurate clothing, hairstyle, and any age-relevant details about their appearance at that specific age
 - VISUAL THEME REINFORCEMENT: If recurring themes include concepts like "isolation", "ambition", "conflict", etc., incorporate visual motifs that reinforce these themes through composition, lighting, or symbolism. For example, if "isolation" is a theme, use wide shots with the subject alone, or shadows that emphasize separation.
 - Recurring Themes to Consider Visually: {threads_str}
 - End with ", 16:9 cinematic"
@@ -471,7 +738,8 @@ Respond with JSON array:
     "id": {start_id},
     "title": "Evocative 2-5 word title",
     "narration": "Vivid, dramatic narration...",
-    "image_prompt": "Detailed visual description, 16:9 cinematic",
+    "image_prompt": "Detailed visual description including {person}'s age and age-relevant appearance details, 16:9 cinematic",
+    "emotion": "A single word or short phrase describing the scene's emotional tone (e.g., 'tense', 'triumphant', 'desperate', 'contemplative', 'exhilarating', 'somber', 'urgent', 'defiant'). Should match the chapter's emotional tone but be scene-specific based on what the character is feeling and the dramatic tension.",
     "year": YYYY or "YYYY-YYYY" or "around YYYY" (the specific year or year range when this scene takes place)
   }},
   ...
@@ -480,7 +748,7 @@ Respond with JSON array:
     response = client.chat.completions.create(
         model=SCRIPT_MODEL,
         messages=[
-            {"role": "system", "content": "You are a master documentary storyteller. Create deep, detailed narratives with specific events and human stories. Avoid fluff and made-up transitions. Focus on what actually happened, why it mattered, and how it felt. Respond with valid JSON array only."},
+            {"role": "system", "content": "You are a YouTuber creating documentary content. Write narration from YOUR perspective - this is YOUR script that YOU wrote. Tell the story naturally, directly to the viewer. Avoid any meta references to chapters, production elements, or the script structure. Focus on what actually happened, why it mattered, and how it felt. Respond with valid JSON array only."},
             {"role": "user", "content": scene_prompt}
         ],
         temperature=0.85,
@@ -491,12 +759,224 @@ Respond with JSON array:
     if not isinstance(scenes, list):
         raise ValueError(f"Expected array, got {type(scenes)}")
     
-    # Validate that each scene has a "year" field
+    # Validate that each scene has required fields
     for i, scene in enumerate(scenes):
         if 'year' not in scene:
             raise ValueError(f"Scene {i+1} missing required 'year' field")
+        if 'emotion' not in scene:
+            raise ValueError(f"Scene {i+1} missing required 'emotion' field")
     
     return scenes
+
+
+def generate_refinement_diff(original_scenes: list[dict], refined_scenes: list[dict]) -> dict:
+    """Generate a detailed diff JSON showing what changed between original and refined scenes."""
+    diff_data = {
+        "summary": {
+            "total_scenes": len(original_scenes),
+            "scenes_changed": 0,
+            "scenes_unchanged": 0
+        },
+        "scene_diffs": []
+    }
+    
+    for i, (original, refined) in enumerate(zip(original_scenes, refined_scenes)):
+        scene_id = original.get('id', i + 1)
+        scene_diff = {
+            "scene_id": scene_id,
+            "changed": False,
+            "fields_changed": [],
+            "changes": {}
+        }
+        
+        # Compare each field
+        fields_to_compare = ["title", "narration", "image_prompt", "emotion", "year"]
+        
+        for field in fields_to_compare:
+            original_value = original.get(field, '').strip() if isinstance(original.get(field), str) else original.get(field)
+            refined_value = refined.get(field, '').strip() if isinstance(refined.get(field), str) else refined.get(field)
+            
+            if original_value != refined_value:
+                scene_diff["changed"] = True
+                scene_diff["fields_changed"].append(field)
+                scene_diff["changes"][field] = {
+                    "original": original_value,
+                    "refined": refined_value
+                }
+        
+        if scene_diff["changed"]:
+            diff_data["summary"]["scenes_changed"] += 1
+        else:
+            diff_data["summary"]["scenes_unchanged"] += 1
+        
+        diff_data["scene_diffs"].append(scene_diff)
+    
+    return diff_data
+
+
+def refine_scenes(scenes: list[dict], person: str, is_short: bool = False, chapter_context: str = None, diff_output_path: Path | None = None) -> tuple[list[dict], dict]:
+    """Refine generated scenes by checking for awkward transitions, weird sentences, and improvements.
+    
+    Returns:
+        tuple: (refined_scenes, diff_data) - The refined scenes and a diff dict showing what changed
+    """
+    if not scenes:
+        return scenes, {}
+    
+    # Save original scenes for comparison
+    original_scenes = [scene.copy() for scene in scenes]
+    
+    print(f"[REFINEMENT] Refining {len(scenes)} scenes...")
+    
+    # Prepare scene context for the LLM
+    scenes_json = json.dumps(scenes, indent=2, ensure_ascii=False)
+    
+    context_info = ""
+    if chapter_context:
+        context_info = f"\nCHAPTER CONTEXT: {chapter_context}\n"
+    
+    pacing_note = "For shorts: maintain the concise 1-2 sentence per scene format" if is_short else "Maintain the 2-3 sentence per scene format for main video"
+    
+    refinement_prompt = f"""You are reviewing and refining scenes for a documentary about {person}.
+
+CURRENT SCENES (JSON):
+{scenes_json}
+{context_info}
+
+YOUR TASK: Review these scenes and improve them. Look for:
+1. META REFERENCES (CRITICAL) - Remove ANY references to:
+   * "Chapter" or "chapters" - viewers don't know about chapters
+   * "In this video" or "In this documentary" or "In this story"
+   * "As we'll see" or "Later in this video" or "As we continue"
+   * "Let me tell you" or "I want to show you" - just narrate directly
+   * Any production elements, scripts, outlines, prompts, or behind-the-scenes info
+   * References like "this part" or "this section" or "here we see"
+2. OVERLAPPING/DUPLICATE EVENTS (CRITICAL) - If multiple scenes describe the SAME event, moment, or action in detail, consolidate or remove the duplicate. Each scene should cover DIFFERENT events. For example, if Scene 24 describes Antony's suicide attempt and being brought to the mausoleum, Scene 27 should NOT repeat this same event - instead it should focus on what happens NEXT (his death, Cleopatra's response, or the consequences). Remove overlapping content and ensure each scene advances the story with NEW information.
+3. MISSING EMOTIONAL ENGAGEMENT - If scenes read too factually without emotional weight, add:
+   * How events feel to the character (fear, determination, despair, triumph)
+   * The emotional significance and personal stakes
+   * Internal experience details (what they're thinking, feeling, fearing)
+   * Physical sensations and reactions that create empathy
+   * Make events feel significant by connecting them to human emotions
+4. EMOTION CONSISTENCY - Ensure the scene's "emotion" field matches the narration tone and image mood:
+   * The emotion field should accurately reflect how the scene FEELS
+   * Narration tone should match the emotion (e.g., "desperate" → urgent/anxious narration)
+   * Image prompt mood should match the emotion (e.g., "desperate" → tense atmosphere in image)
+   * If narration or image don't match the emotion field, refine them to be consistent
+5. AWKWARD TRANSITIONS - scene endings that don't flow smoothly into the next scene
+6. WEIRD OR UNNATURAL SENTENCES - phrases that sound odd when spoken, overly flowery language, vague statements
+7. REPETITIVE LANGUAGE - same words or phrases used too frequently
+8. CLARITY ISSUES - sentences that are confusing or hard to understand when spoken aloud
+9. NARRATION STYLE VIOLATIONS - film directions ("Cut to:", "Smash cut—"), camera directions ("Close-up of", "Wide shot"), or production terminology
+10. MISSING CONNECTIONS - scenes that don't reference what came before when they should
+11. PACING ISSUES - scenes that feel rushed or too slow for the story beat
+12. FACTUAL INCONSISTENCIES - any contradictions or inaccuracies
+
+IMPORTANT GUIDELINES:
+- Keep ALL factual information accurate
+- Maintain the same scene structure and IDs
+- Preserve all fields (id, title, narration, image_prompt, emotion, year, etc.)
+- Keep the same tone and style
+- {pacing_note}
+- Only make changes that IMPROVE clarity, flow, or naturalness
+- DO NOT add new information or change facts
+- DO NOT add film/camera directions - narration should be pure spoken words
+- ABSOLUTELY REMOVE any meta references to chapters, production elements, or the script structure itself
+- Write from the YouTuber's perspective - natural storytelling without referencing how it's organized
+
+Return the SAME JSON structure with refined scenes. Only change what needs improvement - don't rewrite everything.
+
+Respond with JSON array only (no markdown, no explanation):"""
+    
+    try:
+        response = client.chat.completions.create(
+            model=SCRIPT_MODEL,
+            messages=[
+                {"role": "system", "content": "You are an expert editor who refines documentary narration for clarity, flow, and naturalness. You catch awkward transitions, weird sentences, style violations, and especially meta references (chapters, production elements, etc.). The narration should feel like natural storytelling from the YouTuber's perspective. Respond with valid JSON array only - same structure as input."},
+                {"role": "user", "content": refinement_prompt}
+            ],
+            temperature=0.3,  # Lower temperature for refinement - more focused changes
+        )
+        
+        refined_scenes = json.loads(clean_json_response(response.choices[0].message.content))
+        
+        if not isinstance(refined_scenes, list):
+            print(f"[REFINEMENT] WARNING: Expected array, got {type(refined_scenes)}. Using original scenes.")
+            return scenes
+        
+        if len(refined_scenes) != len(scenes):
+            print(f"[REFINEMENT] WARNING: Scene count changed ({len(scenes)} → {len(refined_scenes)}). Using original scenes.")
+            return scenes
+        
+        # Validate all required fields are present
+        for i, scene in enumerate(refined_scenes):
+            for field in ["id", "title", "narration", "image_prompt", "emotion", "year"]:
+                if field not in scene:
+                    print(f"[REFINEMENT] WARNING: Scene {i+1} missing field '{field}'. Using original scenes.")
+                    return scenes
+        
+        # Track changes made during refinement
+        changes_stats = {
+            "scenes_changed": 0,
+            "title_changes": 0,
+            "narration_changes": 0,
+            "image_prompt_changes": 0,
+            "total_changes": 0
+        }
+        
+        for i, (original_scene, refined_scene) in enumerate(zip(scenes, refined_scenes)):
+            scene_changed = False
+            
+            # Check title changes
+            if original_scene.get('title', '').strip() != refined_scene.get('title', '').strip():
+                changes_stats["title_changes"] += 1
+                changes_stats["total_changes"] += 1
+                scene_changed = True
+            
+            # Check narration changes
+            original_narration = original_scene.get('narration', '').strip()
+            refined_narration = refined_scene.get('narration', '').strip()
+            if original_narration != refined_narration:
+                changes_stats["narration_changes"] += 1
+                changes_stats["total_changes"] += 1
+                scene_changed = True
+            
+            # Check image_prompt changes
+            if original_scene.get('image_prompt', '').strip() != refined_scene.get('image_prompt', '').strip():
+                changes_stats["image_prompt_changes"] += 1
+                changes_stats["total_changes"] += 1
+                scene_changed = True
+            
+            if scene_changed:
+                changes_stats["scenes_changed"] += 1
+        
+        # Log refinement statistics
+        total_scenes = len(refined_scenes)
+        unchanged_scenes = total_scenes - changes_stats["scenes_changed"]
+        print(f"[REFINEMENT] ✓ Refined {total_scenes} scenes")
+        print(f"[REFINEMENT]   Statistics:")
+        print(f"[REFINEMENT]   • Scenes changed: {changes_stats['scenes_changed']}/{total_scenes} ({changes_stats['scenes_changed']*100//total_scenes if total_scenes > 0 else 0}%)")
+        print(f"[REFINEMENT]   • Unchanged scenes: {unchanged_scenes}/{total_scenes} ({unchanged_scenes*100//total_scenes if total_scenes > 0 else 0}%)")
+        print(f"[REFINEMENT]   • Title changes: {changes_stats['title_changes']}")
+        print(f"[REFINEMENT]   • Narration changes: {changes_stats['narration_changes']}")
+        print(f"[REFINEMENT]   • Image prompt changes: {changes_stats['image_prompt_changes']}")
+        print(f"[REFINEMENT]   • Total field changes: {changes_stats['total_changes']}")
+        
+        # Generate diff
+        diff_data = generate_refinement_diff(original_scenes, refined_scenes)
+        
+        # Save diff to file if output path provided
+        if diff_output_path:
+            diff_output_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(diff_output_path, "w", encoding="utf-8") as f:
+                json.dump(diff_data, f, indent=2, ensure_ascii=False)
+            print(f"[REFINEMENT]   • Diff saved: {diff_output_path}")
+        
+        return refined_scenes, diff_data
+        
+    except Exception as e:
+        print(f"[REFINEMENT] WARNING: Refinement failed ({e}). Using original scenes.")
+        return scenes, {}
 
 
 def generate_short_outline(person: str, main_outline: dict, short_num: int, total_shorts: int, previously_covered_stories: list[str] = None, scene_highlights: list = None) -> dict:
@@ -597,11 +1077,11 @@ Provide JSON:
     return json.loads(clean_json_response(response.choices[0].message.content))
 
 
-def generate_short_scenes(person: str, short_outline: dict, birth_year: int | None = None) -> list[dict]:
+def generate_short_scenes(person: str, short_outline: dict, birth_year: int | None = None, death_year: int | None = None) -> list[dict]:
     """Generate all 5 scenes for a YouTube Short (complete story with natural conclusion).
     
     Each scene must include a "year" field indicating when it takes place.
-    Age calculation is done automatically using the scene's "year" field.
+    The LLM includes age and age-relevant details in the image_prompt.
     """
     
     key_facts = short_outline.get('key_facts', [])
@@ -617,12 +1097,21 @@ KEY FACTS TO USE:
 
 CRITICAL: This short tells ONE COMPLETE, CONTINUOUS STORY from {person}'s life with DEPTH and DETAIL. The scenes must flow like a mini-narrative, not disconnected facts. This should be high-quality content that is enjoyable on its own.
 
+EMOTION GENERATION (CRITICAL):
+- Each scene MUST include an "emotion" field - a single word or short phrase (e.g., "tense", "triumphant", "desperate", "contemplative", "exhilarating", "somber", "urgent", "defiant")
+- Base the emotion on: what the character is feeling at this moment, the dramatic tension, and the significance of the event
+- Use the emotion to guide both narration tone/style and image mood:
+  * If emotion is "desperate" - narration should feel urgent/anxious with short, sharp sentences; image should show tense atmosphere, frantic expressions
+  * If emotion is "triumphant" - narration should feel uplifting with elevated language; image should show celebration, confident expressions
+  * If emotion is "contemplative" - narration should be slower, reflective; image should show quiet mood, thoughtful expressions
+- The emotion field will be used to ensure narration tone and image mood match the emotional reality of the moment
+
 STRUCTURE (exactly 5 scenes):
-1. SCENE 1: Start the story. Set up a specific incident, moment, or event. Give context and specific details. Hook the viewer with the opening of the story.
-2. SCENE 2: Build the story. Show what happened next, the development, or how the situation evolved. Add more depth and specific details about who was involved, what was said, what the stakes were.
-3. SCENE 3: Escalate the story. Show the consequences, conflicts, challenges, or complications. This is the rising action - make it engaging and detailed. Show what made this moment difficult or significant.
-4. SCENE 4: Continue building. Show how the story develops further, what the person does, what happens, and the stakes involved. Add emotional depth and human details. Show relationships, motivations, and the personal impact.
-5. SCENE 5: NATURAL CONCLUSION. This should provide a satisfying ending to THIS story. Show what happened as a result, how it resolved, or what the outcome was. Examples of good conclusions:
+1. SCENE 1: Start the story. Set up a specific incident, moment, or event. Give context and specific details. Hook the viewer by showing how this moment FELT - what the character was thinking, fearing, or hoping. Make them feel the significance.
+2. SCENE 2: Build the story. Show what happened next, the development, or how the situation evolved. Add more depth and specific details about who was involved, what was said, what the stakes were. Include emotional details - how does this feel? What's at stake emotionally?
+3. SCENE 3: Escalate the story. Show the consequences, conflicts, challenges, or complications. This is the rising action - make it engaging and detailed. Show what made this moment difficult or significant EMOTIONALLY - what fears, hopes, or pressures does the character face?
+4. SCENE 4: Continue building. Show how the story develops further, what the person does, what happens, and the stakes involved. Add emotional depth and human details - show relationships, motivations, and the personal impact. What does this mean to them personally? How do they FEEL?
+5. SCENE 5: NATURAL CONCLUSION. This should provide a satisfying ending to THIS story. Show what happened as a result, how it resolved, or what the outcome was. Include the emotional significance - what did this mean to the character? Examples of good conclusions:
    - "The paper is published in 1859. It sells out in one day. Darwin's theory of evolution becomes the foundation of modern biology."
    - "This discovery earns him the Nobel Prize. But more importantly, it validates a lifetime of work and changes how scientists think about the world."
    - "The letter reaches London in June. Within weeks, the scientific community is divided. Some call it heresy. Others call it genius. But Darwin's idea has been unleashed."
@@ -645,24 +1134,41 @@ STRUCTURE (exactly 5 scenes):
 IMAGE PROMPTS:
 - Vertical 9:16, dramatic, mobile-optimized
 - High contrast, single clear subject
+- CRITICAL - EMOTION AND MOOD (MUST MATCH SCENE'S EMOTION FIELD):
+  * The scene's "emotion" field MUST be reflected in the image_prompt - this is critical for visual consistency
+  * Use the emotion to guide lighting, composition, facial expressions, and overall mood
+  * Examples: "desperate" → tense atmosphere, frantic expressions, harsh shadows; "triumphant" → bright lighting, confident expressions; "contemplative" → soft lighting, thoughtful expressions
+  * Explicitly include the emotion in image description: "tense atmosphere", "triumphant expression", "contemplative mood"
+- CRITICAL - AGE AND APPEARANCE:
+  * ALWAYS include {person}'s age at the time of the scene in the image_prompt (e.g., "a 26-year-old Einstein", "Einstein in his 40s", "young Einstein at age 20")
+  * Include age-relevant physical details: what they looked like at that age, any relevant physical characteristics or conditions
+  * IMPORTANT EXAMPLES: Stephen Hawking should NOT be in a wheelchair as a child (he didn't use one until later). Include only age-appropriate characteristics.
+  * Birth year: {birth_year if birth_year else 'unknown'}
+  * Death year: {death_year if death_year else 'still alive'}
+  * If the scene takes place before the birth year, note that {person} is NOT BORN YET and should not appear in the scene
+  * If the scene takes place after the death year (and death year is known), note that {person} is DECEASED and should not appear in the scene (unless it's a memorial/legacy scene)
+  * Include period-accurate clothing, hairstyle, and any age-relevant details about their appearance at that specific age
 - End with ", 9:16 vertical"
 
 Respond with JSON array of exactly 5 scenes:
 [
-  {{"id": 1, "title": "2-4 words", "narration": "...", "image_prompt": "...", "year": "YYYY or YYYY-YYYY"}},
-  {{"id": 2, "title": "...", "narration": "...", "image_prompt": "...", "year": "YYYY or YYYY-YYYY"}},
-  {{"id": 3, "title": "...", "narration": "...", "image_prompt": "...", "year": "YYYY or YYYY-YYYY"}},
-  {{"id": 4, "title": "...", "narration": "...", "image_prompt": "...", "year": "YYYY or YYYY-YYYY"}},
-  {{"id": 5, "title": "...", "narration": "...", "image_prompt": "...", "year": "YYYY or YYYY-YYYY"}}
+  {{"id": 1, "title": "2-4 words", "narration": "...", "image_prompt": "... (include {person}'s age and age-relevant details)", "emotion": "A single word or short phrase (e.g., 'tense', 'triumphant', 'desperate', 'contemplative')", "year": "YYYY or YYYY-YYYY"}},
+  {{"id": 2, "title": "...", "narration": "...", "image_prompt": "... (include {person}'s age and age-relevant details)", "emotion": "A single word or short phrase describing the scene's emotional tone", "year": "YYYY or YYYY-YYYY"}},
+  {{"id": 3, "title": "...", "narration": "...", "image_prompt": "... (include {person}'s age and age-relevant details)", "emotion": "A single word or short phrase describing the scene's emotional tone", "year": "YYYY or YYYY-YYYY"}},
+  {{"id": 4, "title": "...", "narration": "...", "image_prompt": "... (include {person}'s age and age-relevant details)", "emotion": "A single word or short phrase describing the scene's emotional tone", "year": "YYYY or YYYY-YYYY"}},
+  {{"id": 5, "title": "...", "narration": "...", "image_prompt": "... (include {person}'s age and age-relevant details)", "emotion": "A single word or short phrase describing the scene's emotional tone", "year": "YYYY or YYYY-YYYY"}}
 ]
 
-IMPORTANT: Each scene must include a "year" field indicating when the scene takes place. Use a specific year (e.g., "1905") or a year range (e.g., "1905-1910") or approximate (e.g., "around 1859"). This is critical for accurate age representation in images.
+IMPORTANT: Each scene must include:
+- "year" field indicating when the scene takes place
+- "emotion" field - a single word or short phrase (e.g., "tense", "triumphant", "desperate", "contemplative") that describes the scene's emotional tone. Base this on what the character is feeling, the dramatic tension, and the significance of the moment. The narration tone and image mood should match this emotion.
+- The image_prompt MUST include {person}'s age at that time, age-relevant appearance details, and reflect the scene's emotion in lighting, composition, and mood.
 ]"""
 
     response = client.chat.completions.create(
         model=SCRIPT_MODEL,
         messages=[
-            {"role": "system", "content": "You write viral content. Simple words, specific facts, deep storytelling with details. No fluff, no made-up transitions. Tell continuous stories with actual events. Respond with valid JSON array only."},
+            {"role": "system", "content": "You are a YouTuber creating viral content. Write narration from YOUR perspective - this is YOUR script. Simple words, specific facts, deep storytelling with details. No fluff, no made-up transitions. Tell continuous stories with actual events. Avoid any meta references to chapters, production elements, or script structure. Respond with valid JSON array only."},
             {"role": "user", "content": scene_prompt}
         ],
         temperature=0.85,
@@ -673,10 +1179,12 @@ IMPORTANT: Each scene must include a "year" field indicating when the scene take
     if not isinstance(scenes, list):
         raise ValueError(f"Expected array, got {type(scenes)}")
     
-    # Validate that each scene has a "year" field
+    # Validate that each scene has required fields
     for i, scene in enumerate(scenes):
         if 'year' not in scene:
             raise ValueError(f"Scene {i+1} missing required 'year' field")
+        if 'emotion' not in scene:
+            raise ValueError(f"Scene {i+1} missing required 'emotion' field")
     
     return scenes
 
@@ -733,19 +1241,21 @@ def generate_shorts(person_of_interest: str, main_title: str, global_block: str,
             all_scenes = generate_short_scenes(
                 person=person_of_interest,
                 short_outline=short_outline,
-                birth_year=outline.get('birth_year')
+                birth_year=outline.get('birth_year'),
+                death_year=outline.get('death_year')
             )
             print(f"[SHORT {short_num}] → {len(all_scenes)} scenes generated")
             
-            # Fix scene IDs and add metadata for age calculation
+            # Fix scene IDs
             for i, scene in enumerate(all_scenes):
                 scene["id"] = i + 1
-                scene['birth_year'] = outline.get('birth_year')
-                if outline.get('birth_year') and scene.get('year'):
-                    scene['estimated_age'] = calculate_age_from_year_range(
-                        outline.get('birth_year'),
-                        scene.get('year')
-                    )
+            
+            # Refine short scenes
+            short_context = f"Story: {short_outline.get('story_angle', '')}. Title: {short_outline.get('short_title', '')}"
+            # Determine short file path first for diff path
+            short_file = SHORTS_DIR / f"{base_name}_short{short_num}.json"
+            diff_path = short_file.parent / f"{short_file.stem}_refinement_diff.json"
+            all_scenes, refinement_diff = refine_scenes(all_scenes, person_of_interest, is_short=True, chapter_context=short_context, diff_output_path=diff_path)
             
             # Generate thumbnail (if enabled)
             thumbnail_path = None
@@ -777,7 +1287,6 @@ def generate_shorts(person_of_interest: str, main_title: str, global_block: str,
             }
             
             # Save short
-            short_file = SHORTS_DIR / f"{base_name}_short{short_num}.json"
             with open(short_file, "w", encoding="utf-8") as f:
                 json.dump(short_output, f, indent=2, ensure_ascii=False)
             
@@ -905,9 +1414,11 @@ YouTube CLICKBAIT thumbnail - MUST MAXIMIZE CLICKS:
     if config.generate_main:
         print(f"\n[STEP 3] Generating {config.total_scenes} scenes from {len(chapters)} chapters...")
         
-        # Get central theme and narrative arc from outline
+        # Get central theme, narrative arc, and plots from outline
         central_theme = outline.get('central_theme', '')
         narrative_arc = outline.get('narrative_arc', '')
+        overarching_plots = outline.get('overarching_plots', [])
+        sub_plots = outline.get('sub_plots', [])
         
         for i, chapter in enumerate(chapters):
             start_id = len(all_scenes) + 1
@@ -940,25 +1451,29 @@ YouTube CLICKBAIT thumbnail - MUST MAXIMIZE CLICKS:
                     narrative_arc=narrative_arc,
                     planted_seeds=planted_seeds if i > 0 else [],  # Only pass seeds after first chapter
                     is_retention_hook_point=is_retention_hook,
-                    tag_line=tag_line if i == 0 else None  # Only pass tag_line for first chapter (hook chapter)
+                    birth_year=outline.get('birth_year'),
+                    death_year=outline.get('death_year'),
+                    tag_line=tag_line if i == 0 else None,  # Only pass tag_line for first chapter (hook chapter)
+                    overarching_plots=overarching_plots,
+                    sub_plots=sub_plots
                 )
                 
                 if len(scenes) != config.scenes_per_chapter:
                     print(f"  [WARNING] Got {len(scenes)} scenes, expected {config.scenes_per_chapter}")
                 
-                # Add birth_year metadata to each scene for age calculation
-                # The scene's "year" field will be used directly for age calculation
-                for scene in scenes:
-                    scene['birth_year'] = outline.get('birth_year')
-                    # Calculate age for this scene using the scene's "year" field
-                    if outline.get('birth_year') and scene.get('year'):
-                        scene['estimated_age'] = calculate_age_from_year_range(
-                            outline.get('birth_year'), 
-                            scene.get('year')
-                        )
-                
                 all_scenes.extend(scenes)
                 print(f"  ✓ {len(scenes)} scenes (total: {len(all_scenes)})")
+                
+                # Insert CTA transition scene after chapter 1 (hook chapter) and before chapter 2 (story begins)
+                if i == 0:  # After chapter 1
+                    print(f"\n[CTA] Generating transition/CTA scene between chapters 1 and 2...")
+                    try:
+                        cta_scene = generate_cta_transition_scene(person_of_interest, tag_line)
+                        all_scenes.append(cta_scene)
+                        print(f"  ✓ CTA transition scene added (total: {len(all_scenes)})")
+                    except Exception as e:
+                        print(f"  [WARNING] Failed to generate CTA scene: {e}")
+                        # Continue without CTA scene if generation fails
                 
                 # Extract "planted seeds" from early chapters (first 3 chapters) for callback mechanism
                 # Look for specific details, objects, relationships, or concepts that could pay off later
@@ -989,9 +1504,15 @@ YouTube CLICKBAIT thumbnail - MUST MAXIMIZE CLICKS:
         # Validate and fix scene IDs
         for i, scene in enumerate(all_scenes):
             scene["id"] = i + 1
-            for field in ["title", "narration", "image_prompt", "year"]:
+            for field in ["title", "narration", "image_prompt", "emotion", "year"]:
                 if field not in scene:
                     raise ValueError(f"Scene {i+1} missing required field: {field}")
+        
+        # Step 3.4: Refine scenes for awkward transitions and improvements
+        print("\n[STEP 3.4] Refining main video scenes...")
+        chapter_summaries = "\n".join([f"Chapter {ch['chapter_num']}: {ch['title']} ({ch['year_range']}) - {ch['summary']}" for ch in chapters])
+        diff_path = Path(output_path).parent / f"{Path(output_path).stem}_refinement_diff.json"
+        all_scenes, refinement_diff = refine_scenes(all_scenes, person_of_interest, is_short=False, chapter_context=chapter_summaries, diff_output_path=diff_path)
         
         # Step 3.5: Generate final metadata (description and tags) AFTER scenes are generated
         print("\n[STEP 3.5] Generating final metadata from actual scenes...")

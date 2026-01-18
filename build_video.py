@@ -14,7 +14,6 @@ from openai import OpenAI
 from moviepy import ImageClip, AudioFileClip, concatenate_videoclips
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from utils import calculate_age_from_year_range
 
 # ------------- CONFIG -------------
 
@@ -44,12 +43,99 @@ GOOGLE_TTS_SPEAKING_RATE = float(os.getenv("GOOGLE_TTS_SPEAKING_RATE", "0.92")) 
 GOOGLE_TTS_PITCH = float(os.getenv("GOOGLE_TTS_PITCH", "-1.0"))  # -20.0 to 20.0 semitones (slightly deeper)
 
 
-def text_to_ssml(text: str) -> str:
+def get_emotion_prosody(emotion: str | None) -> dict:
+    """
+    Map emotion strings to subtle SSML prosody settings (rate, pitch, volume).
+    Returns a dict with 'rate', 'pitch', and 'volume' strings for use in SSML prosody tags.
+    Uses subtle adjustments (5-10% rate, 1-2 semitones pitch, 2-3dB volume) to maintain documentary style.
+    """
+    if not emotion:
+        # Default: no adjustment
+        return {"rate": "100%", "pitch": "0st", "volume": "0dB"}
+    
+    emotion_lower = emotion.lower().strip()
+    
+    # Check for compound emotions first (e.g., "triumphant, foreboding" or "urgent dread")
+    # For compound emotions, use the primary emotion
+    
+    # Urgent/desperate emotions - slightly faster, slightly higher, slightly louder
+    if any(word in emotion_lower for word in ["urgent", "desperate"]):
+        if "dread" in emotion_lower:
+            return {"rate": "103%", "pitch": "+0.5st", "volume": "+1dB"}  # urgent dread: tense but darker
+        return {"rate": "105%", "pitch": "+1st", "volume": "+2dB"}
+    
+    # Tense/anxious emotions
+    if emotion_lower in ["tense", "claustrophobic", "uneasy"]:
+        if emotion_lower == "claustrophobic":
+            return {"rate": "104%", "pitch": "+0.5st", "volume": "+1dB"}  # tighter, more compressed
+        return {"rate": "105%", "pitch": "+1st", "volume": "+2dB"}
+    
+    # Dread/fear emotions - slower, lower, quieter (but still tense)
+    if emotion_lower in ["dread", "menacing"]:
+        return {"rate": "95%", "pitch": "-1st", "volume": "-1dB"}
+    
+    # Triumphant/positive emotions - faster, higher, louder
+    if any(word in emotion_lower for word in ["triumphant", "exhilarating"]):
+        if "foreboding" in emotion_lower:
+            return {"rate": "102%", "pitch": "+1st", "volume": "+2dB"}  # triumphant but with tension
+        return {"rate": "105%", "pitch": "+2st", "volume": "+3dB"}
+    
+    # Defiant/determined emotions - normal to slightly faster, higher, louder
+    if any(word in emotion_lower for word in ["defiant", "daring", "ominous resolve"]):
+        if "quietly" in emotion_lower:
+            return {"rate": "98%", "pitch": "+0.5st", "volume": "+1dB"}  # quietly defiant: subdued strength
+        return {"rate": "100%", "pitch": "+1st", "volume": "+2dB"}
+    
+    # Sad/somber emotions - slower, lower, softer
+    if emotion_lower in ["somber", "elegiac"]:
+        return {"rate": "90%", "pitch": "-2st", "volume": "-3dB"}
+    
+    # Shattered/devastated emotions - slower, lower, much quieter
+    if emotion_lower in ["shattered", "devastated"]:
+        return {"rate": "88%", "pitch": "-2.5st", "volume": "-4dB"}
+    
+    # Contemplative/reflective - slower, lower, softer (subtle)
+    if emotion_lower in ["contemplative", "watchful", "controlled"]:
+        if emotion_lower == "controlled":
+            return {"rate": "95%", "pitch": "0st", "volume": "0dB"}  # controlled: measured and neutral
+        return {"rate": "92%", "pitch": "-1st", "volume": "-2dB"}
+    
+    # Calculating/strategic - slightly slower, neutral pitch, slightly softer
+    if emotion_lower in ["calculating"]:
+        return {"rate": "96%", "pitch": "0st", "volume": "-1dB"}
+    
+    # Humiliated - slower, lower, quieter
+    if emotion_lower in ["humiliated"]:
+        return {"rate": "93%", "pitch": "-1.5st", "volume": "-2dB"}
+    
+    # Sensuous/romantic - slightly slower, slightly higher, softer
+    if "sensuous" in emotion_lower or "intimacy" in emotion_lower:
+        if "ambitious" in emotion_lower:
+            return {"rate": "98%", "pitch": "+0.5st", "volume": "+1dB"}  # ambitious intimacy: subtle intensity
+        return {"rate": "94%", "pitch": "+0.5st", "volume": "-1dB"}
+    
+    # Relief (ruthless relief) - normal speed, slight variation
+    if "relief" in emotion_lower:
+        return {"rate": "97%", "pitch": "+0.5st", "volume": "+1dB"}
+    
+    # Default: no adjustment for unknown emotions
+    return {"rate": "100%", "pitch": "0st", "volume": "0dB"}
+
+
+def text_to_ssml(text: str, emotion: str | None = None) -> str:
     """
     Convert plain text to SSML with natural pauses and pacing.
     This makes Google Cloud TTS sound more natural and documentary-like.
+    
+    Args:
+        text: The text to convert to SSML
+        emotion: Optional emotion string (e.g., "tense", "triumphant", "contemplative")
+                 to apply subtle prosody adjustments matching the scene's emotional tone
     """
     import re
+    
+    # Get emotion-based prosody settings
+    prosody = get_emotion_prosody(emotion)
     
     # Escape special XML characters
     text = text.replace("&", "&amp;")
@@ -98,6 +184,20 @@ def text_to_ssml(text: str) -> str:
     
     # Emphasize numbers/years (slightly slower)
     text = re.sub(r'\b(1[89]\d{2}|20\d{2})\b', r'<prosody rate="95%">\1</prosody>', text)
+    
+    # Wrap in prosody tag if emotion is provided and prosody has adjustments
+    if emotion and (prosody["rate"] != "100%" or prosody["pitch"] != "0st" or prosody["volume"] != "0dB"):
+        # Studio voices don't support pitch attribute - exclude it if using Studio voice
+        is_studio_voice = "Studio" in GOOGLE_TTS_VOICE if TTS_PROVIDER == "google" else False
+        
+        # Build prosody attributes - exclude pitch for Studio voices
+        prosody_attrs_parts = [f'rate="{prosody["rate"]}"']
+        if not is_studio_voice:
+            prosody_attrs_parts.append(f'pitch="{prosody["pitch"]}"')
+        prosody_attrs_parts.append(f'volume="{prosody["volume"]}"')
+        
+        prosody_attrs = " ".join(prosody_attrs_parts)
+        text = f'<prosody {prosody_attrs}>{text}</prosody>'
     
     # Wrap in speak tags
     ssml = f'<speak>{text}</speak>'
@@ -176,29 +276,21 @@ OPENAI_TTS_STYLE_PROMPT = (
 )
 
 
-def build_image_prompt(scene: dict, prev_scene: dict | None, global_block_override: str | None = None) -> str:
+def build_image_prompt(scene: dict, prev_scene: dict | None, global_block_override: str | None = None, exclude_title_narration: bool = False, include_safety_instructions: bool = False) -> str:
     """
     Build a rich image prompt for the current scene, including:
-    - Current scene description (title + narration + image_prompt)
+    - Current scene description (title + narration + image_prompt, unless exclude_title_narration is True)
     - Brief memory of the previous scene for continuity
     - Global visual style and constraints (no text, documentary tone)
     - Age specification when the person appears
+    
+    Args:
+        exclude_title_narration: If True, only use image_prompt (for attempts 4+ to avoid problematic text)
+        include_safety_instructions: If True, include safety constraints block (only after first attempt fails)
     """
     title = scene.get("title", "").strip()
     narration = scene.get("narration", "").strip()
     scene_img_prompt = scene.get("image_prompt", "").strip()
-    
-    # Use the age that was already calculated during script generation or by _build_video_impl
-    # The age is stored in the scene as 'estimated_age' and was calculated from the scene's "year" field
-    estimated_age = scene.get('estimated_age')
-    
-    # Add age specification to image prompt if we have age info
-    age_specification = ""
-    if estimated_age is not None:
-        # Check if the scene mentions the person (likely to appear in image)
-        # We'll add age info to the prompt regardless, as it's better to have it
-        # Extract person name from metadata if available
-        age_specification = f"\n\nAGE SPECIFICATION: The main subject appears as approximately {estimated_age} years old at this time. Include this age-appropriate appearance in the image (facial features, posture, and styling appropriate for a {estimated_age}-year-old)."
 
     # --- Previous scene memory ---
     if prev_scene is None:
@@ -260,16 +352,24 @@ def build_image_prompt(scene: dict, prev_scene: dict | None, global_block_overri
         "This should look like one continuous documentary, not a mix of different art styles."
     )
 
+    # --- Safety constraints (only include after first attempt fails) ---
+    safety_block = ""
+    if include_safety_instructions:
+        safety_block = (
+            "\n\nSAFETY: Safe, appropriate, educational documentary content only. Avoid graphic imagery - for sensitive historical content (death, injury, conflict), focus on emotional impact and aftermath rather than graphic physical details."
+        )
+
     # --- Current scene description block ---
     current_block_parts = []
-    if title:
-        current_block_parts.append(f"Scene title: {title}.")
-    if narration:
-        current_block_parts.append("Narration for this scene:\n" + narration)
+    # On attempts 4+, exclude title and narration (which may contain problematic words)
+    # and only use the image_prompt (which should be cleaner)
+    if not exclude_title_narration:
+        if title:
+            current_block_parts.append(f"Scene title: {title}.")
+        if narration:
+            current_block_parts.append("Narration for this scene:\n" + narration)
     if scene_img_prompt:
         current_block_parts.append("Visual details to emphasize:\n" + scene_img_prompt)
-    if age_specification:
-        current_block_parts.append(age_specification)
     current_block = "\n".join(current_block_parts)
 
     # Final prompt
@@ -281,6 +381,7 @@ def build_image_prompt(scene: dict, prev_scene: dict | None, global_block_overri
         + global_block
         + "\n\n"
         + constraints_block
+        + safety_block
     )
 
     return prompt
@@ -327,43 +428,178 @@ class SafetyViolationError(Exception):
         self.original_prompt = original_prompt
 
 
-def sanitize_prompt_for_safety(prompt: str, violation_type: str = None) -> str:
+def sanitize_prompt_for_safety(prompt: str, violation_type: str = None, sanitize_attempt: int = 0, exclude_title_narration: bool = False) -> str:
     """
-    Sanitize an image prompt to avoid safety violations.
+    Sanitize an image prompt to avoid safety violations with progressive sanitization.
     When a safety violation occurs, we modify the prompt to be more abstract,
     focus on achievements rather than struggles, and add explicit safety instructions.
+    
+    Args:
+        prompt: The original prompt to sanitize
+        violation_type: Type of violation detected (self-harm, violence, death, harmful)
+        sanitize_attempt: Retry attempt number (0=first, 1=light, 2=medium, 3+=heavy)
     """
-    # Add explicit safety constraints
-    safety_instruction = " Safe, appropriate, educational content only. Focus on achievements, intellectual work, and positive moments. Avoid graphic or disturbing imagery."
+    import re
+    original_prompt = prompt
+    
+    # Progressive sanitization based on attempt number - apply all levels up to sanitize_attempt
+    # Light sanitization (attempt 1+): Replace specific problematic words
+    if sanitize_attempt >= 1:
+        # Blood-related
+        prompt = re.sub(r'\bbleeding\b', 'injury', prompt, flags=re.IGNORECASE)
+        prompt = re.sub(r'\bsmeared with blood\b', 'damaged armor', prompt, flags=re.IGNORECASE)
+        prompt = re.sub(r'\bbody\s+slack\b', 'figure', prompt, flags=re.IGNORECASE)
+        
+        # Death-related
+        prompt = re.sub(r'\bDECEASED\b', 'no longer present', prompt, flags=re.IGNORECASE)
+        prompt = re.sub(r'\bdies\b', 'passes', prompt, flags=re.IGNORECASE)
+        prompt = re.sub(r'\bdeath\b', 'passing', prompt, flags=re.IGNORECASE)
+        
+        # Violence
+        prompt = re.sub(r'\bchains\b', '', prompt, flags=re.IGNORECASE)
+        prompt = re.sub(r'\bkill\b', 'end', prompt, flags=re.IGNORECASE)
+        
+        # Suicide
+        prompt = re.sub(r'\bkill\s+himself\b', 'end his life', prompt, flags=re.IGNORECASE)
+        
+        # General problematic words
+        prompt = re.sub(r'\b(harm|hurt|pain|suffering|suicide|cut|violence)\b', 'challenge', prompt, flags=re.IGNORECASE)
+        prompt = re.sub(r'\b(depression|despair|hopeless)\b', 'contemplation', prompt, flags=re.IGNORECASE)
+    
+    # Medium sanitization (attempt 2+): Replace phrases and abstract physical details
+    if sanitize_attempt >= 2:
+        # Additional phrase replacements
+        prompt = re.sub(r'\bblood\b', 'stain', prompt, flags=re.IGNORECASE)
+        prompt = re.sub(r'\bsuffering\b', 'contemplation', prompt, flags=re.IGNORECASE)
+        prompt = re.sub(r'\bstruggle\b', 'journey', prompt, flags=re.IGNORECASE)
+        prompt = re.sub(r'\billness\b', 'health challenges', prompt, flags=re.IGNORECASE)
+        
+        # Abstract physical details
+        prompt = re.sub(r'\bgraphic\b', 'symbolic', prompt, flags=re.IGNORECASE)
+        prompt = re.sub(r'\bwound\b', 'injury', prompt, flags=re.IGNORECASE)
+    
+    # Heavy sanitization (attempt 3): Focus on aftermath/emotions, use symbolic representation
+    if sanitize_attempt >= 3:
+        # Replace sensitive scenes with aftermath/emotional focus
+        # If scene contains death/suicide references, refocus on aftermath
+        if re.search(r'\b(passing|end|death|suicide|kill|bleeding|blood)\b', prompt, re.IGNORECASE):
+            # Replace with aftermath focus
+            prompt = re.sub(r'.*?(moment of|scene of|showing|inside).*?(death|passing|suicide|end|bleeding|blood|mausoleum|monument).*?', 
+                           'solemn scene of grief and loss, aftermath of significant event', prompt, flags=re.IGNORECASE)
+        
+        # For violence/conflict, focus on emotional impact
+        if re.search(r'\b(violence|conflict|battle|war)\b', prompt, re.IGNORECASE):
+            prompt = re.sub(r'.*?(showing|scene of|depicting).*?(violence|conflict|battle).*?',
+                           'conquered halls, somber mood, aftermath of conflict', prompt, flags=re.IGNORECASE)
+    
+    # Extreme sanitization (attempt 4+): Drastically replace the entire scene description with safe alternative
+    # BUT: If title/narration are already excluded, we should preserve the image_prompt details
+    # and only remove problematic phrases, not replace the entire visual section
+    if sanitize_attempt >= 4:
+        # If title/narration were excluded, the image_prompt is all we have - preserve it but clean problematic phrases
+        if exclude_title_narration:
+            # Only remove problematic phrases from the image_prompt, don't replace it entirely
+            # Be careful to preserve age information, locations, and context
+            # Remove problematic multi-word phrases first (more specific, preserves context better)
+            problematic_phrases_multiword = [
+                r'\bbody\s+slack\b',  # "body slack" as a complete phrase
+                r'\bbleeding\s+and\s+barely\s+conscious\b',  # full phrase
+                r'\barmor[^.]*\s+blood\b',  # armor ... blood (flexible)
+                r'\btunic[^.]*\s+blood\b',  # tunic ... blood
+                r'\bsmeared\s+with\s+blood\b',  # smeared with blood
+                r'\bkill\s+himself\b',  # kill himself
+            ]
+            for phrase in problematic_phrases_multiword:
+                prompt = re.sub(phrase, '', prompt, flags=re.IGNORECASE)
+            
+            # Then remove single problematic words (but preserve "mausoleum" and "monument" as they're just locations)
+            # Only remove words that are clearly problematic in safety context
+            # NOTE: We preserve location words like "mausoleum", "monument", "body" (when not with "slack")
+            # to maintain visual context and age information
+            problematic_words = [
+                r'\b(bleeding|blood)\b',  # blood-related (most problematic)
+                r'\b(kill|suicide)\b',  # violence/suicide related
+            ]
+            for phrase in problematic_words:
+                prompt = re.sub(phrase, '', prompt, flags=re.IGNORECASE)
+        else:
+            # Title/narration are still included, so we can replace the visual section if needed
+            # Extract scene title and emotion if present for context
+            title_match = re.search(r'Scene title:\s*([^.]+)', prompt, re.IGNORECASE)
+            scene_title = title_match.group(1) if title_match else ""
+            
+            # Find the main visual description block (usually after "Visual details to emphasize:")
+            visual_start = prompt.find("Visual details to emphasize:")
+            if visual_start != -1:
+                # Get everything from "Visual details to emphasize:" to end or next section
+                visual_section = prompt[visual_start:]
+                # If there's a scene that contains problematic content, replace it completely
+                if re.search(r'\b(bleeding|blood|kill|suicide|death|mausoleum|monument|slack|body|armor.*?blood)\b', visual_section, re.IGNORECASE):
+                    # Completely replace the visual section with a safe, emotional aftermath scene
+                    safe_visual = (
+                        "Visual details to emphasize:\n"
+                        "Cinematic scene showing the aftermath of a significant historical moment: "
+                        "interior of an ancient chamber with soft torchlight casting long shadows, "
+                        "emotional weight conveyed through composition and lighting rather than explicit details, "
+                        "figures shown in silhouette or from behind, focusing on architecture, atmosphere, and symbolic elements "
+                        "that convey grief, loss, or historical significance without showing graphic content. "
+                        "Somber, contemplative mood with dramatic chiaroscuro lighting. "
+                        "Emphasize the emotional impact and historical weight of the moment through visual poetry, not explicit imagery. "
+                        "16:9 cinematic"
+                    )
+                    prompt = prompt[:visual_start] + safe_visual
+            
+            # Also aggressively remove any remaining problematic phrases from the entire prompt
+            problematic_phrases = [
+                r'armor.*?blood',
+                r'tunic.*?blood',
+                r'smeared.*?blood',
+                r'bleeding.*?conscious',
+                r'body.*?slack',
+                r'kill.*?himself',
+                r'wound.*?finish',
+            ]
+            for phrase in problematic_phrases:
+                prompt = re.sub(phrase, '', prompt, flags=re.IGNORECASE)
     
     # If we know the violation type, we can be more specific
     if violation_type == "self-harm":
-        # For self-harm violations, focus on positive aspects, achievements, and abstract representations
         prompt = prompt.replace("suffering", "contemplation")
         prompt = prompt.replace("pain", "challenge")
         prompt = prompt.replace("struggle", "journey")
         prompt = prompt.replace("death", "legacy")
         prompt = prompt.replace("illness", "health challenges")
-        # Add instruction to focus on positive aspects
+    
+    # Add safety instruction based on sanitization level
+    if sanitize_attempt >= 4:
+        safety_instruction = " CRITICAL SAFETY: Safe, educational documentary content only. Use symbolic, abstract, or aftermath-focused representation. NO graphic imagery, NO explicit violence, NO blood, NO death scenes. Focus on architecture, atmosphere, emotions, and historical significance through visual poetry and composition. Emphasize emotional weight through lighting and composition, not explicit physical details."
+    elif sanitize_attempt >= 3:
+        safety_instruction = " Safe, appropriate, educational content. Focus on aftermath, emotional impact, and symbolic representation. Use abstract representation if needed. Avoid any graphic or disturbing imagery."
+    elif sanitize_attempt == 2:
         safety_instruction = " Safe, appropriate, educational content. Focus on achievements, intellectual work, contemplation, and positive moments. Use symbolic or abstract representation if needed. Avoid any graphic or disturbing imagery."
+    else:
+        safety_instruction = " Safe, appropriate, educational content only. Focus on achievements, intellectual work, and positive moments. Avoid graphic or disturbing imagery."
     
-    # General sanitization: remove or soften potentially problematic words
-    problematic_patterns = [
-        (r'\b(harm|hurt|pain|suffering|death|suicide|cut|bleed|violence)\b', 'challenge'),
-        (r'\b(depression|despair|hopeless)\b', 'contemplation'),
-    ]
+    # Add explicit violation type avoidance if we know what violated
+    violation_avoidance = ""
+    if violation_type:
+        # Map violation types to clearer descriptions
+        violation_descriptions = {
+            "self-harm": "self-harm, suicide, or self-injury",
+            "violence": "violence, physical harm, or aggressive actions",
+            "death": "death, dying, or explicit death scenes",
+            "harmful": "harmful, dangerous, or potentially harmful content"
+        }
+        violation_desc = violation_descriptions.get(violation_type, violation_type)
+        violation_avoidance = f" CRITICAL: TO AVOID {violation_desc.upper()}. Do not depict any {violation_desc}, themes, imagery, or references related to this content."
     
-    import re
-    for pattern, replacement in problematic_patterns:
-        prompt = re.sub(pattern, replacement, prompt, flags=re.IGNORECASE)
-    
-    # Append safety instruction
-    sanitized = prompt + safety_instruction
+    # Append safety instruction and violation avoidance
+    sanitized = prompt + safety_instruction + violation_avoidance
     
     return sanitized
 
 
-def generate_image_for_scene(scene: dict, prev_scene: dict | None, global_block_override: str | None = None, sanitize_attempt: int = 0) -> Path:
+def generate_image_for_scene(scene: dict, prev_scene: dict | None, global_block_override: str | None = None, sanitize_attempt: int = 0, violation_type: str = None) -> Path:
     """
     Generate an image for the given scene using OpenAI Images API.
     If config.save_assets is True, caches to generated_images/. Otherwise uses temp directory.
@@ -381,12 +617,27 @@ def generate_image_for_scene(scene: dict, prev_scene: dict | None, global_block_
         # Use temp directory
         img_path = Path(config.temp_dir) / f"scene_{scene['id']:02d}.png"
 
-    prompt = build_image_prompt(scene, prev_scene, global_block_override)
+    # On attempts 4+, exclude title and narration (may contain problematic words)
+    exclude_title_narration = (sanitize_attempt >= 4)
+    if exclude_title_narration:
+        print(f"[IMAGE] Scene {scene['id']}: excluding title and narration (using only image_prompt)")
+    
+    # Only include safety instructions after first attempt fails
+    include_safety_instructions = (sanitize_attempt > 0)
+    
+    prompt = build_image_prompt(scene, prev_scene, global_block_override, exclude_title_narration=exclude_title_narration, include_safety_instructions=include_safety_instructions)
     
     # Sanitize prompt if this is a retry after safety violation
     if sanitize_attempt > 0:
         print(f"[IMAGE] Scene {scene['id']}: sanitizing prompt (attempt {sanitize_attempt})...")
-        prompt = sanitize_prompt_for_safety(prompt)
+        prompt = sanitize_prompt_for_safety(prompt, violation_type=violation_type, sanitize_attempt=sanitize_attempt, exclude_title_narration=exclude_title_narration)
+        # Log the full sanitized prompt for debugging
+        print(f"[IMAGE] Scene {scene['id']}: SANITIZED PROMPT (length={len(prompt)} chars):")
+        print("-" * 80)
+        print(prompt[:2000])  # Print first 2000 chars
+        if len(prompt) > 2000:
+            print(f"... (truncated, full length: {len(prompt)} chars)")
+        print("-" * 80)
     
     print(f"[IMAGE] Scene {scene['id']}: generating image...")
 
@@ -411,15 +662,21 @@ def generate_image_for_scene(scene: dict, prev_scene: dict | None, global_block_
     
     except Exception as e:
         # Check if this is a safety violation error
-        error_str = str(e)
-        if 'safety' in error_str.lower() or 'moderation' in error_str.lower() or 'rejected' in error_str.lower():
-            # Extract violation type if available
+        error_str = str(e).lower()
+        if 'safety' in error_str or 'moderation' in error_str or 'rejected' in error_str:
+            # Extract violation type if available - check for common violation types
             violation_type = None
-            if 'self-harm' in error_str.lower():
+            if 'self-harm' in error_str or 'suicide' in error_str:
                 violation_type = "self-harm"
+            elif 'violence' in error_str or 'violent' in error_str:
+                violation_type = "violence"
+            elif 'death' in error_str or 'dead' in error_str or 'kill' in error_str:
+                violation_type = "death"
+            elif 'harmful' in error_str or 'harm' in error_str:
+                violation_type = "harmful"
             
             # Re-raise with violation info so retry mechanism can handle it
-            raise SafetyViolationError(f"Safety violation detected: {error_str}", violation_type=violation_type, original_prompt=prompt)
+            raise SafetyViolationError(f"Safety violation detected: {e}", violation_type=violation_type, original_prompt=prompt)
         else:
             # Re-raise other errors as-is
             raise
@@ -442,7 +699,11 @@ def generate_audio_for_scene(scene: dict) -> Path:
         audio_path = Path(config.temp_dir) / f"scene_{scene['id']:02d}.mp3"
 
     text = scene["narration"]
-    print(f"[AUDIO] Scene {scene['id']}: generating audio ({TTS_PROVIDER})...")
+    emotion = scene.get("emotion")
+    if emotion:
+        print(f"[AUDIO] Scene {scene['id']}: generating audio ({TTS_PROVIDER}) with emotion={emotion}...")
+    else:
+        print(f"[AUDIO] Scene {scene['id']}: generating audio ({TTS_PROVIDER})...")
 
     if TTS_PROVIDER == "elevenlabs" and elevenlabs_client:
         # ElevenLabs TTS
@@ -456,11 +717,11 @@ def generate_audio_for_scene(scene: dict) -> Path:
             for chunk in audio_generator:
                 f.write(chunk)
     elif TTS_PROVIDER == "google" and google_tts_client:
-        # Google Cloud TTS with SSML for natural pacing
+        # Google Cloud TTS with SSML for natural pacing and emotion-based prosody
         from google.cloud import texttospeech
         
-        # Convert text to SSML for natural pauses and emphasis
-        ssml_text = text_to_ssml(text)
+        # Convert text to SSML for natural pauses and emphasis, with emotion-based prosody adjustments
+        ssml_text = text_to_ssml(text, emotion=emotion)
         synthesis_input = texttospeech.SynthesisInput(ssml=ssml_text)
         
         voice = texttospeech.VoiceSelectionParams(
@@ -559,22 +820,27 @@ def generate_image_for_scene_with_retry(scene: dict, prev_scene: dict | None, gl
     Generate image with retry logic that handles safety violations by sanitizing prompts.
     """
     attempt = 1
-    max_attempts = 3  # More attempts for safety violations
+    max_attempts = 5  # More attempts for safety violations - increased to 5
     base_delay = 2.0
+    violation_type = None  # Store violation type from first SafetyViolationError
     
     while True:
         try:
             sanitize_attempt = attempt - 1  # First attempt is 0 (no sanitization), subsequent attempts sanitize
-            return generate_image_for_scene(scene, prev_scene, global_block_override, sanitize_attempt=sanitize_attempt)
+            return generate_image_for_scene(scene, prev_scene, global_block_override, sanitize_attempt=sanitize_attempt, violation_type=violation_type)
         except SafetyViolationError as e:
             if attempt >= max_attempts:
                 print(f"[RETRY][image] Scene {scene['id']}: Failed after {attempt} attempts with safety violations")
                 print(f"[RETRY][image] Original prompt: {e.original_prompt[:200]}...")
                 raise Exception(f"Image generation failed due to safety violations after {attempt} attempts. Scene {scene['id']} may need manual prompt adjustment.")
             
+            # Capture violation_type from first safety violation
+            if e.violation_type and violation_type is None:
+                violation_type = e.violation_type
+            
             print(f"[RETRY][image] Scene {scene['id']}: Safety violation detected (attempt {attempt}/{max_attempts})")
-            if e.violation_type:
-                print(f"[RETRY][image] Violation type: {e.violation_type}")
+            if violation_type:
+                print(f"[RETRY][image] Violation type: {violation_type}")
             print(f"[RETRY][image] Sanitizing prompt and retrying...")
             
             delay = base_delay * (2 ** (attempt - 1)) * (0.8 + 0.4 * random.random())
@@ -601,7 +867,7 @@ def generate_audio_for_scene_with_retry(scene: dict) -> Path:
     )
 
 
-def build_video(scenes_path: str, out_video_path: str, save_assets: bool = False, is_short: bool = False):
+def build_video(scenes_path: str, out_video_path: str, save_assets: bool = False, is_short: bool = False, scene_id: int | None = None):
     """
     Build a video from scenes JSON file.
     
@@ -647,7 +913,7 @@ def build_video(scenes_path: str, out_video_path: str, save_assets: bool = False
         print(f"[TEMP] Using temporary directory: {config.temp_dir}")
     
     try:
-        _build_video_impl(scenes_path, out_video_path)
+        _build_video_impl(scenes_path, out_video_path, scene_id=scene_id)
     finally:
         # Clean up temp directory
         if not config.save_assets and config.temp_dir and os.path.exists(config.temp_dir):
@@ -655,9 +921,25 @@ def build_video(scenes_path: str, out_video_path: str, save_assets: bool = False
             shutil.rmtree(config.temp_dir)
 
 
-def _build_video_impl(scenes_path: str, out_video_path: str):
+def _build_video_impl(scenes_path: str, out_video_path: str, scene_id: int | None = None):
     """Internal implementation of build_video."""
     scenes, metadata = load_scenes(scenes_path)
+    
+    # If scene_id is specified, filter to only that scene
+    test_mode_prev_scene = None
+    if scene_id is not None:
+        original_scenes = scenes
+        scenes = [s for s in scenes if s.get('id') == scene_id]
+        if not scenes:
+            available_ids = [s.get('id') for s in original_scenes]
+            raise ValueError(f"Scene ID {scene_id} not found. Available scene IDs: {available_ids}")
+        print(f"[TEST MODE] Generating only scene {scene_id} out of {len(original_scenes)} total scenes")
+        # Find the previous scene for image continuity context (but don't generate it)
+        scene_idx = next((i for i, s in enumerate(original_scenes) if s.get('id') == scene_id), None)
+        if scene_idx is not None and scene_idx > 0:
+            test_mode_prev_scene = original_scenes[scene_idx - 1]
+            print(f"[TEST MODE] Using previous scene {test_mode_prev_scene.get('id')} for image continuity context (will not generate audio/video for it)")
+    
     num_scenes = len(scenes)
     
     # Extract global_block from metadata if available
@@ -668,30 +950,12 @@ def _build_video_impl(scenes_path: str, out_video_path: str):
     else:
         print(f"[METADATA] Using default global_block")
     
-    # Extract birth_year from metadata/outline if available and add to scenes that don't have it
-    birth_year = None
-    if metadata:
-        outline = metadata.get("outline")
-        if outline:
-            birth_year = outline.get("birth_year")
-        if not birth_year:
-            birth_year = metadata.get("birth_year")
-    
-    # Add birth_year and calculate ages for scenes that don't have this metadata
-    # Use the scene's "year" field directly for age calculation
-    if birth_year:
-        for scene in scenes:
-            if 'birth_year' not in scene:
-                scene['birth_year'] = birth_year
-            # Calculate age using the scene's "year" field if available
-            if 'estimated_age' not in scene and scene.get('year') and scene.get('birth_year'):
-                scene['estimated_age'] = calculate_age_from_year_range(
-                    scene.get('birth_year'),
-                    scene.get('year')
-                )
-    
     # Previous-scene references for image continuity
-    prev_scenes: list[dict | None] = [None] + scenes[:-1]
+    if test_mode_prev_scene is not None:
+        # In test mode with a specific scene_id, use the actual previous scene for context
+        prev_scenes: list[dict | None] = [test_mode_prev_scene]
+    else:
+        prev_scenes: list[dict | None] = [None] + scenes[:-1]
 
     image_paths: list[Path | None] = [None] * num_scenes
     scene_audio_clips: list[AudioFileClip | None] = [None] * num_scenes
@@ -856,6 +1120,9 @@ Examples:
 
   # Build all shorts in the shorts_scripts/ directory
   python build_video.py --all-shorts
+
+  # Generate only a specific scene for testing (e.g., scene 25)
+  python build_video.py scenes.json test_scene_25.mp4 --scene-id 25 --save-assets
         """
     )
     
@@ -867,6 +1134,8 @@ Examples:
                         help="Also build all associated YouTube Shorts after main video")
     parser.add_argument("--all-shorts", action="store_true",
                         help="Build all JSON files in the shorts_scripts/ directory")
+    parser.add_argument("--scene-id", type=int, metavar="ID",
+                        help="Generate only a specific scene by ID (for testing). Creates a short video with just that scene.")
     
     args = parser.parse_args()
     
@@ -923,12 +1192,14 @@ if __name__ == "__main__":
     
     # Build main video
     print(f"\n{'='*60}")
-    if is_short:
+    if args.scene_id is not None:
+        print(f"[TEST MODE] Building only scene {args.scene_id}: {args.output_file}")
+    elif is_short:
         print(f"[SHORT] Building: {args.output_file}")
     else:
         print(f"[MAIN VIDEO] Building: {args.output_file}")
     print(f"{'='*60}")
-    build_video(args.scenes_file, args.output_file, save_assets=args.save_assets, is_short=is_short)
+    build_video(args.scenes_file, args.output_file, save_assets=args.save_assets, is_short=is_short, scene_id=args.scene_id)
     
     # Build shorts if requested
     if args.with_shorts:
