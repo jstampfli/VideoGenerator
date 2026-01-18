@@ -40,6 +40,7 @@ class Config:
     
     generate_thumbnails = True  # Whether to generate thumbnail images (main video)
     generate_short_thumbnails = False  # Whether to generate thumbnails for shorts (usually not needed)
+    generate_refinement_diffs = False  # Whether to generate refinement diff JSON files
     
     @property
     def total_scenes(self):
@@ -1254,7 +1255,7 @@ def generate_shorts(person_of_interest: str, main_title: str, global_block: str,
             short_context = f"Story: {short_outline.get('story_angle', '')}. Title: {short_outline.get('short_title', '')}"
             # Determine short file path first for diff path
             short_file = SHORTS_DIR / f"{base_name}_short{short_num}.json"
-            diff_path = short_file.parent / f"{short_file.stem}_refinement_diff.json"
+            diff_path = short_file.parent / f"{short_file.stem}_refinement_diff.json" if config.generate_refinement_diffs else None
             all_scenes, refinement_diff = refine_scenes(all_scenes, person_of_interest, is_short=True, chapter_context=short_context, diff_output_path=diff_path)
             
             # Generate thumbnail (if enabled)
@@ -1511,7 +1512,7 @@ YouTube CLICKBAIT thumbnail - MUST MAXIMIZE CLICKS:
         # Step 3.4: Refine scenes for awkward transitions and improvements
         print("\n[STEP 3.4] Refining main video scenes...")
         chapter_summaries = "\n".join([f"Chapter {ch['chapter_num']}: {ch['title']} ({ch['year_range']}) - {ch['summary']}" for ch in chapters])
-        diff_path = Path(output_path).parent / f"{Path(output_path).stem}_refinement_diff.json"
+        diff_path = Path(output_path).parent / f"{Path(output_path).stem}_refinement_diff.json" if config.generate_refinement_diffs else None
         all_scenes, refinement_diff = refine_scenes(all_scenes, person_of_interest, is_short=False, chapter_context=chapter_summaries, diff_output_path=diff_path)
         
         # Step 3.5: Generate final metadata (description and tags) AFTER scenes are generated
@@ -1663,6 +1664,8 @@ Examples:
                         help="Skip main video thumbnail generation")
     parser.add_argument("--short-thumbnails", action="store_true",
                         help="Generate thumbnails for shorts (disabled by default)")
+    parser.add_argument("--refinement-diffs", action="store_true",
+                        help="Generate refinement diff JSON files showing what changed during scene refinement")
     
     return parser.parse_args()
 
@@ -1681,6 +1684,7 @@ if __name__ == "__main__":
         config.short_scenes_per_chapter = 3
         config.generate_thumbnails = False
         config.generate_short_thumbnails = False
+        config.generate_refinement_diffs = False
         print("[MODE] Test mode enabled")
     else:
         config.chapters = args.chapters
@@ -1689,6 +1693,7 @@ if __name__ == "__main__":
         config.short_scenes_per_chapter = args.short_scenes
         config.generate_thumbnails = not args.no_thumbnails
         config.generate_short_thumbnails = args.short_thumbnails
+        config.generate_refinement_diffs = args.refinement_diffs
     
     # Handle --main-only and --shorts-only flags
     if args.main_only and args.shorts_only:
