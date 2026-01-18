@@ -41,6 +41,7 @@ GOOGLE_TTS_VOICE = os.getenv("GOOGLE_TTS_VOICE", "en-US-Studio-Q")  # High quali
 GOOGLE_TTS_LANGUAGE = os.getenv("GOOGLE_TTS_LANGUAGE", "en-US")
 GOOGLE_TTS_SPEAKING_RATE = float(os.getenv("GOOGLE_TTS_SPEAKING_RATE", "0.92"))  # 0.25 to 4.0 (slightly slower for clarity)
 GOOGLE_TTS_PITCH = float(os.getenv("GOOGLE_TTS_PITCH", "-1.0"))  # -20.0 to 20.0 semitones (slightly deeper)
+GOOGLE_VOICE_TYPE = os.getenv("GOOGLE_VOICE_TYPE", "").lower()  # "chirp" or empty - chirp voices don't support SSML/prosody
 
 
 def get_emotion_prosody(emotion: str | None) -> dict:
@@ -133,6 +134,10 @@ def text_to_ssml(text: str, emotion: str | None = None) -> str:
                  to apply subtle prosody adjustments matching the scene's emotional tone
     """
     import re
+    
+    # If using Chirp voice, skip SSML and return plain text
+    if TTS_PROVIDER == "google" and GOOGLE_VOICE_TYPE == "chirp":
+        return text
     
     # Get emotion-based prosody settings
     prosody = get_emotion_prosody(emotion)
@@ -720,22 +725,34 @@ def generate_audio_for_scene(scene: dict) -> Path:
         # Google Cloud TTS with SSML for natural pacing and emotion-based prosody
         from google.cloud import texttospeech
         
-        # Convert text to SSML for natural pauses and emphasis, with emotion-based prosody adjustments
-        ssml_text = text_to_ssml(text, emotion=emotion)
-        synthesis_input = texttospeech.SynthesisInput(ssml=ssml_text)
+        # Check if using Chirp voice (doesn't support SSML/prosody)
+        is_chirp_voice = GOOGLE_VOICE_TYPE == "chirp"
+        
+        if is_chirp_voice:
+            # Chirp voices don't support SSML or prosody - use plain text
+            synthesis_input = texttospeech.SynthesisInput(text=text)
+        else:
+            # Convert text to SSML for natural pauses and emphasis, with emotion-based prosody adjustments
+            ssml_text = text_to_ssml(text, emotion=emotion)
+            synthesis_input = texttospeech.SynthesisInput(ssml=ssml_text)
         
         voice = texttospeech.VoiceSelectionParams(
             language_code=GOOGLE_TTS_LANGUAGE,
             name=GOOGLE_TTS_VOICE,
         )
         
-        audio_config = texttospeech.AudioConfig(
-            audio_encoding=texttospeech.AudioEncoding.MP3,
-            speaking_rate=GOOGLE_TTS_SPEAKING_RATE,
-            pitch=GOOGLE_TTS_PITCH,
-            # Add effects for richer sound
-            effects_profile_id=["headphone-class-device"],
-        )
+        # Chirp voices don't support pitch parameter
+        audio_config_params = {
+            "audio_encoding": texttospeech.AudioEncoding.MP3,
+            # "speaking_rate": GOOGLE_TTS_SPEAKING_RATE,
+            # "effects_profile_id": ["headphone-class-device"],
+        }
+        
+        # Only add pitch if not using Chirp voice
+        if not is_chirp_voice:
+            audio_config_params["pitch"] = GOOGLE_TTS_PITCH
+        
+        audio_config = texttospeech.AudioConfig(**audio_config_params)
         
         response = google_tts_client.synthesize_speech(
             input=synthesis_input,
@@ -867,7 +884,7 @@ def generate_audio_for_scene_with_retry(scene: dict) -> Path:
     )
 
 
-def build_video(scenes_path: str, out_video_path: str, save_assets: bool = False, is_short: bool = False, scene_id: int | None = None):
+def build_video(scenes_path: str, out_video_path: str, save_assets: bool = False, is_short: bool = False, scene_id: int | None = None, audio_only: bool = False):
     """
     Build a video from scenes JSON file.
     
@@ -913,7 +930,7 @@ def build_video(scenes_path: str, out_video_path: str, save_assets: bool = False
         print(f"[TEMP] Using temporary directory: {config.temp_dir}")
     
     try:
-        _build_video_impl(scenes_path, out_video_path, scene_id=scene_id)
+        _build_video_impl(scenes_path, out_video_path, scene_id=scene_id, audio_only=audio_only)
     finally:
         # Clean up temp directory
         if not config.save_assets and config.temp_dir and os.path.exists(config.temp_dir):
@@ -921,7 +938,7 @@ def build_video(scenes_path: str, out_video_path: str, save_assets: bool = False
             shutil.rmtree(config.temp_dir)
 
 
-def _build_video_impl(scenes_path: str, out_video_path: str, scene_id: int | None = None):
+def _build_video_impl(scenes_path: str, out_video_path: str, scene_id: int | None = None, audio_only: bool = False):
     """Internal implementation of build_video."""
     scenes, metadata = load_scenes(scenes_path)
     
@@ -960,7 +977,15 @@ def _build_video_impl(scenes_path: str, out_video_path: str, scene_id: int | Non
     image_paths: list[Path | None] = [None] * num_scenes
     scene_audio_clips: list[AudioFileClip | None] = [None] * num_scenes
 
-    print(f"[SCENES] Starting asset generation for {num_scenes} scenes...")
+    # In audio-only mode, use stock image for all scenes
+    if audio_only:
+        stock_image_path = Path("stock_image.png")
+        if not stock_image_path.exists():
+            raise FileNotFoundError(f"Stock image not found: {stock_image_path}")
+        print(f"[AUDIO ONLY MODE] Using stock image for all {num_scenes} scenes...")
+        image_paths = [stock_image_path] * num_scenes
+    else:
+        print(f"[SCENES] Starting asset generation for {num_scenes} scenes...")
 
     def image_job(idx: int):
         scene = scenes[idx]
@@ -977,17 +1002,18 @@ def _build_video_impl(scenes_path: str, out_video_path: str, scene_id: int | Non
         return idx, audio_clip
 
     # --- PARALLEL PHASE: generate images and audio ---
-    print("\n[PARALLEL] Generating images...")
-    try:
-        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-            futures = [executor.submit(image_job, i) for i in range(num_scenes)]
-            for fut in as_completed(futures):
-                idx, img_path = fut.result()
-                image_paths[idx] = img_path
-    except KeyboardInterrupt:
-        print("\n[INTERRUPTED] Canceling... (press Ctrl+C again to force quit)")
-        executor.shutdown(wait=False, cancel_futures=True)
-        raise
+    if not audio_only:
+        print("\n[PARALLEL] Generating images...")
+        try:
+            with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+                futures = [executor.submit(image_job, i) for i in range(num_scenes)]
+                for fut in as_completed(futures):
+                    idx, img_path = fut.result()
+                    image_paths[idx] = img_path
+        except KeyboardInterrupt:
+            print("\n[INTERRUPTED] Canceling... (press Ctrl+C again to force quit)")
+            executor.shutdown(wait=False, cancel_futures=True)
+            raise
 
     print("\n[PARALLEL] Generating audio...")
     try:
@@ -1003,9 +1029,9 @@ def _build_video_impl(scenes_path: str, out_video_path: str, scene_id: int | Non
 
     # Verify all assets were generated
     missing_imgs = [i for i, p in enumerate(image_paths) if p is None]
-    missing_audio = [i for i, c in enumerate(scene_audio_clips) if c is None]
     if missing_imgs:
         raise RuntimeError(f"Missing image paths for indices: {missing_imgs}")
+    missing_audio = [i for i, c in enumerate(scene_audio_clips) if c is None]
     if missing_audio:
         raise RuntimeError(f"Missing audio clips for indices: {missing_audio}")
 
@@ -1123,6 +1149,9 @@ Examples:
 
   # Generate only a specific scene for testing (e.g., scene 25)
   python build_video.py scenes.json test_scene_25.mp4 --scene-id 25 --save-assets
+
+  # Generate only audio files (skip images and video) - useful for testing TTS models
+  python build_video.py scenes.json --audio-only --save-assets
         """
     )
     
@@ -1136,12 +1165,14 @@ Examples:
                         help="Build all JSON files in the shorts_scripts/ directory")
     parser.add_argument("--scene-id", type=int, metavar="ID",
                         help="Generate only a specific scene by ID (for testing). Creates a short video with just that scene.")
+    parser.add_argument("--audio-only", action="store_true",
+                        help="Generate only audio files (skip images and video assembly). Useful for testing TTS models.")
     
     args = parser.parse_args()
     
-    # Validate: need either positional args or --all-shorts
-    if not args.all_shorts and (not args.scenes_file or not args.output_file):
-        parser.error("scenes_file and output_file are required unless using --all-shorts")
+    # Validate: need either positional args, --all-shorts, or --audio-only
+    if not args.all_shorts and not args.audio_only and (not args.scenes_file or not args.output_file):
+        parser.error("scenes_file and output_file are required unless using --all-shorts or --audio-only")
     
     return args
 
@@ -1192,14 +1223,16 @@ if __name__ == "__main__":
     
     # Build main video
     print(f"\n{'='*60}")
-    if args.scene_id is not None:
+    if args.audio_only:
+        print(f"[AUDIO ONLY MODE] Generating audio only: {args.scenes_file}")
+    elif args.scene_id is not None:
         print(f"[TEST MODE] Building only scene {args.scene_id}: {args.output_file}")
     elif is_short:
         print(f"[SHORT] Building: {args.output_file}")
     else:
         print(f"[MAIN VIDEO] Building: {args.output_file}")
     print(f"{'='*60}")
-    build_video(args.scenes_file, args.output_file, save_assets=args.save_assets, is_short=is_short, scene_id=args.scene_id)
+    build_video(args.scenes_file, args.output_file, save_assets=args.save_assets, is_short=is_short, scene_id=args.scene_id, audio_only=args.audio_only)
     
     # Build shorts if requested
     if args.with_shorts:

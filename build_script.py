@@ -81,7 +81,11 @@ def get_shared_scene_requirements() -> str:
    - Use specific emotional details: "Her hands shake as she writes...", "He can barely breathe from the pressure...", "The weight of what's at stake makes every word matter..."
    - Connect events to human feelings: isolation, fear, determination, joy, desperation, pride, grief
    - Make the viewer FEEL what the character feels - pull them into the emotional reality of the moment
-5. SIGNIFICANCE AND IMPACT - why THIS moment matters, how significant it is, what it changes
+5. SIGNIFICANCE AND IMPACT (CRITICAL FOR PIVOTAL MOMENTS):
+   - For EVERY scene, explain why THIS moment matters - how significant it is, what it changes, its impact on the overall story
+   - For PIVOTAL MOMENTS (major breakthroughs, turning points, critical decisions, moments that change the story trajectory), you MUST explicitly explain WHY this moment is pivotal - its significance to the broader story, how it shifts the narrative, what it changes about the character's journey, and what makes it a turning point
+   - Make pivotal moments FEEL significant - don't just mention them, EXPLAIN their weight and importance
+   - Show how pivotal moments reshape what comes after - what changes as a result of this moment?
 6. CONSEQUENCES - what happened as a result, how it changed things, who was affected
 7. INTERESTING information the viewer likely doesn't know - surprising details, behind-the-scenes facts
 8. NO filler, NO fluff, NO vague statements, NO bullet-point style
@@ -397,9 +401,8 @@ REQUIREMENTS:
 4. IMAGE PROMPT:
    - Bright, happy, upbeat mood - this should feel positive and engaging
    - Related to {person} and the documentary topic but in a cheerful context
-   - Include visual elements that subtly suggest engagement: perhaps a celebratory moment, an achievement, a positive milestone from their life, or something that makes viewers want to engage
+   - Include visual elements that suggest engagement: perhaps a celebratory moment, an achievement, a positive milestone from their life
    - 16:9 cinematic format
-   - Think: an inspiring moment, a breakthrough, a happy scene from their life that's visually appealing
    - The image should be inviting and make viewers want to continue watching
 
 5. EMOTION: "upbeat" or "engaging"
@@ -445,7 +448,7 @@ Respond with JSON:
             base_narration = scene['narration'].rstrip('.!?')
             scene['narration'] = f"{base_narration} Make sure to like, subscribe, and comment below."
     if 'image_prompt' not in scene:
-        scene['image_prompt'] = f"Bright, happy, upbeat scene related to {person} - an inspiring moment or positive milestone, 16:9 cinematic"
+        scene['image_prompt'] = f"Bright, happy, upbeat scene related to {person} - an inspiring moment or positive milestone. 16:9 cinematic"
     if 'emotion' not in scene:
         scene['emotion'] = "upbeat"
     if 'year' not in scene:
@@ -682,6 +685,7 @@ NARRATION STYLE FOR INTRO:
   * What's at stake EMOTIONALLY - what failure would feel like, what success means
   * Human details that create empathy - physical sensations, internal thoughts, personal costs
   * Make events feel REAL and SIGNIFICANT by connecting them to human feelings and experiences
+- PIVOTAL MOMENTS - SIGNIFICANCE (CRITICAL): For the most PIVOTAL moments in this chapter (major breakthroughs, turning points, critical decisions, moments that change the story trajectory), you MUST explicitly explain WHY this moment matters - its significance to the overall story, its impact on the broader narrative, and what it changes. Make viewers FEEL the weight of these moments. Don't just describe what happened - explain WHY it's pivotal and HOW it reshapes what comes after.
 - Make viewers feel emotionally invested in HOW the story unfolds, not just WHAT happened - pull them into the character's emotional reality
 - CRITICAL: Each scene must cover DIFFERENT, NON-OVERLAPPING events. Do NOT repeat events already covered in previous scenes. If Scene X describes Event A in detail, Scene Y should NOT re-describe Event A - instead, move to Event A's consequences, what happens next, or a different event entirely. Review the recent scenes context to ensure you're not overlapping with what was already told.
 
@@ -770,6 +774,192 @@ Respond with JSON array:
     return scenes
 
 
+def identify_pivotal_moments(scenes: list[dict], person: str, chapter_context: str = None) -> list[dict]:
+    """
+    Identify 2-4 most pivotal moments from the scenes.
+    
+    Pivotal moments are: major breakthroughs, turning points, critical decisions,
+    moments that change the story trajectory.
+    
+    Returns:
+        list of dicts with 'scene_id' and 'justification' (why it's pivotal)
+    """
+    if not scenes:
+        return []
+    
+    scenes_json = json.dumps(scenes, indent=2, ensure_ascii=False)
+    
+    context_info = ""
+    if chapter_context:
+        context_info = f"\nCHAPTER CONTEXT: {chapter_context}\n"
+    
+    identification_prompt = f"""Analyze these scenes from a documentary about {person} and identify the 2-4 MOST PIVOTAL MOMENTS.
+
+CURRENT SCENES (JSON):
+{scenes_json}
+{context_info}
+
+PIVOTAL MOMENTS are:
+- Major breakthroughs or discoveries that change everything
+- Turning points where the story shifts direction
+- Critical decisions that reshape the narrative
+- Moments that fundamentally change the character's journey or the story's trajectory
+- Moments where the consequences are so significant they reshape what comes after
+
+Your task: Identify 2-4 scenes (by scene ID) that represent the most pivotal moments in this story.
+
+For each pivotal moment, explain:
+- Why this moment is pivotal (what makes it a turning point?)
+- How it changes the story trajectory
+- What makes it significant to the overall narrative
+
+Respond with JSON array:
+[
+  {{
+    "scene_id": 12,
+    "justification": "This is the moment where the discovery changes everything - it's not just an achievement, it rewrites the rules of physics and shifts the entire scientific paradigm."
+  }},
+  ...
+]
+
+Return 2-4 pivotal moments only. Be selective - only the moments that are truly game-changers."""
+
+    try:
+        response = client.chat.completions.create(
+            model=SCRIPT_MODEL,
+            messages=[
+                {"role": "system", "content": "You are an expert story analyst who identifies pivotal moments in narratives. You understand what makes a moment truly significant and game-changing. Respond with valid JSON array only."},
+                {"role": "user", "content": identification_prompt}
+            ],
+            temperature=0.5,
+        )
+        
+        pivotal_moments = json.loads(clean_json_response(response.choices[0].message.content))
+        
+        if not isinstance(pivotal_moments, list):
+            print(f"[PIVOTAL MOMENTS] WARNING: Expected array, got {type(pivotal_moments)}. Returning empty list.")
+            return []
+        
+        # Validate that scene IDs exist
+        scene_ids = {scene.get('id') for scene in scenes}
+        valid_moments = []
+        for moment in pivotal_moments:
+            scene_id = moment.get('scene_id')
+            if scene_id in scene_ids:
+                valid_moments.append(moment)
+            else:
+                print(f"[PIVOTAL MOMENTS] WARNING: Scene ID {scene_id} not found in scenes, skipping.")
+        
+        return valid_moments[:4]  # Limit to 4 maximum
+        
+    except Exception as e:
+        print(f"[PIVOTAL MOMENTS] WARNING: Failed to identify pivotal moments ({e}). Continuing without significance scenes.")
+        return []
+
+
+def generate_significance_scene(pivotal_scene: dict, next_scene: dict | None, person: str, justification: str, chapter_context: str = None) -> dict:
+    """
+    Generate a significance scene that explains why a pivotal moment matters.
+    
+    Args:
+        pivotal_scene: The scene that was identified as pivotal
+        next_scene: The scene that comes after the pivotal scene (for context)
+        person: Person the documentary is about
+        justification: Why this moment is pivotal (from identify_pivotal_moments)
+        chapter_context: Optional chapter context
+        
+    Returns:
+        New significance scene dict
+    """
+    pivotal_id = pivotal_scene.get('id', 0)
+    pivotal_title = pivotal_scene.get('title', '')
+    pivotal_narration = pivotal_scene.get('narration', '')
+    
+    next_context = ""
+    if next_scene:
+        next_title = next_scene.get('title', '')
+        next_context = f"\nThe next scene after this will be: \"{next_title}\" - keep this in mind for flow."
+    
+    context_info = ""
+    if chapter_context:
+        context_info = f"\nCHAPTER CONTEXT: {chapter_context}\n"
+    
+    significance_prompt = f"""Generate a SIGNIFICANCE SCENE that comes immediately after Scene {pivotal_id}: "{pivotal_title}"
+
+PIVOTAL MOMENT (Scene {pivotal_id}):
+Title: "{pivotal_title}"
+Narration: "{pivotal_narration}"
+
+WHY THIS MOMENT IS PIVOTAL:
+{justification}
+{next_context}
+{context_info}
+
+YOUR TASK: Create a scene that explains WHY this pivotal moment matters - its significance to the overall story.
+
+This scene should:
+- Explain WHY this moment is pivotal - its significance to the broader story
+- Show HOW this moment changes or reshapes what comes after
+- Make viewers FEEL the weight and importance of this moment
+- Connect this moment to the larger narrative - how it fits into the overall story
+- Use 1-3 sentences (let the moment's importance determine length - very important moments can be longer)
+- Flow naturally from the pivotal moment and into what comes next
+- Write from the YouTuber's perspective - natural storytelling
+
+This is NOT a repeat of the pivotal moment - it's an EXPLANATION of WHY that moment matters.
+
+CRITICAL: Make this scene feel significant and weighty. The viewer should understand: "This is why this moment changed everything."
+
+Respond with JSON:
+{{
+  "title": "2-5 word title about the significance",
+  "narration": "1-3 sentences explaining why this pivotal moment matters - its significance, impact, and what it changed. Make viewers FEEL the weight.",
+  "image_prompt": "Visual that reflects the significance and weight of this moment - contemplative, monumental, or reflective mood. Use the same year/time period as the pivotal moment. Match the visual style of the documentary. 16:9 cinematic",
+  "emotion": "contemplative" or "reflective" or "weighty" or "monumental" - the emotion should reflect the significance being explained,
+  "year": Same as pivotal moment (use scene {pivotal_id}'s year)
+}}"""
+
+    try:
+        response = client.chat.completions.create(
+            model=SCRIPT_MODEL,
+            messages=[
+                {"role": "system", "content": "You create powerful scenes that explain why pivotal moments matter. You help viewers understand the significance and weight of game-changing moments. Respond with valid JSON only."},
+                {"role": "user", "content": significance_prompt}
+            ],
+            temperature=0.7,
+        )
+        
+        scene = json.loads(clean_json_response(response.choices[0].message.content))
+        
+        if not isinstance(scene, dict):
+            raise ValueError(f"Expected dict, got {type(scene)}")
+        
+        # Ensure all required fields are present
+        if 'title' not in scene:
+            scene['title'] = "Why This Moment Matters"
+        if 'narration' not in scene:
+            scene['narration'] = f"This moment changes everything - its significance reshapes the entire story."
+        if 'image_prompt' not in scene:
+            scene['image_prompt'] = f"Reflective, contemplative scene showing the weight of this pivotal moment, {pivotal_scene.get('year', 'same period')}, 16:9 cinematic"
+        if 'emotion' not in scene:
+            scene['emotion'] = "contemplative"
+        if 'year' not in scene:
+            scene['year'] = pivotal_scene.get('year', 'same period')
+        
+        return scene
+        
+    except Exception as e:
+        print(f"[SIGNIFICANCE SCENE] WARNING: Failed to generate significance scene for Scene {pivotal_id} ({e}).")
+        # Return a simple fallback scene
+        return {
+            "title": "Why This Moment Matters",
+            "narration": f"This moment is pivotal because {justification[:100]}... It changes the trajectory of the entire story.",
+            "image_prompt": f"Reflective, contemplative scene showing the significance of this moment, {pivotal_scene.get('year', 'same period')}, 16:9 cinematic",
+            "emotion": "contemplative",
+            "year": pivotal_scene.get('year', 'same period')
+        }
+
+
 def generate_refinement_diff(original_scenes: list[dict], refined_scenes: list[dict]) -> dict:
     """Generate a detailed diff JSON showing what changed between original and refined scenes."""
     diff_data = {
@@ -827,10 +1017,102 @@ def refine_scenes(scenes: list[dict], person: str, is_short: bool = False, chapt
     # Save original scenes for comparison
     original_scenes = [scene.copy() for scene in scenes]
     
-    print(f"[REFINEMENT] Refining {len(scenes)} scenes...")
+    # For main videos (not shorts), identify pivotal moments and insert significance scenes BEFORE refinement
+    scenes_before_refinement = [scene.copy() for scene in scenes]
+    if not is_short:
+        print(f"[REFINEMENT] Identifying pivotal moments and adding significance scenes (before refinement)...")
+        pivotal_moments = identify_pivotal_moments(scenes_before_refinement, person, chapter_context)
+        
+        if pivotal_moments:
+            print(f"[REFINEMENT]   • Identified {len(pivotal_moments)} pivotal moment(s)")
+            
+            # Sort pivotal moments by scene_id (descending) so we can insert from end to start
+            # This way, scene IDs remain valid as we insert
+            pivotal_moments.sort(key=lambda x: x.get('scene_id', 0), reverse=True)
+            
+            inserted_scenes_count = 0
+            
+            # Insert significance scenes after each pivotal moment
+            for pivotal_moment in pivotal_moments:
+                pivotal_scene_id = pivotal_moment.get('scene_id')
+                justification = pivotal_moment.get('justification', '')
+                
+                # Rebuild scene_id_to_index map (indices may have shifted from previous insertions)
+                scene_id_to_index = {scene.get('id'): i for i, scene in enumerate(scenes_before_refinement)}
+                
+                if pivotal_scene_id not in scene_id_to_index:
+                    print(f"[REFINEMENT]   WARNING: Pivotal scene ID {pivotal_scene_id} not found, skipping")
+                    continue
+                
+                pivotal_index = scene_id_to_index[pivotal_scene_id]
+                pivotal_scene = scenes_before_refinement[pivotal_index]
+                
+                # Get next scene for context
+                next_scene = scenes_before_refinement[pivotal_index + 1] if pivotal_index + 1 < len(scenes_before_refinement) else None
+                
+                # Generate significance scene
+                significance_scene = generate_significance_scene(
+                    pivotal_scene=pivotal_scene,
+                    next_scene=next_scene,
+                    person=person,
+                    justification=justification,
+                    chapter_context=chapter_context
+                )
+                
+                # Mark this as a significance scene
+                significance_scene['is_significance_scene'] = True
+                
+                # Set temporary ID (will be renumbered later)
+                significance_scene['id'] = pivotal_scene_id + 0.5  # Temporary ID between pivotal and next
+                
+                # Insert significance scene after pivotal moment
+                insert_index = pivotal_index + 1
+                scenes_before_refinement.insert(insert_index, significance_scene)
+                
+                inserted_scenes_count += 1
+                print(f"[REFINEMENT]   • Added significance scene after Scene {pivotal_scene_id}")
+            
+            # Renumber all scene IDs to be sequential integers
+            # Also ensure all scenes have is_significance_scene set (False for non-significance scenes)
+            for i, scene in enumerate(scenes_before_refinement):
+                scene['id'] = i + 1
+                # Only set to False if not already set to True
+                if 'is_significance_scene' not in scene:
+                    scene['is_significance_scene'] = False
+            
+            print(f"[REFINEMENT]   • Inserted {inserted_scenes_count} significance scene(s)")
+            print(f"[REFINEMENT]   • Scene count before refinement: {len(scenes_before_refinement)} (was {len(original_scenes)})")
+    
+    # Now refine ALL scenes (original + significance scenes if any were added)
+    print(f"[REFINEMENT] Refining {len(scenes_before_refinement)} scenes (including any significance scenes)...")
+    
+    # Identify significance scenes and scenes that follow them for transition checking
+    significance_scene_info = ""
+    if not is_short:
+        # Find scenes that are significance scenes (marked with is_significance_scene: true)
+        # Also check for scenes that follow significance scenes
+        significance_context = ""
+        for i, scene in enumerate(scenes_before_refinement):
+            # Check if this scene is marked as a significance scene
+            is_significance = scene.get('is_significance_scene', False)
+            
+            # If this is a significance scene, and there's a scene after it, note it
+            if is_significance and i + 1 < len(scenes_before_refinement):
+                scene_id = scene.get('id', i + 1)
+                next_scene_id = scenes_before_refinement[i + 1].get('id', i + 2)
+                next_scene_title = scenes_before_refinement[i + 1].get('title', '')
+                significance_context += f"\n  - Scene {scene_id} is a significance scene (explaining why a moment matters). Scene {next_scene_id} (\"{next_scene_title}\") immediately follows it - ensure Scene {next_scene_id}'s beginning transitions FROM Scene {scene_id}, not from the scene before Scene {scene_id}.\n"
+        
+        if significance_context:
+            significance_scene_info = f"""
+CRITICAL TRANSITION CHECK - SIGNIFICANCE SCENES:
+The following scenes are significance scenes (explaining why pivotal moments matter) that were inserted after pivotal moments:
+{significance_context}
+
+IMPORTANT: Scenes that come IMMEDIATELY AFTER significance scenes must transition FROM the significance scene, not from the original pivotal scene. The significance scene creates a bridge - scenes after it should flow from that bridge, not skip over it."""
     
     # Prepare scene context for the LLM
-    scenes_json = json.dumps(scenes, indent=2, ensure_ascii=False)
+    scenes_json = json.dumps(scenes_before_refinement, indent=2, ensure_ascii=False)
     
     context_info = ""
     if chapter_context:
@@ -843,6 +1125,9 @@ def refine_scenes(scenes: list[dict], person: str, is_short: bool = False, chapt
 CURRENT SCENES (JSON):
 {scenes_json}
 {context_info}
+{significance_scene_info}
+
+CRITICAL: For scenes that contain requests to "like", "subscribe", and "comment" in the narration, you can refine and improve them (clarity, flow, naturalness) BUT you MUST preserve the like/subscribe/comment call-to-action. The CTA is essential and must remain in the narration - refine around it, don't remove it.
 
 YOUR TASK: Review these scenes and improve them. Look for:
 1. META REFERENCES (CRITICAL) - Remove ANY references to:
@@ -865,6 +1150,9 @@ YOUR TASK: Review these scenes and improve them. Look for:
    * Image prompt mood should match the emotion (e.g., "desperate" → tense atmosphere in image)
    * If narration or image don't match the emotion field, refine them to be consistent
 5. AWKWARD TRANSITIONS - scene endings that don't flow smoothly into the next scene
+   * CRITICAL: If significance scenes were inserted after pivotal moments, ensure scenes immediately AFTER significance scenes transition FROM the significance scene, not from the original pivotal scene
+   * Example: If Scene 17 is pivotal, Scene 18 is a significance scene (inserted), and Scene 19 follows - Scene 19's beginning should reference/flow from Scene 18, not Scene 17
+   * Significance scenes bridge pivotal moments and their consequences - scenes after them should acknowledge this bridge
 6. WEIRD OR UNNATURAL SENTENCES - phrases that sound odd when spoken, overly flowery language, vague statements
 7. REPETITIVE LANGUAGE - same words or phrases used too frequently
 8. CLARITY ISSUES - sentences that are confusing or hard to understand when spoken aloud
@@ -884,6 +1172,7 @@ IMPORTANT GUIDELINES:
 - DO NOT add film/camera directions - narration should be pure spoken words
 - ABSOLUTELY REMOVE any meta references to chapters, production elements, or the script structure itself
 - Write from the YouTuber's perspective - natural storytelling without referencing how it's organized
+- CRITICAL: For scenes mentioning "like", "subscribe", and "comment", you can improve them but MUST keep all three CTA elements in the narration
 
 Return the SAME JSON structure with refined scenes. Only change what needs improvement - don't rewrite everything.
 
@@ -903,18 +1192,18 @@ Respond with JSON array only (no markdown, no explanation):"""
         
         if not isinstance(refined_scenes, list):
             print(f"[REFINEMENT] WARNING: Expected array, got {type(refined_scenes)}. Using original scenes.")
-            return scenes
-        
-        if len(refined_scenes) != len(scenes):
-            print(f"[REFINEMENT] WARNING: Scene count changed ({len(scenes)} → {len(refined_scenes)}). Using original scenes.")
-            return scenes
-        
+            return scenes, {}
+         
+        if len(refined_scenes) != len(scenes_before_refinement):
+            print(f"[REFINEMENT] WARNING: Scene count changed ({len(scenes_before_refinement)} → {len(refined_scenes)}). Using original scenes.")
+            return scenes_before_refinement, {}
+         
         # Validate all required fields are present
         for i, scene in enumerate(refined_scenes):
             for field in ["id", "title", "narration", "image_prompt", "emotion", "year"]:
                 if field not in scene:
                     print(f"[REFINEMENT] WARNING: Scene {i+1} missing field '{field}'. Using original scenes.")
-                    return scenes
+                    return scenes, {}
         
         # Track changes made during refinement
         changes_stats = {
@@ -925,7 +1214,7 @@ Respond with JSON array only (no markdown, no explanation):"""
             "total_changes": 0
         }
         
-        for i, (original_scene, refined_scene) in enumerate(zip(scenes, refined_scenes)):
+        for i, (original_scene, refined_scene) in enumerate(zip(scenes_before_refinement, refined_scenes)):
             scene_changed = False
             
             # Check title changes
@@ -963,9 +1252,8 @@ Respond with JSON array only (no markdown, no explanation):"""
         print(f"[REFINEMENT]   • Image prompt changes: {changes_stats['image_prompt_changes']}")
         print(f"[REFINEMENT]   • Total field changes: {changes_stats['total_changes']}")
         
-        # Generate diff
+        # Generate diff comparing original scenes to final refined scenes (which may include significance scenes)
         diff_data = generate_refinement_diff(original_scenes, refined_scenes)
-        
         # Save diff to file if output path provided
         if diff_output_path:
             diff_output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1533,7 +1821,8 @@ Actual memorable moments from the documentary (use these to make description mor
 Generate JSON:
 {{
   "video_description": "YouTube description (500-800 words) - hook, highlights, key facts, call to action. SEO optimized. Reference specific compelling moments from the actual scenes above to make it accurate and engaging.",
-  "tags": "15-20 SEO tags separated by commas. Mix of: person's name, key topics, related figures, time periods, achievements, fields (e.g., 'Albert Einstein, physics, relativity, Nobel Prize, Germany, Princeton, E=mc2, quantum mechanics, genius, scientist, 20th century, biography, documentary')"
+  "tags": "15-20 SEO tags separated by commas. Mix of: person's name, key topics, related figures, time periods, achievements, fields (e.g., 'Albert Einstein, physics, relativity, Nobel Prize, Germany, Princeton, E=mc2, quantum mechanics, genius, scientist, 20th century, biography, documentary')",
+  "pinned_comment": "An engaging question or comment to pin below the video (1-2 sentences max). Should: spark discussion, ask a thought-provoking question about the person/story, create curiosity, encourage viewers to share their thoughts/opinions, be conversational and inviting. Examples: 'Which moment from their story surprised you most? Drop a comment below!', 'What do you think was their greatest challenge? Share your thoughts!', 'This story shows how one person can change everything. What impact do you want to make?'. Should feel authentic, not clickbaity - genuine curiosity about viewer perspectives."
 }}"""
 
         response = client.chat.completions.create(
@@ -1549,14 +1838,18 @@ Generate JSON:
         final_metadata = json.loads(clean_json_response(response.choices[0].message.content))
         video_description = final_metadata.get("video_description", "")
         tags = final_metadata.get("tags", "")
+        pinned_comment = final_metadata.get("pinned_comment", "")
         
         print(f"[METADATA] Description generated from {len(all_scenes)} scenes")
         print(f"[METADATA] Tags: {tags[:80]}..." if len(tags) > 80 else f"[METADATA] Tags: {tags}")
+        if pinned_comment:
+            print(f"[METADATA] Pinned comment: {pinned_comment}")
     else:
         print("\n[STEP 3] Skipping main video scene generation...")
         # Generate basic metadata if not generating main video
         video_description = ""
         tags = ""
+        pinned_comment = ""
     
     # Step 4: Generate Shorts (pass scene highlights if available)
     print("\n[STEP 4] Generating YouTube Shorts...")
@@ -1580,6 +1873,7 @@ Generate JSON:
             "tag_line": tag_line,
             "video_description": video_description,
             "tags": tags,
+            "pinned_comment": pinned_comment if config.generate_main else "",
             "thumbnail_description": thumbnail_description,
             "thumbnail_path": str(generated_thumb) if generated_thumb else None,
             "global_block": global_block,

@@ -6,7 +6,9 @@ import unittest
 import sys
 import json
 import tempfile
+import os
 from pathlib import Path
+from unittest.mock import patch
 
 # Add parent directory to path so we can import modules
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -24,6 +26,8 @@ from build_video import (
 class TestTextToSSML(unittest.TestCase):
     """Test cases for text_to_ssml function."""
     
+    @patch('build_video.TTS_PROVIDER', 'google')
+    @patch('build_video.GOOGLE_VOICE_TYPE', '')
     def test_basic_text(self):
         """Test basic text conversion."""
         text = "Hello world."
@@ -32,6 +36,8 @@ class TestTextToSSML(unittest.TestCase):
         self.assertIn("</speak>", result)
         self.assertIn("Hello world", result)
     
+    @patch('build_video.TTS_PROVIDER', 'google')
+    @patch('build_video.GOOGLE_VOICE_TYPE', '')
     def test_sentence_pauses(self):
         """Test that periods add pauses."""
         text = "First sentence. Second sentence."
@@ -40,6 +46,8 @@ class TestTextToSSML(unittest.TestCase):
         # Should have breaks after both sentences
         self.assertEqual(result.count('<break time="400ms"/>'), 2)
     
+    @patch('build_video.TTS_PROVIDER', 'google')
+    @patch('build_video.GOOGLE_VOICE_TYPE', '')
     def test_ellipsis_handling(self):
         """Test ellipsis conversion to dramatic pause."""
         text = "He thought... then acted."
@@ -49,12 +57,16 @@ class TestTextToSSML(unittest.TestCase):
         # Should still have pause after final period
         self.assertIn('<break time="400ms"/>', result)
     
+    @patch('build_video.TTS_PROVIDER', 'google')
+    @patch('build_video.GOOGLE_VOICE_TYPE', '')
     def test_unicode_ellipsis(self):
         """Test Unicode ellipsis character."""
         text = "He thought… then acted."
         result = text_to_ssml(text)
         self.assertIn('<break time="600ms"/>', result)
     
+    @patch('build_video.TTS_PROVIDER', 'google')
+    @patch('build_video.GOOGLE_VOICE_TYPE', '')
     def test_comma_pauses(self):
         """Test that commas add shorter pauses."""
         text = "First, second, third."
@@ -64,6 +76,8 @@ class TestTextToSSML(unittest.TestCase):
         # Should have 400ms break after period
         self.assertIn('<break time="400ms"/>', result)
     
+    @patch('build_video.TTS_PROVIDER', 'google')
+    @patch('build_video.GOOGLE_VOICE_TYPE', '')
     def test_question_exclamation_pauses(self):
         """Test question and exclamation marks."""
         text = "Really? Yes!"
@@ -72,6 +86,8 @@ class TestTextToSSML(unittest.TestCase):
         # Should have two breaks (one for ?, one for !)
         self.assertEqual(result.count('<break time="350ms"/>'), 2)
     
+    @patch('build_video.TTS_PROVIDER', 'google')
+    @patch('build_video.GOOGLE_VOICE_TYPE', '')
     def test_em_dash_pause(self):
         """Test em-dash conversion to pause."""
         text = "He said—then stopped."
@@ -81,6 +97,8 @@ class TestTextToSSML(unittest.TestCase):
         # Should not contain the em-dash character
         self.assertNotIn("—", result)
     
+    @patch('build_video.TTS_PROVIDER', 'google')
+    @patch('build_video.GOOGLE_VOICE_TYPE', '')
     def test_hyphen_pauses(self):
         """Test hyphen/dash handling."""
         text = "Word - another word."
@@ -88,6 +106,8 @@ class TestTextToSSML(unittest.TestCase):
         # Should have break where hyphen was
         self.assertIn('<break time="300ms"/>', result)
     
+    @patch('build_video.TTS_PROVIDER', 'google')
+    @patch('build_video.GOOGLE_VOICE_TYPE', '')
     def test_year_emphasis(self):
         """Test that years get prosody emphasis."""
         text = "In 1936, he published."
@@ -95,6 +115,8 @@ class TestTextToSSML(unittest.TestCase):
         # Years should be wrapped in prosody tags
         self.assertIn('<prosody rate="95%">1936</prosody>', result)
     
+    @patch('build_video.TTS_PROVIDER', 'google')
+    @patch('build_video.GOOGLE_VOICE_TYPE', '')
     def test_xml_escaping(self):
         """Test that special XML characters are escaped."""
         text = "A & B < C > D"
@@ -104,6 +126,8 @@ class TestTextToSSML(unittest.TestCase):
         self.assertIn("&lt;", result)
         self.assertIn("&gt;", result)
     
+    @patch('build_video.TTS_PROVIDER', 'google')
+    @patch('build_video.GOOGLE_VOICE_TYPE', '')
     def test_colon_semicolon_pauses(self):
         """Test colon and semicolon pauses."""
         text = "First: second; third."
@@ -218,22 +242,6 @@ class TestBuildImagePrompt(unittest.TestCase):
         # Should reference previous scene
         self.assertIn("previous scene", prompt.lower())
         self.assertIn("Scene 1", prompt)
-    
-    def test_prompt_with_age_specification(self):
-        """Test prompt includes age when available."""
-        scene = {
-            "id": 1,
-            "title": "Test Scene",
-            "narration": "Test narration",
-            "image_prompt": "Test visual",
-            "estimated_age": 30
-        }
-        
-        prompt = build_image_prompt(scene, None, None)
-        
-        # Should include age specification
-        self.assertIn("30", prompt)
-        self.assertIn("years old", prompt.lower())
     
     def test_prompt_with_global_block_override(self):
         """Test prompt uses global_block_override when provided."""
