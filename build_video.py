@@ -11,7 +11,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 from openai import OpenAI
-from moviepy import ImageClip, AudioFileClip, concatenate_videoclips
+from moviepy import ImageClip, AudioFileClip, concatenate_videoclips, AudioClip, CompositeAudioClip, concatenate_audioclips
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
@@ -42,6 +42,9 @@ GOOGLE_TTS_LANGUAGE = os.getenv("GOOGLE_TTS_LANGUAGE", "en-US")
 GOOGLE_TTS_SPEAKING_RATE = float(os.getenv("GOOGLE_TTS_SPEAKING_RATE", "0.92"))  # 0.25 to 4.0 (slightly slower for clarity)
 GOOGLE_TTS_PITCH = float(os.getenv("GOOGLE_TTS_PITCH", "-1.0"))  # -20.0 to 20.0 semitones (slightly deeper)
 GOOGLE_VOICE_TYPE = os.getenv("GOOGLE_VOICE_TYPE", "").lower()  # "chirp" or empty - chirp voices don't support SSML/prosody
+
+# Scene pause settings
+END_SCENE_PAUSE_LENGTH = float(os.getenv("END_SCENE_PAUSE_LENGTH", "0.15"))  # Pause length in seconds at end of each scene (default: 150ms)
 
 
 def get_emotion_prosody(emotion: str | None) -> dict:
@@ -785,11 +788,15 @@ def make_static_clip_with_audio(image_path: Path, audio_clip: AudioFileClip):
     - Scale image to cover output resolution.
     - Center & crop.
     - Match duration to audio.
+    - Add pause at the end (no audio, image continues).
     """
-    duration = audio_clip.duration
+    audio_duration = audio_clip.duration
+    pause_length = END_SCENE_PAUSE_LENGTH
+    total_duration = audio_duration + pause_length
     output_res = config.output_resolution
 
-    clip = ImageClip(str(image_path)).with_duration(duration)
+    # Create image clip with total duration (audio + pause)
+    clip = ImageClip(str(image_path)).with_duration(total_duration)
     base_w, base_h = clip.size
 
     # Scale so image fully covers the frame
@@ -809,7 +816,26 @@ def make_static_clip_with_audio(image_path: Path, audio_clip: AudioFileClip):
         height=output_res[1],
     )
 
-    return clip.with_audio(audio_clip).with_duration(duration)
+    # Create silent audio clip for the pause
+    # Use the same fps as the original audio
+    fps = audio_clip.fps
+    nchannels = audio_clip.nchannels if hasattr(audio_clip, 'nchannels') else 2
+    
+    # Create a function that returns silence (zeros)
+    def make_silence(t):
+        # Return array of zeros matching the number of channels
+        if nchannels == 1:
+            return [0.0]
+        else:
+            return [0.0, 0.0]
+    
+    silent_audio = AudioClip(make_silence, duration=pause_length, fps=fps)
+    
+    # Concatenate original audio with silent pause
+    # Use concatenate_audioclips for audio clips (not concatenate_videoclips)
+    extended_audio = concatenate_audioclips([audio_clip, silent_audio])
+
+    return clip.with_audio(extended_audio).with_duration(total_duration)
 
 
 def retry_call(name: str, func, *args, max_attempts: int = 3, base_delay: float = 2.0, **kwargs):

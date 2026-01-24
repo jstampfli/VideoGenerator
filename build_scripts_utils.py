@@ -5,6 +5,7 @@ Used by both build_script.py (historical documentaries) and build_script_lol.py 
 import json
 import base64
 import time
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -70,6 +71,7 @@ def get_shared_narration_style(is_short: bool = False) -> str:
     """Shared narration style instructions for both main video and shorts."""
     base_style = """NARRATION STYLE - CRITICAL:
 - PERSPECTIVE: Write from the YouTuber's perspective - this is YOUR script, YOU are telling the story to YOUR audience
+- THIRD PERSON NARRATION (CRITICAL): The narrator is speaking ABOUT the main character, not AS the main character. Always use third person (he/she/they) when referring to the main character. The narrator is telling the story of the person, not speaking in their voice. Examples: "Einstein publishes his paper..." NOT "I publish my paper..." or "We publish our paper..."
 - SIMPLE, CLEAR language. Write for a general audience.
 - AVOID flowery, artistic, or poetic language
 - AVOID vague phrases like "little did he know", "destiny awaited", "the world would never be the same"
@@ -115,14 +117,23 @@ def get_shared_narration_style(is_short: bool = False) -> str:
 
 def get_shared_scene_flow_instructions() -> str:
     """Shared scene-to-scene flow instructions."""
-    return """SCENE-TO-SCENE FLOW:
-- Flow naturally through the story using ACTUAL events and their consequences
-- Connect scenes through cause-and-effect, not artificial transitions
+    return """SCENE-TO-SCENE FLOW - SEAMLESS JOURNEY (CRITICAL):
+- Create a SEAMLESS JOURNEY through the video - scenes should feel CONNECTED, not like consecutive pieces of disjoint information (A and B and C)
+- Each scene should BUILD ON the previous scene - reference what came before naturally, show how events connect, demonstrate cause-and-effect
+- Avoid feeling like a list of facts - instead, create a flowing narrative where each scene grows from the last
+- Connect scenes through:
+  * Natural cause-and-effect: Show how one event leads to the next
+  * Continuation of themes: Reference recurring threads, motifs, or plot elements from earlier scenes
+  * Emotional progression: Build on the emotional journey established in previous scenes
+  * Logical progression: Each scene should feel like the natural next step in the story
+- Reference what came before when relevant - don't treat each scene as if it exists in isolation
+- Use WHY/WHAT interleaving to create natural connections - WHY scenes set up questions that WHAT scenes answer, creating a seamless flow
 - DO NOT use made-up temporal transitions like "Days later...", "Later that week...", "That afternoon...", "The next morning...", "Weeks passed...", "Meanwhile..."
-- Instead, let the story flow through what actually happened: "The paper is published. Physicists worldwide take notice."
+- Instead, let the story flow through what actually happened and how events connect: "The paper is published. Physicists worldwide take notice."
 - Each scene should feel inevitable because of what came before, not because of a transition phrase
-- Build narrative momentum through actual events, not filler words
-- CRITICAL: Each scene must cover DIFFERENT, NON-OVERLAPPING events. Do NOT repeat the same event, moment, or action that was already covered in a previous scene. Each scene should advance the story with NEW information, not re-tell what happened before. If an event was already described in detail, move to its consequences or the next significant event instead of describing it again."""
+- Build narrative momentum through actual events and their connections, not filler words
+- CRITICAL: Each scene must cover DIFFERENT, NON-OVERLAPPING events. Do NOT repeat the same event, moment, or action that was already covered in a previous scene. Each scene should advance the story with NEW information, not re-tell what happened before. If an event was already described in detail, move to its consequences or the next significant event instead of describing it again.
+- The goal: When scenes are strung together, they should feel like one continuous, connected story, not separate disconnected pieces."""
 
 
 def get_shared_examples(content_type: str = "historical") -> str:
@@ -191,7 +202,8 @@ def generate_thumbnail(prompt: str, output_path: Path, size: str = "1024x1024", 
                 model=IMG_MODEL,
                 prompt=current_prompt,
                 size=size,
-                n=1
+                n=1,
+                output_format="jpeg",
             )
             
             b64_data = resp.data[0].b64_json
@@ -248,7 +260,7 @@ def generate_refinement_diff(original_scenes: list[dict], refined_scenes: list[d
         }
         
         # Compare each field
-        fields_to_compare = ["title", "narration", "image_prompt", "emotion", "year"]
+        fields_to_compare = ["title", "narration", "image_prompt", "emotion", "year", "scene_type"]
         
         for field in fields_to_compare:
             original_value = original.get(field, '').strip() if isinstance(original.get(field), str) else original.get(field)
@@ -272,7 +284,7 @@ def generate_refinement_diff(original_scenes: list[dict], refined_scenes: list[d
     return diff_data
 
 
-def identify_pivotal_moments(scenes: list[dict], subject_name: str, chapter_context: str = None) -> list[dict]:
+def identify_pivotal_moments(scenes: list[dict], subject_name: str, chapter_context: str = None, excluded_scene_ids: set = None) -> list[dict]:
     """
     Identify 4-7 most pivotal moments from the scenes.
     
@@ -283,6 +295,7 @@ def identify_pivotal_moments(scenes: list[dict], subject_name: str, chapter_cont
         scenes: List of scene dictionaries
         subject_name: Name of the subject (person, character, region, etc.)
         chapter_context: Optional chapter context string
+        excluded_scene_ids: Set of scene IDs to exclude from pivotal moment identification (e.g., chapter 1 scenes, CTA scene)
         
     Returns:
         list of dicts with 'scene_id' and 'justification' (why it's pivotal)
@@ -299,12 +312,25 @@ def identify_pivotal_moments(scenes: list[dict], subject_name: str, chapter_cont
     if chapter_context:
         context_info = f"\nCHAPTER CONTEXT: {chapter_context}\n"
     
+    # Build exclusion note if there are excluded scenes
+    exclusion_note = ""
+    if excluded_scene_ids:
+        excluded_list = sorted(excluded_scene_ids)
+        exclusion_note = f"""
+CRITICAL EXCLUSION: Do NOT select scenes from chapter 1 or the CTA transition scene as pivotal moments.
+Excluded scene IDs: {excluded_list}
+These scenes are excluded because:
+- Chapter 1 is the hook/preview chapter and should not have significance scenes
+- The CTA scene is a transition scene and should not have significance scenes
+Only select pivotal moments from scenes AFTER chapter 1 and the CTA scene.
+"""
+    
     identification_prompt = f"""Analyze these scenes from a documentary about {subject_name} and identify the 4-7 MOST PIVOTAL MOMENTS.
 
 CURRENT SCENES (JSON):
 {scenes_json}
 {context_info}
-
+{exclusion_note}
 PIVOTAL MOMENTS are:
 - Major breakthroughs or discoveries that change everything
 - Turning points where the story shifts direction
@@ -334,7 +360,7 @@ Return 4-7 pivotal moments only. Be selective - only the moments that are truly 
         response = client.chat.completions.create(
             model=SCRIPT_MODEL,
             messages=[
-                {"role": "system", "content": "You are an expert story analyst who identifies pivotal moments in narratives. You understand what makes a moment truly significant and game-changing. Respond with valid JSON array only."},
+                {"role": "system", "content": "You are an expert story analyst who identifies pivotal moments in narratives. You understand what makes a moment truly significant and game-changing. CRITICAL: Do NOT select scenes from chapter 1 (the hook/preview chapter) or the CTA transition scene as pivotal moments - these scenes should not have significance scenes inserted after them. Only select pivotal moments from scenes after chapter 1 and the CTA scene. Respond with valid JSON array only."},
                 {"role": "user", "content": identification_prompt}
             ],
             temperature=0.5,
@@ -346,15 +372,20 @@ Return 4-7 pivotal moments only. Be selective - only the moments that are truly 
             print(f"[PIVOTAL MOMENTS] WARNING: Expected array, got {type(pivotal_moments)}. Returning empty list.")
             return []
         
-        # Validate that scene IDs exist
+        # Validate that scene IDs exist and are not excluded
         scene_ids = {scene.get('id') for scene in scenes}
+        if excluded_scene_ids is None:
+            excluded_scene_ids = set()
         valid_moments = []
         for moment in pivotal_moments:
             scene_id = moment.get('scene_id')
-            if scene_id in scene_ids:
-                valid_moments.append(moment)
-            else:
+            if scene_id not in scene_ids:
                 print(f"[PIVOTAL MOMENTS] WARNING: Scene ID {scene_id} not found in scenes, skipping.")
+                continue
+            if scene_id in excluded_scene_ids:
+                print(f"[PIVOTAL MOMENTS] WARNING: Scene ID {scene_id} is excluded (chapter 1 or CTA scene), skipping.")
+                continue
+            valid_moments.append(moment)
         
         return valid_moments[:4]  # Limit to 4 maximum
         
@@ -383,6 +414,8 @@ def generate_significance_scene(pivotal_scene: dict, next_scene: dict | None, su
     pivotal_id = pivotal_scene.get('id', 0)
     pivotal_title = pivotal_scene.get('title', '')
     pivotal_narration = pivotal_scene.get('narration', '')
+    pivotal_image_prompt = pivotal_scene.get('image_prompt', '')
+    age_instruction = f"\nCRITICAL - AGE: The pivotal scene's image_prompt is: \"{pivotal_image_prompt[:300]}...\". Extract the age information from this (look for phrases like \"26-year-old\", \"in his 40s\", \"at age 20\") and include the SAME age description in your image_prompt. The significance scene should show {subject_name} at the SAME age as in the pivotal moment."
     
     next_context = ""
     if next_scene:
@@ -398,9 +431,11 @@ def generate_significance_scene(pivotal_scene: dict, next_scene: dict | None, su
 PIVOTAL MOMENT (Scene {pivotal_id}):
 Title: "{pivotal_title}"
 Narration: "{pivotal_narration}"
+Image Prompt: "{pivotal_image_prompt}"
 
 WHY THIS MOMENT IS PIVOTAL:
 {justification}
+{age_instruction}
 {next_context}
 {context_info}
 
@@ -423,7 +458,8 @@ Respond with JSON:
 {{
   "title": "2-5 word title about the significance",
   "narration": "1-3 sentences explaining why this pivotal moment matters - its significance, impact, and what it changed. Make viewers FEEL the weight.",
-  "image_prompt": "Visual that reflects the significance and weight of this moment - contemplative, monumental, or reflective mood. Use the same year/time period as the pivotal moment. Match the visual style of the documentary. 16:9 cinematic",
+  "scene_type": "WHAT" - This scene explains the significance and delivers information about why the moment matters,
+  "image_prompt": "Visual that reflects the significance and weight of this moment - contemplative, monumental, or reflective mood. Use the same year/time period AND THE SAME AGE as the pivotal moment (extract age from pivotal scene's image_prompt above). Include {subject_name} at the exact same age as in the pivotal scene. Match the visual style of the documentary. 16:9 cinematic",
   "emotion": "contemplative" or "reflective" or "weighty" or "monumental" - the emotion should reflect the significance being explained,
   "year": Same as pivotal moment (use scene {pivotal_id}'s year)
 }}"""
@@ -446,10 +482,48 @@ Respond with JSON:
         # Ensure all required fields are present
         if 'title' not in scene:
             scene['title'] = "Why This Moment Matters"
+        if 'scene_type' not in scene:
+            scene['scene_type'] = "WHAT"  # Significance scenes explain why something matters - they deliver information
+        if scene.get('scene_type') not in ['WHY', 'WHAT']:
+            scene['scene_type'] = "WHAT"  # Default to WHAT if invalid
         if 'narration' not in scene:
             scene['narration'] = f"This moment changes everything - its significance reshapes the entire story."
         if 'image_prompt' not in scene:
-            scene['image_prompt'] = f"Reflective, contemplative scene showing the weight of this pivotal moment, {pivotal_scene.get('year', 'same period')}, 16:9 cinematic"
+            # Use the extracted age_phrase if available, otherwise construct from pivotal scene
+            if not age_phrase:
+                # Fallback: try to extract age from pivotal scene's image_prompt
+                pivotal_img_prompt = pivotal_scene.get('image_prompt', '')
+                if pivotal_img_prompt:
+                    age_match = re.search(rf'(\d+)[-\s]year[-\s]old\s+{re.escape(subject_name)}|{re.escape(subject_name)}[,\s]+(\d+)[-\s]year[-\s]old|{re.escape(subject_name)}\s+in\s+(?:his|her|their)\s+(\d+)s|{re.escape(subject_name)}\s+at\s+age\s+(\d+)', pivotal_img_prompt, re.IGNORECASE)
+                    if age_match:
+                        age_num = age_match.group(1) or age_match.group(2) or age_match.group(3) or age_match.group(4)
+                        if 'year-old' in age_match.group(0):
+                            age_phrase = f"{age_num}-year-old {subject_name}"
+                        elif 'in his' in age_match.group(0) or 'in her' in age_match.group(0):
+                            age_phrase = f"{subject_name} in his {age_num}s"
+                        else:
+                            age_phrase = f"{subject_name} at age {age_num}"
+            
+            # If still no age_phrase, just use subject name
+            if not age_phrase:
+                age_phrase = subject_name
+            
+            scene['image_prompt'] = f"Reflective, contemplative scene showing the weight of this pivotal moment, {age_phrase}, {pivotal_scene.get('year', 'same period')}, 16:9 cinematic"
+        
+        # Post-process: Ensure the generated image_prompt includes the age if it was extracted
+        if age_phrase and age_phrase != subject_name:
+            # Check if the generated image_prompt already includes age information
+            generated_prompt = scene.get('image_prompt', '')
+            if not re.search(rf'{re.escape(age_phrase.split()[0])}|{re.escape(subject_name)}.*\d+.*year|{re.escape(subject_name)}.*age\s+\d+', generated_prompt, re.IGNORECASE):
+                # Age not found in generated prompt, prepend or insert it
+                # Try to insert before the subject name or at the beginning
+                if subject_name.lower() in generated_prompt.lower():
+                    # Replace subject name with age_phrase
+                    generated_prompt = re.sub(rf'\b{re.escape(subject_name)}\b', age_phrase, generated_prompt, count=1, flags=re.IGNORECASE)
+                    scene['image_prompt'] = generated_prompt
+                else:
+                    # Insert age_phrase at the beginning
+                    scene['image_prompt'] = f"{age_phrase}, {generated_prompt}"
         if 'emotion' not in scene:
             scene['emotion'] = "contemplative"
         if 'year' not in scene:
@@ -463,16 +537,229 @@ Respond with JSON:
         return {
             "title": "Why This Moment Matters",
             "narration": f"This moment is pivotal because {justification[:100]}... It changes the trajectory of the entire story.",
+            "scene_type": "WHAT",  # Significance scenes explain why something matters - they deliver information
             "image_prompt": f"Reflective, contemplative scene showing the significance of this moment, {pivotal_scene.get('year', 'same period')}, 16:9 cinematic",
             "emotion": "contemplative",
             "year": pivotal_scene.get('year', 'same period')
         }
 
 
-def refine_scenes(scenes: list[dict], subject_name: str, is_short: bool = False, chapter_context: str = None, 
-                  diff_output_path: Path | None = None, subject_type: str = "person", skip_significance_scenes: bool = False) -> tuple[list[dict], dict]:
+def check_and_add_missing_storyline_scenes(scenes: list[dict], subject_name: str, chapter_context: str = None, max_scenes: int = None) -> list[dict]:
     """
-    Refine generated scenes by checking for awkward transitions, weird sentences, and improvements.
+    PASS 1: Check for hanging storylines and add scenes to wrap them up.
+    Uses LLM to identify storylines that were introduced but not resolved, then generates scenes to complete them.
+    
+    Args:
+        scenes: List of scene dictionaries
+        subject_name: Name of the subject
+        chapter_context: Optional chapter context string
+        max_scenes: Maximum number of scenes allowed (e.g., 5 for shorts). If None, no limit.
+        
+    Returns:
+        Updated list of scenes with missing storyline scenes added in correct chronological positions
+    """
+    
+    if not scenes or client is None:
+        return scenes
+    
+    # If we're already at or over the max, don't add more scenes
+    if max_scenes is not None and len(scenes) >= max_scenes:
+        return scenes
+    
+    scenes_json = json.dumps(scenes, indent=2, ensure_ascii=False)
+    
+    context_info = ""
+    if chapter_context:
+        context_info = f"\nCHAPTER CONTEXT: {chapter_context}\n"
+    
+    hanging_storylines_prompt = f"""Analyze these scenes from a documentary about {subject_name} and identify HANGING STORYLINES - storylines, plot threads, or events that were introduced but NOT resolved or completed.
+
+CURRENT SCENES (JSON):
+{scenes_json}
+{context_info}
+
+HANGING STORYLINES are:
+- Events or situations that were introduced but never shown to completion (e.g., engagement mentioned but marriage never shown, conflict introduced but resolution never shown, promise made but fulfillment never shown)
+- Plot threads that were set up but left hanging (e.g., relationship started but never developed, problem introduced but never solved, question raised but never answered)
+- Storylines from the chapter's key_events or plot_developments that were mentioned but not fully covered
+
+Your task: Identify ALL hanging storylines and determine:
+1. What storyline/event was introduced but not completed
+2. What scene(s) need to be added to complete it
+3. Where chronologically these scenes should be inserted (after which scene ID, based on year/timeline)
+
+For each hanging storyline, provide:
+- The scene ID where it was introduced
+- A description of what's missing (what needs to happen to complete the storyline)
+- The year when the completion should occur
+- Where to insert the new scene(s) (after which scene ID)
+
+Respond with JSON array:
+[
+  {{
+    "storyline_description": "Brief description of the hanging storyline (e.g., 'Engagement to Martha mentioned but marriage never shown')",
+    "introduced_in_scene_id": 5,
+    "missing_completion": "What needs to happen to complete this storyline (e.g., 'Show the marriage ceremony in 1886')",
+    "completion_year": 1886,
+    "insert_after_scene_id": 7,
+    "scene_type": "WHAT" or "WHY" - typically "WHAT" since these are completing storylines
+  }},
+  ...
+]
+
+If there are NO hanging storylines, return an empty array []."""
+
+    try:
+        response = client.chat.completions.create(
+            model=SCRIPT_MODEL,
+            messages=[
+                {"role": "system", "content": "You are an expert story analyst who identifies incomplete storylines in narratives. You understand narrative structure and ensure all introduced plot threads are resolved. Respond with valid JSON array only."},
+                {"role": "user", "content": hanging_storylines_prompt}
+            ],
+            temperature=0.5,
+        )
+        
+        hanging_storylines = json.loads(clean_json_response(response.choices[0].message.content))
+        
+        if not isinstance(hanging_storylines, list):
+            print(f"[STORYLINE CHECK] WARNING: Expected array, got {type(hanging_storylines)}. Skipping storyline completion.")
+            return scenes
+        
+        if not hanging_storylines:
+            print(f"[STORYLINE CHECK] ✓ No hanging storylines found")
+            return scenes
+        
+        print(f"[STORYLINE CHECK] Found {len(hanging_storylines)} hanging storyline(s) to complete")
+        
+        # Sort by insert_after_scene_id (descending) so we can insert from end to start
+        hanging_storylines.sort(key=lambda x: x.get('insert_after_scene_id', 0), reverse=True)
+        
+        updated_scenes = [scene.copy() for scene in scenes]
+        inserted_count = 0
+        
+        for storyline in hanging_storylines:
+            insert_after_id = storyline.get('insert_after_scene_id')
+            missing_completion = storyline.get('missing_completion', '')
+            completion_year = storyline.get('completion_year', '')
+            scene_type = storyline.get('scene_type', 'WHAT')
+            
+            # Find the scene to insert after
+            scene_id_to_index = {scene.get('id'): i for i, scene in enumerate(updated_scenes)}
+            if insert_after_id not in scene_id_to_index:
+                print(f"[STORYLINE CHECK]   WARNING: Scene ID {insert_after_id} not found, skipping storyline: {storyline.get('storyline_description', '')}")
+                continue
+            
+            insert_index = scene_id_to_index[insert_after_id]
+            scene_after = updated_scenes[insert_index]
+            scene_before = updated_scenes[insert_index - 1] if insert_index > 0 else None
+            
+            # Generate scene to complete the storyline
+            completion_prompt = f"""Generate a scene to complete a hanging storyline in a documentary about {subject_name}.
+
+HANGING STORYLINE:
+{storyline.get('storyline_description', '')}
+
+WHAT'S MISSING:
+{missing_completion}
+
+CONTEXT:
+- This scene should be inserted after Scene {insert_after_id}: "{scene_after.get('title', '')}"
+- Year: {completion_year}
+- Previous scene: {scene_before.get('title', '') if scene_before else 'N/A'}
+- Next scene: {scene_after.get('title', '')}
+
+YOUR TASK: Create a scene that completes this storyline naturally and chronologically.
+
+This scene should:
+- Complete the hanging storyline in a satisfying way
+- Flow naturally from the previous scene
+- Connect smoothly to the next scene
+- Be chronologically accurate (year: {completion_year})
+- Write from the YouTuber's perspective - natural storytelling
+- Use 1-2 sentences (brief but complete)
+
+Respond with JSON:
+{{
+  "title": "2-5 word title",
+  "narration": "1-2 sentences that complete the hanging storyline naturally",
+  "scene_type": "{scene_type}",
+  "image_prompt": "Visual description appropriate for this moment, including {subject_name}'s age at this time ({completion_year}), 16:9 cinematic",
+  "emotion": "Appropriate emotion for this moment",
+  "year": {completion_year}
+}}"""
+
+            try:
+                completion_response = client.chat.completions.create(
+                    model=SCRIPT_MODEL,
+                    messages=[
+                        {"role": "system", "content": "You create scenes that complete hanging storylines in documentaries. You ensure narrative completeness and chronological accuracy. Respond with valid JSON only."},
+                        {"role": "user", "content": completion_prompt}
+                    ],
+                    temperature=0.7,
+                )
+                
+                new_scene = json.loads(clean_json_response(completion_response.choices[0].message.content))
+                
+                if not isinstance(new_scene, dict):
+                    print(f"[STORYLINE CHECK]   WARNING: Expected dict for completion scene, got {type(new_scene)}. Skipping.")
+                    continue
+                
+                # Ensure required fields
+                if 'scene_type' not in new_scene:
+                    new_scene['scene_type'] = scene_type
+                if new_scene.get('scene_type') not in ['WHY', 'WHAT']:
+                    new_scene['scene_type'] = 'WHAT'
+                if 'year' not in new_scene:
+                    new_scene['year'] = completion_year
+                
+                # Mark as storyline completion scene
+                new_scene['is_storyline_completion'] = True
+                
+                # Set temporary ID (will be renumbered later)
+                new_scene['id'] = insert_after_id + 0.5
+                
+                # Check if we've reached the max scenes limit
+                if max_scenes is not None and len(updated_scenes) >= max_scenes:
+                    print(f"[STORYLINE CHECK]   • Reached max scenes limit ({max_scenes}), skipping remaining storylines")
+                    break
+                
+                # Insert the scene
+                updated_scenes.insert(insert_index + 1, new_scene)
+                inserted_count += 1
+                print(f"[STORYLINE CHECK]   • Added scene to complete: {storyline.get('storyline_description', '')[:60]}...")
+                
+            except Exception as e:
+                print(f"[STORYLINE CHECK]   WARNING: Failed to generate completion scene for storyline ({e}). Skipping.")
+                continue
+        
+        # Renumber all scene IDs
+        for i, scene in enumerate(updated_scenes):
+            scene['id'] = i + 1
+        
+        # Cap at max_scenes if specified
+        if max_scenes is not None and len(updated_scenes) > max_scenes:
+            print(f"[STORYLINE CHECK]   • Capping scenes at {max_scenes} (was {len(updated_scenes)})")
+            updated_scenes = updated_scenes[:max_scenes]
+            # Renumber again after capping
+            for i, scene in enumerate(updated_scenes):
+                scene['id'] = i + 1
+        
+        print(f"[STORYLINE CHECK] ✓ Added {inserted_count} scene(s) to complete hanging storylines (total: {len(updated_scenes)} scenes)")
+        return updated_scenes
+        
+    except Exception as e:
+        print(f"[STORYLINE CHECK] WARNING: Failed to check for hanging storylines ({e}). Continuing without storyline completion.")
+        return scenes
+
+
+def refine_scenes(scenes: list[dict], subject_name: str, is_short: bool = False, chapter_context: str = None, 
+                  diff_output_path: Path | None = None, subject_type: str = "person", skip_significance_scenes: bool = False,
+                  scenes_per_chapter: int = None) -> tuple[list[dict], dict]:
+    """
+    Refine generated scenes through THREE PASSES:
+    1. Check for hanging storylines and add scenes to complete them
+    2. Identify pivotal moments and add significance scenes
+    3. Final refinement for transitions, storytelling, and polish
     
     Args:
         scenes: List of scene dictionaries to refine
@@ -482,6 +769,7 @@ def refine_scenes(scenes: list[dict], subject_name: str, is_short: bool = False,
         diff_output_path: Optional path to save refinement diff JSON
         subject_type: Type of subject - "person", "character", "region", "topic", etc. (for prompt customization)
         skip_significance_scenes: If True, skip identifying pivotal moments and generating significance scenes (for top 10 lists, etc.)
+        scenes_per_chapter: Number of scenes per chapter (used to identify chapter 1 scenes and CTA scene to exclude from pivotal moments)
     
     Returns:
         tuple: (refined_scenes, diff_data) - The refined scenes and a diff dict showing what changed
@@ -495,15 +783,38 @@ def refine_scenes(scenes: list[dict], subject_name: str, is_short: bool = False,
     # Save original scenes for comparison
     original_scenes = [scene.copy() for scene in scenes]
     
-    # For main videos (not shorts), identify pivotal moments and insert significance scenes BEFORE refinement
+    # PASS 1: Check for hanging storylines and add completion scenes
+    # For shorts, cap at 5 scenes maximum
+    max_scenes_for_storylines = 5 if is_short else None
+    print(f"\n[REFINEMENT PASS 1] Checking for hanging storylines...")
+    if is_short:
+        print(f"[REFINEMENT PASS 1]   • Shorts mode: capping at {max_scenes_for_storylines} scenes maximum")
+    scenes_after_storyline_check = check_and_add_missing_storyline_scenes(scenes, subject_name, chapter_context, max_scenes=max_scenes_for_storylines)
+    
+    # PASS 2: For main videos (not shorts), identify pivotal moments and insert significance scenes
     # UNLESS skip_significance_scenes is True (e.g., for top 10 list videos)
-    scenes_before_refinement = [scene.copy() for scene in scenes]
+    scenes_after_pivotal = [scene.copy() for scene in scenes_after_storyline_check]
     if not is_short and not skip_significance_scenes:
+        print(f"\n[REFINEMENT PASS 2] Identifying pivotal moments and adding significance scenes...")
         print(f"[REFINEMENT] Identifying pivotal moments and adding significance scenes (before refinement)...")
-        pivotal_moments = identify_pivotal_moments(scenes_before_refinement, subject_name, chapter_context)
+        
+        # Exclude chapter 1 scenes and CTA scene from pivotal moment identification
+        excluded_scene_ids = set()
+        if scenes_per_chapter is not None:
+            # Chapter 1 scenes: scenes 1 to scenes_per_chapter
+            chapter_1_scene_ids = set(range(1, scenes_per_chapter + 1))
+            excluded_scene_ids.update(chapter_1_scene_ids)
+            
+            # CTA scene: scene right after chapter 1 (scenes_per_chapter + 1)
+            cta_scene_id = scenes_per_chapter + 1
+            excluded_scene_ids.add(cta_scene_id)
+            
+            print(f"[REFINEMENT]   • Excluding chapter 1 scenes (IDs {min(chapter_1_scene_ids)}-{max(chapter_1_scene_ids)}) and CTA scene (ID {cta_scene_id}) from pivotal moment identification")
+        
+        pivotal_moments = identify_pivotal_moments(scenes_after_pivotal, subject_name, chapter_context, excluded_scene_ids=excluded_scene_ids)
         
         if pivotal_moments:
-            print(f"[REFINEMENT]   • Identified {len(pivotal_moments)} pivotal moment(s)")
+            print(f"[REFINEMENT PASS 2]   • Identified {len(pivotal_moments)} pivotal moment(s)")
             
             # Sort pivotal moments by scene_id (descending) so we can insert from end to start
             # This way, scene IDs remain valid as we insert
@@ -517,17 +828,17 @@ def refine_scenes(scenes: list[dict], subject_name: str, is_short: bool = False,
                 justification = pivotal_moment.get('justification', '')
                 
                 # Rebuild scene_id_to_index map (indices may have shifted from previous insertions)
-                scene_id_to_index = {scene.get('id'): i for i, scene in enumerate(scenes_before_refinement)}
+                scene_id_to_index = {scene.get('id'): i for i, scene in enumerate(scenes_after_pivotal)}
                 
                 if pivotal_scene_id not in scene_id_to_index:
-                    print(f"[REFINEMENT]   WARNING: Pivotal scene ID {pivotal_scene_id} not found, skipping")
+                    print(f"[REFINEMENT PASS 2]   WARNING: Pivotal scene ID {pivotal_scene_id} not found, skipping")
                     continue
                 
                 pivotal_index = scene_id_to_index[pivotal_scene_id]
-                pivotal_scene = scenes_before_refinement[pivotal_index]
+                pivotal_scene = scenes_after_pivotal[pivotal_index]
                 
                 # Get next scene for context
-                next_scene = scenes_before_refinement[pivotal_index + 1] if pivotal_index + 1 < len(scenes_before_refinement) else None
+                next_scene = scenes_after_pivotal[pivotal_index + 1] if pivotal_index + 1 < len(scenes_after_pivotal) else None
                 
                 # Generate significance scene
                 significance_scene = generate_significance_scene(
@@ -546,24 +857,36 @@ def refine_scenes(scenes: list[dict], subject_name: str, is_short: bool = False,
                 
                 # Insert significance scene after pivotal moment
                 insert_index = pivotal_index + 1
-                scenes_before_refinement.insert(insert_index, significance_scene)
+                scenes_after_pivotal.insert(insert_index, significance_scene)
                 
                 inserted_scenes_count += 1
-                print(f"[REFINEMENT]   • Added significance scene after Scene {pivotal_scene_id}")
+                print(f"[REFINEMENT PASS 2]   • Added significance scene after Scene {pivotal_scene_id}")
             
             # Renumber all scene IDs to be sequential integers
             # Also ensure all scenes have is_significance_scene set (False for non-significance scenes)
-            for i, scene in enumerate(scenes_before_refinement):
+            for i, scene in enumerate(scenes_after_pivotal):
                 scene['id'] = i + 1
                 # Only set to False if not already set to True
                 if 'is_significance_scene' not in scene:
                     scene['is_significance_scene'] = False
             
-            print(f"[REFINEMENT]   • Inserted {inserted_scenes_count} significance scene(s)")
-            print(f"[REFINEMENT]   • Scene count before refinement: {len(scenes_before_refinement)} (was {len(original_scenes)})")
+            print(f"[REFINEMENT PASS 2]   • Inserted {inserted_scenes_count} significance scene(s)")
+            print(f"[REFINEMENT PASS 2]   • Scene count after pivotal scenes: {len(scenes_after_pivotal)} (was {len(original_scenes)})")
+    else:
+        scenes_after_pivotal = scenes_after_storyline_check
     
-    # Now refine ALL scenes (original + significance scenes if any were added)
-    print(f"[REFINEMENT] Refining {len(scenes_before_refinement)} scenes (including any significance scenes)...")
+    # PASS 3: Final refinement for transitions, storytelling, and polish
+    # For shorts, cap at 5 scenes maximum before final refinement
+    if is_short and len(scenes_after_pivotal) > 5:
+        print(f"[REFINEMENT PASS 3]   • Shorts mode: capping at 5 scenes before final refinement (was {len(scenes_after_pivotal)})")
+        scenes_after_pivotal = scenes_after_pivotal[:5]
+        # Renumber scenes
+        for i, scene in enumerate(scenes_after_pivotal):
+            scene['id'] = i + 1
+    
+    print(f"\n[REFINEMENT PASS 3] Final refinement: transitions, storytelling, and polish...")
+    scenes_before_refinement = [scene.copy() for scene in scenes_after_pivotal]
+    print(f"[REFINEMENT PASS 3] Refining {len(scenes_before_refinement)} scenes (including any storyline completion and significance scenes)...")
     
     # Identify significance scenes and scenes that follow them for transition checking
     significance_scene_info = ""
@@ -593,6 +916,22 @@ IMPORTANT: Scenes that come IMMEDIATELY AFTER significance scenes must transitio
     # Prepare scene context for the LLM
     scenes_json = json.dumps(scenes_before_refinement, indent=2, ensure_ascii=False)
     
+    # Build WHY/WHAT scene type summary for easy reference
+    scene_type_summary = ""
+    for scene in scenes_before_refinement:
+        scene_id = scene.get('id', '?')
+        scene_type = scene.get('scene_type', 'UNKNOWN')
+        scene_title = scene.get('title', 'Untitled')
+        if scene_type in ['WHY', 'WHAT']:
+            scene_type_summary += f"  - Scene {scene_id} (\"{scene_title}\"): {scene_type}\n"
+    
+    if scene_type_summary:
+        scene_type_summary = f"""
+WHY/WHAT SCENE TYPES (for reference):
+{scene_type_summary}
+Each scene's type is also indicated in the JSON below. Use this information to understand each scene's purpose when refining.
+"""
+    
     context_info = ""
     if chapter_context:
         context_info = f"\nCHAPTER CONTEXT: {chapter_context}\n"
@@ -611,47 +950,86 @@ IMPORTANT: Scenes that come IMMEDIATELY AFTER significance scenes must transitio
 
 CURRENT SCENES (JSON):
 {scenes_json}
+{scene_type_summary}
 {context_info}
 {significance_scene_info}
 
 CRITICAL: For scenes that contain requests to "like", "subscribe", and "comment" in the narration, you can refine and improve them (clarity, flow, naturalness) BUT you MUST preserve the like/subscribe/comment call-to-action. The CTA is essential and must remain in the narration - refine around it, don't remove it.
 
 YOUR TASK: Review these scenes and improve them. Look for:
-1. META REFERENCES (CRITICAL) - Remove ANY references to:
+1. WHY/WHAT SCENE PURPOSE (CRITICAL) - Each scene has a scene_type of either "WHY" or "WHAT". Understand and refine based on their purpose:
+   * WHY scenes should: frame mysteries, problems, questions, obstacles, counterintuitive information, secrets, or suggest there's something we haven't considered or don't understand the significance of. They create anticipation and make viewers want to see what comes next. CRITICAL FOR RETENTION - AVOID VIEWER CONFUSION: The biggest issue for retention is viewer confusion. WHY scenes MUST ensure the viewer knows WHAT IS HAPPENING in the story - provide clear context, establish the situation, and make sure viewers understand the basic facts before introducing mysteries or questions. Don't create confusion by being vague about what's happening.
+     - MOST IMPORTANT: Make sure viewers understand WHAT IS HAPPENING - provide clear context and establish the situation before introducing questions or mysteries
+     - If a WHY scene doesn't create curiosity or anticipation, strengthen it by adding: a mystery to solve, a problem to overcome, a counterintuitive fact, a secret revealed, or something unexpected
+     - If a WHY scene is confusing or vague about what's happening, strengthen it by adding: clear context about the situation, specific facts about what's happening, and clear establishment of the story state
+     - WHY scenes should hook viewers and make them anticipate the upcoming WHAT section, but NEVER at the expense of clarity about what's happening
+     - Examples of good WHY scenes that maintain clarity: "In 1905, Einstein faces an impossible challenge. But how did he manage to...?", "The secret that would change everything was hidden in plain sight. What he didn't know was...", "What nobody realized was that this moment would define everything. The risk was enormous because..."
+   * WHAT scenes should: deliver core content, solutions, actual information, and details. They satisfy the anticipation created by WHY sections. CRITICAL: Every WHAT scene must clearly communicate:
+     - WHAT is happening: The specific events, actions, or information
+     - WHY it's important: The significance, impact, or meaning of what's happening
+     - WHAT THE STAKES ARE: What can go wrong, what can go right, what's at risk, what success/failure means
+     - If a WHAT scene doesn't clearly communicate what/why/stakes, strengthen it by adding: specific facts about what's happening, explanation of why it matters, and clear stakes (risks, potential outcomes, consequences)
+     - WHAT scenes should answer questions, solve mysteries, or provide information that WHY sections set up
+     - Examples of good WHAT scenes: "He solved it by...", "The breakthrough came when...", "In 1905, Einstein published...", "Here's what actually happened...", "If this failed, he would lose everything...", "Success meant..."
+   * WHY scenes should: set up the upcoming WHAT section by establishing what is happening (MOST IMPORTANT - avoid confusion), what will happen next, why it matters, and what the stakes are (what can go wrong, what can go right, what's at risk)
+     - MOST IMPORTANT: Make sure viewers understand WHAT IS HAPPENING - provide clear context and establish the situation before introducing questions or mysteries
+     - If a WHY scene doesn't clearly establish what is happening (causing potential confusion), strengthen it by adding: clear context about the situation, specific facts about what's happening, and clear establishment of the story state
+     - If a WHY scene doesn't set up what/why/stakes for the next WHAT scene, strengthen it by adding: what will happen (or what question/problem needs addressing), why it matters, and what the stakes are
+     - WHY scenes should create anticipation by establishing the context that the WHAT scene will address, but NEVER at the expense of clarity about what's happening
+     - Examples of good WHY scenes that maintain clarity: "In 1905, Einstein faces an impossible challenge. But how did he manage to...?", "The secret that would change everything was hidden in plain sight. What he didn't know was...", "What nobody realized was that this moment would define everything. If he failed, everything would be lost...", "The risk was enormous because..."
+   * Ensure WHY sections set up what/why/stakes for upcoming WHAT sections - if a WHY scene doesn't establish what will happen, why it matters, and what the stakes are, refine it to do so
+   * Ensure WHAT sections clearly communicate what/why/stakes - if a WHAT scene doesn't clearly explain what's happening, why it's important, and what the stakes are, refine it to do so
+2. META REFERENCES (CRITICAL) - Remove ANY references to:
    * "Chapter" or "chapters" - viewers don't know about chapters
    * "In this video" or "In this documentary" or "In this story"
    * "As we'll see" or "Later in this video" or "As we continue"
    * "Let me tell you" or "I want to show you" - just narrate directly
    * Any production elements, scripts, outlines, prompts, or behind-the-scenes info
    * References like "this part" or "this section" or "here we see"
-2. OVERLAPPING/DUPLICATE EVENTS (CRITICAL) - If multiple scenes describe the SAME event, moment, or action in detail, consolidate or remove the duplicate. Each scene should cover DIFFERENT events. For example, if Scene 24 describes Antony's suicide attempt and being brought to the mausoleum, Scene 27 should NOT repeat this same event - instead it should focus on what happens NEXT (his death, Cleopatra's response, or the consequences). Remove overlapping content and ensure each scene advances the story with NEW information.
-3. MISSING EMOTIONAL ENGAGEMENT - If scenes read too factually without emotional weight, add:
+3. OVERLAPPING/DUPLICATE EVENTS (CRITICAL) - If multiple scenes describe the SAME event, moment, or action in detail, consolidate or remove the duplicate. Each scene should cover DIFFERENT events. For example, if Scene 24 describes Antony's suicide attempt and being brought to the mausoleum, Scene 27 should NOT repeat this same event - instead it should focus on what happens NEXT (his death, Cleopatra's response, or the consequences). Remove overlapping content and ensure each scene advances the story with NEW information.
+4. MISSING EMOTIONAL ENGAGEMENT - If scenes read too factually without emotional weight, add:
    * How events feel to the character (fear, determination, despair, triumph)
    * The emotional significance and personal stakes
    * Internal experience details (what they're thinking, feeling, fearing)
    * Physical sensations and reactions that create empathy
    * Make events feel significant by connecting them to human emotions
-4. EMOTION CONSISTENCY - Ensure the scene's "emotion" field matches the narration tone and image mood:
+5. EMOTION CONSISTENCY - Ensure the scene's "emotion" field matches the narration tone and image mood:
    * The emotion field should accurately reflect how the scene FEELS
    * Narration tone should match the emotion (e.g., "desperate" → urgent/anxious narration)
    * Image prompt mood should match the emotion (e.g., "desperate" → tense atmosphere in image)
    * If narration or image don't match the emotion field, refine them to be consistent
-5. AWKWARD TRANSITIONS - scene endings that don't flow smoothly into the next scene
+6. VIEWER CONFUSION (CRITICAL FOR RETENTION) - The biggest issue for retention is viewer confusion. Ensure WHY scenes make it clear what is happening:
+   * WHY scenes MUST ensure the viewer knows WHAT IS HAPPENING in the story - provide clear context, establish the situation, and make sure viewers understand the basic facts before introducing mysteries or questions
+   * If a WHY scene is confusing or vague about what's happening, strengthen it by adding: clear context about the situation, specific facts about what's happening, and clear establishment of the story state
+   * Don't create confusion by being vague - viewers should always understand what is happening in the story, even when mysteries or questions are being introduced
+   * Examples of clear WHY scenes: "In 1905, Einstein faces an impossible challenge. But how did he manage to...?" (clear context first, then question) vs. "But how did he manage to...?" (confusing - no context)
+7. SEAMLESS JOURNEY AND CONNECTIONS (CRITICAL) - Ensure scenes feel connected, not like consecutive pieces of disjoint information:
+   * Each scene should build on the previous scene - reference what came before naturally, show how events connect
+   * Scenes should feel like a flowing narrative where each scene grows from the last, not like separate disconnected facts
+   * If scenes feel disconnected or like they're just listing information (A and B and C), strengthen connections by:
+     - Referencing events, themes, or emotions from previous scenes
+     - Showing cause-and-effect relationships between scenes
+     - Continuing threads or plot elements established earlier
+     - Creating logical progression where each scene feels like the natural next step
+   * Use WHY/WHAT interleaving to create natural connections - WHY scenes should set up questions that the following WHAT scenes answer
+   * The goal: When scenes are strung together, they should feel like one continuous, connected story
+8. AWKWARD TRANSITIONS - scene endings that don't flow smoothly into the next scene
    * CRITICAL: If significance scenes were inserted after pivotal moments, ensure scenes immediately AFTER significance scenes transition FROM the significance scene, not from the original pivotal scene
    * Example: If Scene 17 is pivotal, Scene 18 is a significance scene (inserted), and Scene 19 follows - Scene 19's beginning should reference/flow from Scene 18, not Scene 17
    * Significance scenes bridge pivotal moments and their consequences - scenes after them should acknowledge this bridge
-6. WEIRD OR UNNATURAL SENTENCES - phrases that sound odd when spoken, overly flowery language, vague statements
-7. REPETITIVE LANGUAGE - same words or phrases used too frequently
-8. CLARITY ISSUES - sentences that are confusing or hard to understand when spoken aloud
-9. NARRATION STYLE VIOLATIONS - film directions ("Cut to:", "Smash cut—"), camera directions ("Close-up of", "Wide shot"), or production terminology
-10. MISSING CONNECTIONS - scenes that don't reference what came before when they should
-11. PACING ISSUES - scenes that feel rushed or too slow for the story beat
-12. FACTUAL INCONSISTENCIES - any contradictions or inaccuracies
+9. WEIRD OR UNNATURAL SENTENCES - phrases that sound odd when spoken, overly flowery language, vague statements
+10. REPETITIVE LANGUAGE - same words or phrases used too frequently
+11. CLARITY ISSUES - sentences that are confusing or hard to understand when spoken aloud
+12. NARRATION STYLE VIOLATIONS - film directions ("Cut to:", "Smash cut—"), camera directions ("Close-up of", "Wide shot"), or production terminology
+13. MISSING CONNECTIONS - scenes that don't reference what came before when they should
+14. PACING ISSUES - scenes that feel rushed or too slow for the story beat
+15. FACTUAL INCONSISTENCIES - any contradictions or inaccuracies
 
 IMPORTANT GUIDELINES:
 - Keep ALL factual information accurate
 - Maintain the same scene structure and IDs
-- Preserve all fields (id, title, narration, image_prompt, emotion, year, etc.)
+- Preserve all fields (id, title, narration, image_prompt, emotion, year, scene_type, etc.)
+- CRITICAL: Preserve the WHY/WHAT structure - maintain each scene's scene_type field (WHY or WHAT). WHY sections frame mysteries, problems, questions, obstacles, counterintuitive information, secrets, or suggest there's something we haven't considered or don't understand the significance of. WHY sections should set up what will happen, why it matters, and what the stakes are for upcoming WHAT sections. WHAT sections deliver content/solutions and must clearly communicate what is happening, why it's important, and what the stakes are. Ensure WHY sections create anticipation for upcoming WHAT sections by establishing what/why/stakes.
 - Keep the same tone and style
 - {pacing_note}
 - Only make changes that IMPROVE clarity, flow, or naturalness
@@ -669,7 +1047,7 @@ Respond with JSON array only (no markdown, no explanation):"""
         response = client.chat.completions.create(
             model=SCRIPT_MODEL,
             messages=[
-                {"role": "system", "content": "You are an expert editor who refines documentary narration for clarity, flow, and naturalness. You catch awkward transitions, weird sentences, style violations, and especially meta references (chapters, production elements, etc.). The narration should feel like natural storytelling from the YouTuber's perspective. Respond with valid JSON array only - same structure as input."},
+                {"role": "system", "content": "You are an expert editor who refines documentary narration for clarity, flow, and naturalness. CRITICAL FOR RETENTION - AVOID VIEWER CONFUSION: The biggest issue for retention is viewer confusion. WHY scenes MUST ensure the viewer knows WHAT IS HAPPENING in the story - provide clear context, establish the situation, and make sure viewers understand the basic facts before introducing mysteries or questions. Don't create confusion by being vague about what's happening. CRITICAL: Create a SEAMLESS JOURNEY through the video - scenes should feel CONNECTED, not like consecutive pieces of disjoint information (A and B and C). Each scene should build on the previous scene, reference what came before naturally, and show how events connect. You understand the WHY/WHAT paradigm: WHY scenes frame mysteries, problems, questions, obstacles, counterintuitive information, secrets, or suggest there's something we haven't considered - they create anticipation by setting up what will happen, why it matters, and what the stakes are for upcoming WHAT sections. WHY scenes MUST clearly establish what is happening (MOST IMPORTANT for retention) before introducing questions or mysteries. WHAT scenes deliver core content, solutions, and information - they satisfy anticipation by clearly communicating what is happening, why it's important, and what the stakes are (what can go wrong, what can go right, what's at risk). You catch awkward transitions, weird sentences, style violations, and especially meta references (chapters, production elements, etc.). You ensure scenes feel connected and build on each other, WHY scenes clearly establish what is happening (avoiding confusion) and set up what/why/stakes for upcoming WHAT sections, and WHAT scenes clearly communicate what/why/stakes. The narration should feel like natural storytelling from the YouTuber's perspective. Respond with valid JSON array only - same structure as input."},
                 {"role": "user", "content": refinement_prompt}
             ],
             temperature=0.3,  # Lower temperature for refinement - more focused changes
@@ -684,13 +1062,25 @@ Respond with JSON array only (no markdown, no explanation):"""
         if len(refined_scenes) != len(scenes_before_refinement):
             print(f"[REFINEMENT] WARNING: Scene count changed ({len(scenes_before_refinement)} → {len(refined_scenes)}). Using original scenes.")
             return scenes_before_refinement, {}
+        
+        # For shorts, cap at 5 scenes maximum after refinement
+        if is_short and len(refined_scenes) > 5:
+            print(f"[REFINEMENT PASS 3]   • Shorts mode: capping at 5 scenes after refinement (was {len(refined_scenes)})")
+            refined_scenes = refined_scenes[:5]
+            # Renumber scenes
+            for i, scene in enumerate(refined_scenes):
+                scene['id'] = i + 1
          
         # Validate all required fields are present
         for i, scene in enumerate(refined_scenes):
-            for field in ["id", "title", "narration", "image_prompt", "emotion", "year"]:
+            for field in ["id", "title", "narration", "image_prompt", "emotion", "year", "scene_type"]:
                 if field not in scene:
                     print(f"[REFINEMENT] WARNING: Scene {i+1} missing field '{field}'. Using original scenes.")
                     return scenes, {}
+            # Validate scene_type is valid
+            if scene.get('scene_type') not in ['WHY', 'WHAT']:
+                print(f"[REFINEMENT] WARNING: Scene {i+1} has invalid 'scene_type' value: {scene.get('scene_type')}. Using original scenes.")
+                return scenes, {}
         
         # Track changes made during refinement
         changes_stats = {

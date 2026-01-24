@@ -34,14 +34,14 @@ SCRIPTS_DIR = Path("scripts")
 # Generation settings (can be overridden via command line)
 class Config:
     # Main video settings
-    chapters = 7           # Number of outline chapters
+    chapters = 6           # Number of outline chapters
     scenes_per_chapter = 4  # Scenes per chapter (total = chapters * scenes_per_chapter)
     generate_main = True    # Whether to generate main video
     
     # Shorts settings
     num_shorts = 3              # Number of YouTube Shorts
-    short_chapters = 1          # Chapters per short (1 chapter: 5 scenes telling one complete story)
-    short_scenes_per_chapter = 5  # Scenes per chapter in shorts (complete story with natural conclusion)
+    short_chapters = 1          # Chapters per short (1 chapter: 3 scenes telling one complete story)
+    short_scenes_per_chapter = 3  # Scenes per chapter in shorts (complete story with natural conclusion)
     
     generate_thumbnails = True  # Whether to generate thumbnail images (main video)
     generate_short_thumbnails = False  # Whether to generate thumbnails for shorts (usually not needed)
@@ -68,9 +68,9 @@ identify_pivotal_moments = build_scripts_utils.identify_pivotal_moments
 generate_significance_scene = build_scripts_utils.generate_significance_scene
 
 # Wrapper for refine_scenes to maintain backward compatibility (person parameter)
-def refine_scenes(scenes: list[dict], person: str, is_short: bool = False, chapter_context: str = None, diff_output_path: Path | None = None) -> tuple[list[dict], dict]:
+def refine_scenes(scenes: list[dict], person: str, is_short: bool = False, chapter_context: str = None, diff_output_path: Path | None = None, scenes_per_chapter: int = None) -> tuple[list[dict], dict]:
     """Wrapper for refine_scenes from utils, maintaining backward compatibility with 'person' parameter."""
-    return build_scripts_utils.refine_scenes(scenes, person, is_short, chapter_context, diff_output_path, "person")
+    return build_scripts_utils.refine_scenes(scenes, person, is_short, chapter_context, diff_output_path, "person", skip_significance_scenes=False, scenes_per_chapter=scenes_per_chapter)
 
 
 # Shared prompt functions are now imported from build_scripts_utils
@@ -141,7 +141,7 @@ NARRATIVE STRUCTURE:
 - Each chapter should FLOW into the next with clear cause-and-effect
 - Plant SEEDS in early chapters that PAY OFF later (foreshadowing)
 - Build RECURRING THEMES that echo throughout (e.g., isolation, ambition, sacrifice)
-- Create emotional MOMENTUM that builds to a climax around chapter 7-8, then resolves
+- Create emotional MOMENTUM that builds to a climax around chapter 5, then resolves in chapter 6
 
 For each of the {config.chapters} chapters, provide:
 - "chapter_num": 1-{config.chapters}
@@ -157,9 +157,9 @@ For each of the {config.chapters} chapters, provide:
 STORY ARC REQUIREMENTS:
 1. Chapter 1 - THE HOOK: Start by introducing the person with context: "This is the story of [Name]..." or "Meet [Name]..." Then present a rapid-fire "trailer" of their MOST interesting facts, achievements, controversies, and dramatic moments that will be covered. Give viewers context for who we're talking about before diving into the highlights. Make viewers think "I NEED to know more." This is NOT chronological - it's a highlight reel that hooks the audience. End with something like "But how did they get here? Let's start from the beginning..."
 2. Chapters 2: Early life and rising action - origins, struggles, first successes, growing stakes
-3. Chapters 3-5: Peak conflict - major breakthroughs AND major crises
-4. Chapters 6: Resolution and consequences
-5. Chapter 7: Legacy and emotional conclusion that echoes the hook
+3. Chapters 3-4: Peak conflict - major breakthroughs AND major crises
+4. Chapter 5: Resolution and consequences
+5. Chapter 6: Legacy and emotional conclusion that echoes the hook
 
 CRITICAL:
 - Every chapter must CONNECT to what came before and set up what comes after
@@ -278,6 +278,7 @@ Respond with JSON:
   "id": 0,
   "title": "3-5 word transition title",
   "narration": "ONE sentence that transitions from the hook to the story beginning and includes CTA to like, subscribe, and comment. ~8-12 seconds when spoken.",
+  "scene_type": "WHY" or "WHAT" - This is a transition scene that creates interest and anticipation, so typically "WHY",
   "image_prompt": "Bright, happy, upbeat scene related to {person} - an inspiring moment, achievement, or positive milestone from their life that's visually engaging and makes viewers want to continue. 16:9 cinematic",
   "emotion": "upbeat",
   "year": "transition" or a relevant year from early in their story
@@ -300,6 +301,10 @@ Respond with JSON:
     # Ensure all required fields are present
     if 'title' not in scene:
         scene['title'] = "Back to the Beginning"
+    if 'scene_type' not in scene:
+        scene['scene_type'] = "WHY"  # Transition scenes are typically WHY since they create anticipation
+    if scene.get('scene_type') not in ['WHY', 'WHAT']:
+        scene['scene_type'] = "WHY"  # Default to WHY if invalid
     if 'narration' not in scene:
         scene['narration'] = "But how did it all begin? Before we dive into the story, make sure to like, subscribe, and comment below if you're enjoying this documentary."
     else:
@@ -360,7 +365,8 @@ Emotional Tone: {prev_chapter['emotional_tone']}
     elif is_hook_chapter:
         prev_context = """THIS IS THE HOOK CHAPTER - a rapid-fire "trailer" for the documentary.
 Tease the most shocking, interesting, and dramatic moments from their ENTIRE life.
-This is NOT chronological - jump around to the highlights that will make viewers stay.
+CRITICAL: Scenes should be in CHRONOLOGICAL ORDER by year - start with earlier moments and progress to later ones.
+Even though this is a preview, the scenes should flow chronologically to create a sense of progression.
 End with a transition like "But how did it all begin?" to set up Chapter 2."""
     else:
         prev_context = "This is the OPENING chapter - establish the story with impact!"
@@ -499,6 +505,38 @@ Dramatic Tension: {chapter['dramatic_tension']}
 Recurring Themes: {threads_str}
 Sets Up What Comes Next: {connects_to_next}
 
+WHY/WHAT PARADIGM (CRITICAL):
+- Every scene must be classified as either "WHY" or "WHAT"
+- WHY sections: Pull audience in by framing mysteries, problems, questions, obstacles, counterintuitive information, secrets, or suggesting there's something we haven't considered or don't understand the significance of. CRITICAL FOR RETENTION - AVOID VIEWER CONFUSION: The biggest issue for retention is viewer confusion. WHY sections MUST ensure the viewer knows WHAT IS HAPPENING in the story - provide clear context, establish the situation, and make sure viewers understand the basic facts before introducing mysteries or questions. Don't create confusion by being vague about what's happening. CRITICAL: WHY sections should set up the upcoming WHAT section by establishing:
+  * WHAT IS HAPPENING: Clearly establish what's happening in the story/situation so viewers aren't confused (this is the MOST IMPORTANT for retention)
+  * WHAT will happen next (or what question/problem needs to be addressed)
+  * WHY it matters (the importance or significance)
+  * WHAT THE STAKES ARE (what can go wrong, what can go right, what's at risk)
+  Examples (NOTE: Always establish what is happening FIRST, then introduce the mystery/question):
+  * Frame a mystery, problem, question, or obstacle: "In 1905, Einstein faces an impossible challenge. But how did he manage to...?" (clear context first) OR "The challenge seemed impossible. Everything was at stake. What obstacle would block his path?" (clear situation first)
+  * Hook with something counterintuitive: "In June 1858, Darwin receives a letter that changes everything. But here's what nobody expected..." (clear context first) OR "The opposite of what you'd think happened. This defied all logic..." (establish what happened first)
+  * Hook with a secret: "The secret that would change everything was hidden in plain sight. What he didn't know was..." (establish the secret exists first) OR "Hidden from view was something that would reshape history..." (clear that something exists)
+  * Suggest something we haven't considered or don't understand the significance of: "But there was something else at play that nobody realized..." (establish that something exists) OR "What nobody realized was that this moment would define everything. The true significance wouldn't be clear until..." (clear context about the moment first)
+  * Set up stakes: "If he failed, everything would be lost. Success would mean...", "The risk was enormous because..." (establish the situation first)
+  * Set up what comes next: Make viewers anticipate the upcoming WHAT section by establishing what is happening, what will happen next, why it matters, and what's at stake
+- WHAT sections: Deliver core content, solutions, actual information and details. CRITICAL: Every WHAT scene must clearly communicate:
+  * WHAT is happening: The specific events, actions, or information
+  * WHY it's important: The significance, impact, or meaning of what's happening
+  * WHAT THE STAKES ARE: What can go wrong, what can go right, what's at risk, what success/failure means
+  Examples:
+  * Provide solutions or answers: "He solved it by...", "The breakthrough came when...", "Here's what actually happened..."
+  * Give specific facts and details: "In 1905, Einstein published...", "The paper contained four revolutionary ideas..."
+  * Explain what happened: "The experiment proved...", "The result was...", "This led to..."
+  * Show stakes: "If this failed, he would lose everything...", "Success meant...", "The risk was enormous because..."
+  * Satisfy the anticipation created by WHY sections
+- INTERLEAVING STRATEGY:
+  * WHY sections should create anticipation for upcoming WHAT sections
+  * Can have multiple WHAT sections between WHY sections (flexible ratio)
+  * WHY sections should always set up what comes next
+  * Start with WHY to hook viewers, then deliver WHAT content
+  * Insert WHY sections strategically throughout to maintain interest
+- For hook chapters: Should be mostly WHY sections since they're previews that create interest
+
 EMOTION GENERATION (CRITICAL):
 - Each scene MUST include an "emotion" field - a single word or short phrase (e.g., "tense", "triumphant", "desperate", "contemplative", "exhilarating", "somber", "urgent", "defiant")
 - Base the emotion on: what the character is feeling at this moment, the dramatic tension, and the significance of the event
@@ -524,10 +562,19 @@ Generate EXACTLY {scenes_per_chapter} scenes that FLOW CONTINUOUSLY.
 {"HOOK CHAPTER - INTRODUCTION/PREVIEW (NOT A STORY):" if is_hook_chapter else "STORYTELLING - this is a STORY, not a timeline:"}
 {f'''CRITICAL: This is an INTRODUCTION/PREVIEW, not a story. It should quickly answer "Why should I watch this?"
 
+CHRONOLOGICAL ORDER (CRITICAL): Even though this is a preview, scenes MUST be in CHRONOLOGICAL ORDER by year - start with earlier moments and progress chronologically to later ones. This creates a sense of progression and makes the preview flow naturally.
+
+WHY/WHAT PARADIGM FOR HOOK CHAPTER:
+- This chapter should be MOSTLY WHY sections since it's a preview that creates interest
+- WHY sections should dominate: pose questions, create curiosity, build anticipation
+- Use WHAT sections sparingly - only to provide brief context or teasers
+- The goal is to hook viewers and make them want to watch the full story
+
 STRUCTURE:
 - SCENE 1 (COLD OPEN - FIRST 15 SECONDS): The first sentence MUST begin with: "Welcome to Human Footprints. Today we'll talk about {person} - {tag_line if tag_line else ''}." After this introduction, immediately transition to the MOST shocking, intriguing, or compelling moment or question. The tag_line should be short, catchy, and accurate (e.g., "the man who changed the world", "the codebreaker who saved millions", "the mind that rewrote physics"). For example: "Welcome to Human Footprints. Today we'll talk about Albert Einstein - the man who changed the world. In 1905, a 26-year-old patent clerk publishes a paper that will change everything. But first, he must survive the criticism of his own father." OR "Welcome to Human Footprints. Today we'll talk about Charles Darwin - the man who changed the way we understand life. The letter arrives in June 1858. Darwin's hands tremble as he reads his own theory in another man's words." The first 15 seconds are CRITICAL for YouTube - this is what viewers see in search/preview. Hook them immediately after the introduction.
 - SCENES 2-4: Rapid-fire preview of the most shocking, interesting, or impactful moments from their entire life - achievements, controversies, dramatic moments, surprising facts
-- NOT chronological - pick jaw-dropping highlights from any point in their life
+- Pick the most important and impactful moments to include in the preview
+- CRITICAL: Scenes MUST be in CHRONOLOGICAL ORDER by year - start with earlier moments and progress chronologically to later ones, even though this is a preview
 - Each scene should hook the viewer: "You'll discover how...", "You'll see the moment when...", "Wait until you hear about..."
 - FINAL SCENE: Natural bridge to the chronological story. DO NOT say "now the story rewinds" or "let's go back" or "rewind to the beginning" - that's awkward. Instead, use something like: "But it all started when...", "It begins with...", or simply start the chronological narrative: "[Birth year/early life context]. This is where our story begins."
 - Tone: Exciting, intriguing preview. Fast-paced like a trailer. NOT a narrative story.
@@ -555,12 +602,17 @@ NARRATION STYLE FOR INTRO:
 - Make viewers feel emotionally invested in HOW the story unfolds, not just WHAT happened - pull them into the character's emotional reality
 - CRITICAL: Each scene must cover DIFFERENT, NON-OVERLAPPING events. Do NOT repeat events already covered in previous scenes. If Scene X describes Event A in detail, Scene Y should NOT re-describe Event A - instead, move to Event A's consequences, what happens next, or a different event entirely. Review the recent scenes context to ensure you're not overlapping with what was already told.
 
-TRANSITIONS AND FLOW:
+TRANSITIONS AND FLOW - SEAMLESS JOURNEY (CRITICAL):
+- Create a SEAMLESS JOURNEY through the video - scenes should feel CONNECTED, not like consecutive pieces of disjoint information (A and B and C)
 - Scene 1 should TRANSITION smoothly from where the previous scene ended AND advance the story
+- Each scene should BUILD ON the previous scene - reference what came before naturally, show how events connect, demonstrate cause-and-effect
 - Each scene should CONNECT to the next through plot progression - what happens next in the story?
 - Reference recurring themes/motifs from earlier in the documentary through plot connections
+- Avoid feeling like a list of facts - instead, create a flowing narrative where each scene grows from the last
+- Use WHY/WHAT interleaving to create natural connections - WHY scenes set up questions that WHAT scenes answer, creating seamless flow
 - The final scene should SET UP what comes next by advancing or introducing plot threads
-- Think of scenes as story beats in a film, not separate fact segments'''
+- Think of scenes as story beats in a film, not separate fact segments
+- The goal: When scenes are strung together, they should feel like one continuous, connected story, not separate disconnected pieces'''
 }
 
 {"" if is_hook_chapter else get_shared_scene_flow_instructions()}
@@ -609,6 +661,7 @@ Respond with JSON array:
     "id": {start_id},
     "title": "Evocative 2-5 word title",
     "narration": "Vivid, dramatic narration...",
+    "scene_type": "WHY" or "WHAT" - MUST be one of these two values. WHY sections frame mysteries, problems, questions, obstacles, counterintuitive information, secrets, or suggest there's something we haven't considered or don't understand the significance of. CRITICAL FOR RETENTION: WHY sections MUST ensure the viewer knows WHAT IS HAPPENING in the story - provide clear context, establish the situation, and make sure viewers understand the basic facts before introducing mysteries or questions. WHY sections should set up what will happen next, why it matters, and what the stakes are for upcoming WHAT sections. WHAT sections deliver core content/solutions/information and must clearly communicate what is happening, why it's important, and what the stakes are (what can go wrong, what can go right, what's at risk).",
     "image_prompt": "Detailed visual description including {person}'s age and age-relevant appearance details, 16:9 cinematic",
     "emotion": "A single word or short phrase describing the scene's emotional tone (e.g., 'tense', 'triumphant', 'desperate', 'contemplative', 'exhilarating', 'somber', 'urgent', 'defiant'). Should match the chapter's emotional tone but be scene-specific based on what the character is feeling and the dramatic tension.",
     "year": YYYY or "YYYY-YYYY" or "around YYYY" (the specific year or year range when this scene takes place)
@@ -619,7 +672,7 @@ Respond with JSON array:
     response = client.chat.completions.create(
         model=SCRIPT_MODEL,
         messages=[
-            {"role": "system", "content": "You are a YouTuber creating documentary content. Write narration from YOUR perspective - this is YOUR script that YOU wrote. Tell the story naturally, directly to the viewer. Avoid any meta references to chapters, production elements, or the script structure. Focus on what actually happened, why it mattered, and how it felt. Respond with valid JSON array only."},
+            {"role": "system", "content": "You are a YouTuber creating documentary content. Write narration from YOUR perspective - this is YOUR script that YOU wrote. Tell the story naturally, directly to the viewer. CRITICAL: Use third person narration - you are speaking ABOUT the main character (he/she/they), not AS the main character. The narrator tells the story of the person, not in their voice. CRITICAL FOR RETENTION - AVOID VIEWER CONFUSION: The biggest issue for retention is viewer confusion. WHY sections MUST ensure the viewer knows WHAT IS HAPPENING in the story - provide clear context, establish the situation, and make sure viewers understand the basic facts before introducing mysteries or questions. Don't create confusion by being vague about what's happening. CRITICAL: Create a SEAMLESS JOURNEY through the video - scenes should feel CONNECTED, not like consecutive pieces of disjoint information (A and B and C). Each scene should build on the previous scene, reference what came before naturally, and show how events connect. CRITICAL: Every scene must be classified as WHY or WHAT. WHY sections frame mysteries, problems, questions, obstacles, counterintuitive information, secrets, or suggest there's something we haven't considered or don't understand the significance of. WHY sections MUST clearly establish what is happening (MOST IMPORTANT for retention) before introducing questions or mysteries. WHY sections should set up what will happen next, why it matters, and what the stakes are for upcoming WHAT sections. WHAT sections deliver core content, solutions, and information. Every WHAT scene must clearly communicate: what is happening, why it's important, and what the stakes are (what can go wrong, what can go right, what's at risk). Interleave WHY and WHAT sections strategically - WHY sections should create anticipation for upcoming WHAT sections by establishing what/why/stakes, but NEVER at the expense of clarity about what's happening. Use WHY/WHAT interleaving to create natural connections. For hook chapters, use mostly WHY sections. Avoid any meta references to chapters, production elements, or the script structure. Focus on what actually happened, why it mattered, and how it felt. Respond with valid JSON array only."},
             {"role": "user", "content": scene_prompt}
         ],
         temperature=0.85,
@@ -636,6 +689,10 @@ Respond with JSON array:
             raise ValueError(f"Scene {i+1} missing required 'year' field")
         if 'emotion' not in scene:
             raise ValueError(f"Scene {i+1} missing required 'emotion' field")
+        if 'scene_type' not in scene:
+            raise ValueError(f"Scene {i+1} missing required 'scene_type' field")
+        if scene.get('scene_type') not in ['WHY', 'WHAT']:
+            raise ValueError(f"Scene {i+1} has invalid 'scene_type' value: {scene.get('scene_type')}. Must be 'WHY' or 'WHAT'")
     
     return scenes
 
@@ -700,17 +757,17 @@ This Short tells ONE CONTINUOUS STORY from their life - not disconnected facts, 
 
 IMPORTANT: This must be a COMPLETELY DIFFERENT story from any previous shorts. Choose a distinct incident, event, moment, or period from their life that hasn't been covered yet. For example, if a previous short covered their early breakthrough in 1905, choose a different story like a later conflict, a different achievement from another period, a personal relationship story, or a different challenge they faced. Each short should feel like a standalone story from a different part of their life.
 
-This Short has EXACTLY 5 scenes that tell ONE COMPLETE STORY with depth and detail. The final scene should be a NATURAL CONCLUSION, not a hook/cliffhanger.
+This Short has EXACTLY 3 scenes that tell ONE COMPLETE STORY with depth and detail. The final scene should be a NATURAL CONCLUSION, not a hook/cliffhanger.
 
-STRUCTURE (5 scenes):
+STRUCTURE (3 scenes):
 1. SCENE 1: Start the story. Set up a specific incident, moment, or event from their life. Give context and specific details. Hook the viewer with the opening of the story.
-2. SCENE 2: Build the story. Show what happened next, the development, or how the situation evolved. Add more depth and specific details.
-3. SCENE 3: Escalate the story. Show the consequences, conflicts, challenges, or complications. This is the rising action - make it engaging and detailed.
-4. SCENE 4: Continue building. Show how the story develops further, what the person does, what happens, and the stakes involved. Add emotional depth.
-5. SCENE 5: NATURAL CONCLUSION. This should provide a satisfying ending to THIS story. Show what happened as a result, how it resolved, or what the outcome was. Do NOT end with a cliffhanger like "But what happened next would change everything..." Instead, provide a natural conclusion that makes the viewer feel the story is complete: "The paper is published in 1859. It sells out in one day. Darwin's theory of evolution becomes the foundation of modern biology." or "This discovery earns him the Nobel Prize. But more importantly, it validates a lifetime of work." The story should feel complete and satisfying on its own.
+2. SCENE 2: Build and escalate the story. Show what happened next, the development, consequences, conflicts, challenges, or complications. This is the rising action - make it engaging and detailed. Add emotional depth.
+3. SCENE 3: NATURAL CONCLUSION. This should provide a satisfying ending to THIS story. Show what happened as a result, how it resolved, or what the outcome was. Do NOT end with a cliffhanger like "But what happened next would change everything..." Instead, provide a natural conclusion that makes the viewer feel the story is complete: "The paper is published in 1859. It sells out in one day. Darwin's theory of evolution becomes the foundation of modern biology." or "This discovery earns him the Nobel Prize. But more importantly, it validates a lifetime of work." The story should feel complete and satisfying on its own.
 
 CRITICAL RULES:
 - Tell ONE continuous story - scenes must flow like a mini-narrative, not separate facts
+- Create a SEAMLESS JOURNEY where each scene builds on the previous one - scenes should feel CONNECTED, not like consecutive pieces of disjoint information (A and B and C)
+- Each scene should reference what came before naturally and show how events connect
 - Every scene must contain SPECIFIC, INTERESTING FACTS
 - NO vague statements or filler
 - NO artistic/poetic language
@@ -723,10 +780,10 @@ Provide JSON:
   "short_title": "VIRAL CLICKBAIT title (max 50 chars). Use power words: SHOCKING, SECRET, EXPOSED, INSANE, UNBELIEVABLE, MIND-BLOWING, CRAZY, BANNED, FORBIDDEN. Create curiosity gaps. Ask questions. Use numbers. Make bold claims. Examples: 'The SHOCKING Secret Nobody Knows', 'How He Did the IMPOSSIBLE', 'This Changed EVERYTHING', 'The Dark Truth Exposed', 'You WON'T Believe This'. Must make viewers NEED to watch immediately while staying accurate.",
   "short_description": "YouTube description (100 words) with hashtags",
   "tags": "10-15 SEO tags comma-separated",
-  "thumbnail_prompt": "CLICKBAIT thumbnail for mobile (9:16 vertical): EXTREME close-up or dramatic composition, intense emotional expression (not neutral - show passion/conflict/shock), HIGH CONTRAST dramatic lighting (chiaroscuro), bold eye-catching colors (reds/yellows for urgency), subject in MOMENT OF IMPACT or dramatic pose, symbolic elements representing the story's peak moment, movie-poster energy, optimized for small mobile screens - must grab attention instantly when scrolling",
+  "thumbnail_prompt": "WHY SCENE THUMBNAIL for mobile (9:16 vertical) - MAXIMIZE CTR: Function as a WHY scene that creates curiosity. Visually frame a MYSTERY, PROBLEM, QUESTION, or SECRET that makes viewers NEED to watch. Show counterintuitive elements or hidden truths. EXTREME close-up or dramatic composition, intense emotional expression showing REALIZATION/SHOCK/DISCOVERY (not neutral - show the moment of revelation), HIGH CONTRAST dramatic lighting (chiaroscuro), bold eye-catching colors (reds/yellows for urgency/mystery), subject in MOMENT OF DISCOVERY or CONFRONTATION, symbolic elements suggesting secrets or hidden meaning, visual curiosity gaps that make viewers ask 'What is this about?', movie-poster thriller/mystery energy, optimized for mobile scrolling - must instantly create curiosity when tiny in feed.",
   "hook_fact": "The opening fact that starts the story (for context, but we start with the story, not just the fact)",
   "story_angle": "What specific continuous story/incident are we telling (ONE narrative arc)",
-  "key_facts": ["5-8 specific facts to include across the 5 scenes that tell ONE complete story with depth"]
+  "key_facts": ["3-5 specific facts to include across the 3 scenes that tell ONE complete story with depth"]
 }}"""
 
     response = client.chat.completions.create(
@@ -743,7 +800,7 @@ Provide JSON:
 
 
 def generate_short_scenes(person: str, short_outline: dict, birth_year: int | None = None, death_year: int | None = None) -> list[dict]:
-    """Generate all 5 scenes for a YouTube Short (complete story with natural conclusion).
+    """Generate all 3 scenes for a YouTube Short (complete story with natural conclusion).
     
     Each scene must include a "year" field indicating when it takes place.
     The LLM includes age and age-relevant details in the image_prompt.
@@ -752,7 +809,7 @@ def generate_short_scenes(person: str, short_outline: dict, birth_year: int | No
     key_facts = short_outline.get('key_facts', [])
     facts_str = "\n".join(f"• {fact}" for fact in key_facts)
     
-    scene_prompt = f"""Write 5 scenes for a YouTube Short about {person}.
+    scene_prompt = f"""Write 3 scenes for a YouTube Short about {person}.
 
 TITLE: "{short_outline.get('short_title', '')}"
 STORY ANGLE: {short_outline.get('story_angle', '')}
@@ -760,7 +817,38 @@ STORY ANGLE: {short_outline.get('story_angle', '')}
 KEY FACTS TO USE:
 {facts_str}
 
-CRITICAL: This short tells ONE COMPLETE, CONTINUOUS STORY from {person}'s life with DEPTH and DETAIL. The scenes must flow like a mini-narrative, not disconnected facts. This should be high-quality content that is enjoyable on its own.
+CRITICAL: This short tells ONE COMPLETE, CONTINUOUS STORY from {person}'s life with DEPTH and DETAIL. The scenes must flow like a mini-narrative, not disconnected facts. Create a SEAMLESS JOURNEY where each scene builds on the previous one - scenes should feel CONNECTED, not like consecutive pieces of disjoint information (A and B and C). Each scene should reference what came before naturally and show how events connect. This should be high-quality content that is enjoyable on its own.
+
+WHY/WHAT PARADIGM (CRITICAL):
+- Every scene must be classified as either "WHY" or "WHAT"
+- WHY sections: Pull audience in by framing mysteries, problems, questions, obstacles, counterintuitive information, secrets, or suggesting there's something we haven't considered or don't understand the significance of. CRITICAL FOR RETENTION - AVOID VIEWER CONFUSION: The biggest issue for retention is viewer confusion. WHY sections MUST ensure the viewer knows WHAT IS HAPPENING in the story - provide clear context, establish the situation, and make sure viewers understand the basic facts before introducing mysteries or questions. Don't create confusion by being vague about what's happening. CRITICAL: WHY sections should set up the upcoming WHAT section by establishing:
+  * WHAT IS HAPPENING: Clearly establish what's happening in the story/situation so viewers aren't confused (this is the MOST IMPORTANT for retention)
+  * WHAT will happen next (or what question/problem needs to be addressed)
+  * WHY it matters (the importance or significance)
+  * WHAT THE STAKES ARE (what can go wrong, what can go right, what's at risk)
+  Examples (NOTE: Always establish what is happening FIRST, then introduce the mystery/question):
+  * Frame a mystery, problem, question, or obstacle: "In 1905, Einstein faces an impossible challenge. But how did he manage to...?" (clear context first) OR "The challenge seemed impossible. Everything was at stake. What obstacle would block his path?" (clear situation first)
+  * Hook with something counterintuitive: "In June 1858, Darwin receives a letter that changes everything. But here's what nobody expected..." (clear context first) OR "The opposite of what you'd think happened. This defied all logic..." (establish what happened first)
+  * Hook with a secret: "The secret that would change everything was hidden in plain sight. What he didn't know was..." (establish the secret exists first) OR "Hidden from view was something that would reshape history..." (clear that something exists)
+  * Suggest something we haven't considered or don't understand the significance of: "But there was something else at play that nobody realized..." (establish that something exists) OR "What nobody realized was that this moment would define everything. The true significance wouldn't be clear until..." (clear context about the moment first)
+  * Set up stakes: "If he failed, everything would be lost. Success would mean...", "The risk was enormous because..." (establish the situation first)
+  * Set up what comes next: Make viewers anticipate the upcoming WHAT section by establishing what is happening, what will happen next, why it matters, and what's at stake
+- WHAT sections: Deliver core content, solutions, actual information and details. CRITICAL: Every WHAT scene must clearly communicate:
+  * WHAT is happening: The specific events, actions, or information
+  * WHY it's important: The significance, impact, or meaning of what's happening
+  * WHAT THE STAKES ARE: What can go wrong, what can go right, what's at risk, what success/failure means
+  Examples:
+  * Provide solutions or answers: "He solved it by...", "The breakthrough came when...", "Here's what actually happened..."
+  * Give specific facts and details: "In 1905, Einstein published...", "The paper contained four revolutionary ideas..."
+  * Explain what happened: "The experiment proved...", "The result was...", "This led to..."
+  * Show stakes: "If this failed, he would lose everything...", "Success meant...", "The risk was enormous because..."
+  * Satisfy the anticipation created by WHY sections
+- INTERLEAVING STRATEGY:
+  * WHY sections should create anticipation for upcoming WHAT sections
+  * Can have multiple WHAT sections between WHY sections (flexible ratio)
+  * WHY sections should always set up what comes next
+  * Start with WHY to hook viewers, then deliver WHAT content
+  * Insert WHY sections strategically throughout to maintain interest
 
 EMOTION GENERATION (CRITICAL):
 - Each scene MUST include an "emotion" field - a single word or short phrase (e.g., "tense", "triumphant", "desperate", "contemplative", "exhilarating", "somber", "urgent", "defiant")
@@ -771,12 +859,10 @@ EMOTION GENERATION (CRITICAL):
   * If emotion is "contemplative" - narration should be slower, reflective; image should show quiet mood, thoughtful expressions
 - The emotion field will be used to ensure narration tone and image mood match the emotional reality of the moment
 
-STRUCTURE (exactly 5 scenes):
+STRUCTURE (exactly 3 scenes):
 1. SCENE 1: Start the story. Set up a specific incident, moment, or event. Give context and specific details. Hook the viewer by showing how this moment FELT - what the character was thinking, fearing, or hoping. Make them feel the significance.
-2. SCENE 2: Build the story. Show what happened next, the development, or how the situation evolved. Add more depth and specific details about who was involved, what was said, what the stakes were. Include emotional details - how does this feel? What's at stake emotionally?
-3. SCENE 3: Escalate the story. Show the consequences, conflicts, challenges, or complications. This is the rising action - make it engaging and detailed. Show what made this moment difficult or significant EMOTIONALLY - what fears, hopes, or pressures does the character face?
-4. SCENE 4: Continue building. Show how the story develops further, what the person does, what happens, and the stakes involved. Add emotional depth and human details - show relationships, motivations, and the personal impact. What does this mean to them personally? How do they FEEL?
-5. SCENE 5: NATURAL CONCLUSION. This should provide a satisfying ending to THIS story. Show what happened as a result, how it resolved, or what the outcome was. Include the emotional significance - what did this mean to the character? Examples of good conclusions:
+2. SCENE 2: Build and escalate the story. Show what happened next, the development, consequences, conflicts, challenges, or complications. This is the rising action - make it engaging and detailed. Show what made this moment difficult or significant EMOTIONALLY - what fears, hopes, or pressures does the character face? Add emotional depth and human details - show relationships, motivations, and the personal impact.
+3. SCENE 3: NATURAL CONCLUSION. This should provide a satisfying ending to THIS story. Show what happened as a result, how it resolved, or what the outcome was. Include the emotional significance - what did this mean to the character? Examples of good conclusions:
    - "The paper is published in 1859. It sells out in one day. Darwin's theory of evolution becomes the foundation of modern biology."
    - "This discovery earns him the Nobel Prize. But more importantly, it validates a lifetime of work and changes how scientists think about the world."
    - "The letter reaches London in June. Within weeks, the scientific community is divided. Some call it heresy. Others call it genius. But Darwin's idea has been unleashed."
@@ -815,17 +901,16 @@ IMAGE PROMPTS:
   * Include period-accurate clothing, hairstyle, and any age-relevant details about their appearance at that specific age
 - End with ", 9:16 vertical"
 
-Respond with JSON array of exactly 5 scenes:
+Respond with JSON array of exactly 3 scenes:
 [
-  {{"id": 1, "title": "2-4 words", "narration": "...", "image_prompt": "... (include {person}'s age and age-relevant details)", "emotion": "A single word or short phrase (e.g., 'tense', 'triumphant', 'desperate', 'contemplative')", "year": "YYYY or YYYY-YYYY"}},
-  {{"id": 2, "title": "...", "narration": "...", "image_prompt": "... (include {person}'s age and age-relevant details)", "emotion": "A single word or short phrase describing the scene's emotional tone", "year": "YYYY or YYYY-YYYY"}},
-  {{"id": 3, "title": "...", "narration": "...", "image_prompt": "... (include {person}'s age and age-relevant details)", "emotion": "A single word or short phrase describing the scene's emotional tone", "year": "YYYY or YYYY-YYYY"}},
-  {{"id": 4, "title": "...", "narration": "...", "image_prompt": "... (include {person}'s age and age-relevant details)", "emotion": "A single word or short phrase describing the scene's emotional tone", "year": "YYYY or YYYY-YYYY"}},
-  {{"id": 5, "title": "...", "narration": "...", "image_prompt": "... (include {person}'s age and age-relevant details)", "emotion": "A single word or short phrase describing the scene's emotional tone", "year": "YYYY or YYYY-YYYY"}}
+  {{"id": 1, "title": "2-4 words", "narration": "...", "scene_type": "WHY" or "WHAT" - MUST be one of these two values. WHY sections frame mysteries, problems, questions, obstacles, counterintuitive information, secrets, or suggest there's something we haven't considered. CRITICAL FOR RETENTION: WHY sections MUST ensure the viewer knows WHAT IS HAPPENING in the story - provide clear context, establish the situation, and make sure viewers understand the basic facts before introducing mysteries or questions. WHY sections should set up what will happen next, why it matters, and what the stakes are for upcoming WHAT sections. WHAT sections deliver core content/solutions/information and must clearly communicate what is happening, why it's important, and what the stakes are (what can go wrong, what can go right, what's at risk).", "image_prompt": "... (include {person}'s age and age-relevant details)", "emotion": "A single word or short phrase (e.g., 'tense', 'triumphant', 'desperate', 'contemplative')", "year": "YYYY or YYYY-YYYY"}},
+  {{"id": 2, "title": "...", "narration": "...", "scene_type": "WHY" or "WHAT", "image_prompt": "... (include {person}'s age and age-relevant details)", "emotion": "A single word or short phrase describing the scene's emotional tone", "year": "YYYY or YYYY-YYYY"}},
+  {{"id": 3, "title": "...", "narration": "...", "scene_type": "WHY" or "WHAT", "image_prompt": "... (include {person}'s age and age-relevant details)", "emotion": "A single word or short phrase describing the scene's emotional tone", "year": "YYYY or YYYY-YYYY"}}
 ]
 
 IMPORTANT: Each scene must include:
 - "year" field indicating when the scene takes place
+- "scene_type" field - MUST be "WHY" or "WHAT". WHY sections frame mysteries, problems, questions, obstacles, counterintuitive information, secrets, or suggest there's something we haven't considered or don't understand the significance of. CRITICAL FOR RETENTION: WHY sections MUST ensure the viewer knows WHAT IS HAPPENING in the story - provide clear context, establish the situation, and make sure viewers understand the basic facts before introducing mysteries or questions. WHY sections should set up what will happen next, why it matters, and what the stakes are for upcoming WHAT sections. WHAT sections deliver core content/solutions/information and must clearly communicate what is happening, why it's important, and what the stakes are (what can go wrong, what can go right, what's at risk).
 - "emotion" field - a single word or short phrase (e.g., "tense", "triumphant", "desperate", "contemplative") that describes the scene's emotional tone. Base this on what the character is feeling, the dramatic tension, and the significance of the moment. The narration tone and image mood should match this emotion.
 - The image_prompt MUST include {person}'s age at that time, age-relevant appearance details, and reflect the scene's emotion in lighting, composition, and mood.
 ]"""
@@ -833,7 +918,7 @@ IMPORTANT: Each scene must include:
     response = client.chat.completions.create(
         model=SCRIPT_MODEL,
         messages=[
-            {"role": "system", "content": "You are a YouTuber creating viral content. Write narration from YOUR perspective - this is YOUR script. Simple words, specific facts, deep storytelling with details. No fluff, no made-up transitions. Tell continuous stories with actual events. Avoid any meta references to chapters, production elements, or script structure. Respond with valid JSON array only."},
+            {"role": "system", "content": "You are a YouTuber creating viral content. Write narration from YOUR perspective - this is YOUR script. CRITICAL: Use third person narration - you are speaking ABOUT the main character (he/she/they), not AS the main character. The narrator tells the story of the person, not in their voice. CRITICAL FOR RETENTION - AVOID VIEWER CONFUSION: The biggest issue for retention is viewer confusion. WHY sections MUST ensure the viewer knows WHAT IS HAPPENING in the story - provide clear context, establish the situation, and make sure viewers understand the basic facts before introducing mysteries or questions. Don't create confusion by being vague about what's happening. CRITICAL: Create a SEAMLESS JOURNEY through the video - scenes should feel CONNECTED, not like consecutive pieces of disjoint information (A and B and C). Each scene should build on the previous scene, reference what came before naturally, and show how events connect. CRITICAL: Every scene must be classified as WHY or WHAT. WHY sections frame mysteries, problems, questions, obstacles, counterintuitive information, secrets, or suggest there's something we haven't considered or don't understand the significance of. WHY sections MUST clearly establish what is happening (MOST IMPORTANT for retention) before introducing questions or mysteries. WHY sections should set up what will happen next, why it matters, and what the stakes are for upcoming WHAT sections. WHAT sections deliver core content, solutions, and information. Every WHAT scene must clearly communicate: what is happening, why it's important, and what the stakes are (what can go wrong, what can go right, what's at risk). Interleave WHY and WHAT sections strategically - WHY sections should create anticipation for upcoming WHAT sections by establishing what/why/stakes, but NEVER at the expense of clarity about what's happening. Use WHY/WHAT interleaving to create natural connections. Simple words, specific facts, deep storytelling with details. No fluff, no made-up transitions. Tell continuous stories with actual events. Avoid any meta references to chapters, production elements, or script structure. Respond with valid JSON array only."},
             {"role": "user", "content": scene_prompt}
         ],
         temperature=0.85,
@@ -850,12 +935,16 @@ IMPORTANT: Each scene must include:
             raise ValueError(f"Scene {i+1} missing required 'year' field")
         if 'emotion' not in scene:
             raise ValueError(f"Scene {i+1} missing required 'emotion' field")
+        if 'scene_type' not in scene:
+            raise ValueError(f"Scene {i+1} missing required 'scene_type' field")
+        if scene.get('scene_type') not in ['WHY', 'WHAT']:
+            raise ValueError(f"Scene {i+1} has invalid 'scene_type' value: {scene.get('scene_type')}. Must be 'WHY' or 'WHAT'")
     
     return scenes
 
 
 def generate_shorts(person_of_interest: str, main_title: str, global_block: str, outline: dict, base_output_path: str, scene_highlights: list = None):
-    """Generate YouTube Shorts (5 scenes each: complete story with natural conclusion)."""
+    """Generate YouTube Shorts (3 scenes each: complete story with natural conclusion)."""
     if scene_highlights is None:
         scene_highlights = []
     if config.num_shorts == 0:
@@ -927,8 +1016,8 @@ def generate_shorts(person_of_interest: str, main_title: str, global_block: str,
             if config.generate_short_thumbnails:
                 thumbnail_prompt = short_outline.get("thumbnail_prompt", "")
                 if thumbnail_prompt:
-                    thumbnail_prompt += "\n\nCLICKBAIT YouTube Shorts thumbnail - MAXIMIZE SCROLL-STOPPING POWER: Vertical 9:16, EXTREME close-up or dramatic composition, intense emotional expression (shock/passion/conflict), HIGH CONTRAST dramatic lighting (chiaroscuro), bold eye-catching colors (reds/yellows/oranges for urgency), subject in MOMENT OF IMPACT, movie-poster energy, optimized for mobile scrolling - must instantly grab attention when tiny in feed."
-                    thumb_file = THUMBNAILS_DIR / f"{base_name}_short{short_num}_thumbnail.png"
+                    thumbnail_prompt += "\n\nWHY SCENE THUMBNAIL for YouTube Shorts - MAXIMIZE SCROLL-STOPPING POWER THROUGH CURIOSITY: Function as a WHY scene that creates curiosity. Visually frame a MYSTERY, PROBLEM, QUESTION, or SECRET that makes viewers NEED to watch. Show counterintuitive elements or hidden truths. Vertical 9:16, EXTREME close-up or dramatic composition, intense emotional expression showing REALIZATION/SHOCK/DISCOVERY (not neutral - show the moment of revelation), HIGH CONTRAST dramatic lighting (chiaroscuro), bold eye-catching colors (reds/yellows/oranges for urgency/mystery), subject in MOMENT OF DISCOVERY or CONFRONTATION, symbolic elements suggesting secrets or hidden meaning, visual curiosity gaps that make viewers ask 'What is this about?', movie-poster thriller/mystery energy, optimized for mobile scrolling - must instantly create curiosity when tiny in feed."
+                    thumb_file = THUMBNAILS_DIR / f"{base_name}_short{short_num}_thumbnail.jpeg"
                     thumbnail_path = generate_thumbnail(thumbnail_prompt, thumb_file, size="1024x1536")
             
             # Build short output
@@ -1025,7 +1114,7 @@ Generate JSON:
 {{
   "title": "CLICKBAIT YouTube title (60-80 chars). Use power words like: SHOCKING, SECRET, REVEALED, EXPOSED, DARK, UNTOLD, UNBELIEVABLE, INCREDIBLE, INSANE, CRAZY, MIND-BLOWING, BANNED, FORBIDDEN, HIDDEN. Create curiosity gaps, ask questions, use numbers, make bold claims. Examples: 'The SHOCKING Secret That Changed Everything', 'How [Person] Did the IMPOSSIBLE', 'The Dark Truth They DON'T Want You to Know', '[Person]: The Forbidden Discovery', 'This ONE Decision Changed History FOREVER'. Must be engaging and make viewers NEED to click while staying factually accurate.",
   "tag_line": "Short, succinct, catchy tagline (5-10 words) that captures who they are. Examples: 'the man who changed the world', 'the codebreaker who saved millions', 'the mind that rewrote physics', 'the naturalist who explained life'. Should be memorable and accurate.",
-  "thumbnail_description": "CLICKBAIT thumbnail visual: Maximize visual impact! Use intense close-ups, dramatic expressions, extreme lighting (chiaroscuro), bold colors (red/yellow for danger/urgency), powerful symbols, emotional moments. Show conflict, tension, or peak dramatic moment. Composition should be bold and arresting - eyes staring directly, hands in dramatic pose, symbolic objects. Use high contrast, dramatic shadows, cinematic lighting. Subject should appear in a MOMENT OF IMPACT - not calm portrait. Think action movie poster, not museum painting. NO TEXT in image, but visually SCREAM importance and drama.",
+  "thumbnail_description": "WHY SCENE THUMBNAIL - MAXIMIZE CTR: The thumbnail must function as a WHY scene that creates curiosity and makes viewers NEED to watch. Visually frame a MYSTERY, PROBLEM, QUESTION, or SECRET that the video will reveal. Show counterintuitive elements, hidden truths, or something unexpected. Use visual storytelling to ask: 'What secret is being revealed?', 'What problem is being solved?', 'What mystery will be uncovered?', 'What unexpected truth is hidden here?'. Composition: intense close-ups, dramatic expressions showing realization/shock/conflict, extreme lighting (chiaroscuro), bold colors (red/yellow for urgency/danger), symbolic elements that suggest hidden meaning or secrets. Subject in MOMENT OF DISCOVERY or CONFRONTATION - not passive. Show visual hints of the mystery/problem/secret without revealing the answer. Think: 'What question does this image make me ask?' The viewer should look at this and think 'I NEED to know what this is about' - create visual curiosity gaps. NO TEXT in image, but visually SCREAM mystery, urgency, and the promise of revelation.",
   "global_block": "Visual style guide (300-400 words): semi-realistic digital painting style, color palette, dramatic lighting, how {person_of_interest} should appear consistently across {config.total_scenes} scenes."
 }}"""
 
@@ -1058,17 +1147,36 @@ Generate JSON:
         
         thumbnail_prompt = f"""{thumbnail_description}
 
-YouTube CLICKBAIT thumbnail - MUST MAXIMIZE CLICKS:
+WHY SCENE THUMBNAIL - MAXIMIZE CTR THROUGH CURIOSITY:
+The thumbnail must function as a WHY scene - it should visually frame a MYSTERY, PROBLEM, QUESTION, SECRET, or COUNTERINTUITIVE ELEMENT that makes viewers NEED to watch to find the answer.
+
+CRITICAL WHY SCENE ELEMENTS TO INCLUDE:
+- MYSTERY: Visual hints of a secret or hidden truth being revealed (e.g., subject looking at something hidden, shadowy elements suggesting secrets, objects that raise questions)
+- PROBLEM/OBSTACLE: Show conflict, tension, or challenge (e.g., subject facing opposition, confronting difficulty, in a moment of crisis)
+- QUESTION: Visual composition that makes viewers ask "What is happening here?" or "Why is this significant?" (e.g., unexpected juxtaposition, surprising elements, counterintuitive details)
+- SECRET: Suggest something hidden or unknown (e.g., subject discovering something, revealing a hidden truth, uncovering a secret)
+- COUNTERINTUITIVE: Show something unexpected or that defies expectations (e.g., subject in unexpected situation, surprising visual elements)
+
+VISUAL COMPOSITION:
 - EXTREME close-up or dramatic wide shot with strong composition
-- Intense emotional expression on face - not neutral, show passion/conflict/determination
-- Dramatic lighting with HIGH CONTRAST (chiaroscuro) - bright highlights, deep shadows
-- Bold, eye-catching colors (reds, yellows, oranges for urgency/importance) against darker backgrounds
-- Subject in ACTION or MOMENT OF IMPACT - not passive pose
-- Symbolic elements that represent their greatest achievement or conflict
-- Cinematic, movie-poster quality - think Marvel movie poster energy
-- Optimized for small sizes - subject must be CLEARLY visible even when tiny
-- Background should be dramatic but not distract from subject
-- Overall feeling: URGENT, IMPORTANT, UNMISSABLE"""
+- Intense emotional expression showing REALIZATION, SHOCK, CONFLICT, or DISCOVERY - not neutral, show the moment of "wait, what?" or "this changes everything"
+- Dramatic lighting with HIGH CONTRAST (chiaroscuro) - bright highlights, deep shadows that suggest hidden meaning
+- Bold, eye-catching colors (reds, yellows, oranges for urgency/danger/mystery) against darker backgrounds
+- Subject in MOMENT OF DISCOVERY, CONFRONTATION, or REVELATION - not passive pose
+- Symbolic elements that suggest MYSTERY, SECRETS, or HIDDEN TRUTHS (e.g., shadows, hidden objects, revealing moments)
+- Visual elements that create CURIOSITY GAPS - show enough to intrigue but not enough to answer the question
+- Cinematic, movie-poster quality - think thriller/mystery poster energy, not biography portrait
+- Optimized for small sizes - subject and key mystery elements must be CLEARLY visible even when tiny
+- Background should be dramatic and suggest hidden meaning or secrets, not just decorative
+
+OVERALL FEELING: The viewer should look at this and think:
+- "What secret is being revealed here?"
+- "What problem is this solving?"
+- "What mystery will I discover?"
+- "Why is this moment so significant?"
+- "I NEED to watch to find out what this is about"
+
+The thumbnail should create a VISUAL QUESTION that only watching the video can answer."""
         
         generated_thumb = generate_thumbnail(thumbnail_prompt, thumbnail_path)
     
@@ -1177,7 +1285,7 @@ YouTube CLICKBAIT thumbnail - MUST MAXIMIZE CLICKS:
         print("\n[STEP 3.4] Refining main video scenes...")
         chapter_summaries = "\n".join([f"Chapter {ch['chapter_num']}: {ch['title']} ({ch['year_range']}) - {ch['summary']}" for ch in chapters])
         diff_path = Path(output_path).parent / f"{Path(output_path).stem}_refinement_diff.json" if config.generate_refinement_diffs else None
-        all_scenes, refinement_diff = refine_scenes(all_scenes, person_of_interest, is_short=False, chapter_context=chapter_summaries, diff_output_path=diff_path)
+        all_scenes, refinement_diff = refine_scenes(all_scenes, person_of_interest, is_short=False, chapter_context=chapter_summaries, diff_output_path=diff_path, scenes_per_chapter=config.scenes_per_chapter)
         
         # Step 3.5: Generate final metadata (description and tags) AFTER scenes are generated
         print("\n[STEP 3.5] Generating final metadata from actual scenes...")
@@ -1282,7 +1390,7 @@ def parse_args():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Full production run (40 scenes main video, 3 shorts with 4 scenes each)
+  # Full production run (24 scenes main video, 3 shorts with 3 scenes each)
   python build_script.py "Albert Einstein"
 
   # Quick test (4 scenes main, 1 short with 4 scenes, no thumbnails)

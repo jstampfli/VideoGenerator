@@ -392,12 +392,22 @@ def generate_video_for_scene(scene: dict, image_path: Path, story: dict, save_as
     # Camera motion instructions to avoid nauseating movements
     camera_instruction = "Camera motion: Keep camera movement simple, smooth, and steady. Avoid rapid movements, shaky camera, or nauseating rotations. Use slow, gentle pans or fixed camera positions when possible."
     
+    # Constraints on dialogue and actions
+    constraints_instruction = "CRITICAL CONSTRAINTS: The video must contain ONLY the actions and dialogue specified in the Video Content above. Do NOT add any extra dialogue beyond what is explicitly described. Do NOT add any additional major actions by the characters beyond what is specified. If the scene needs to fill time to reach the full duration, use subtle background activity or minor environmental details (like leaves rustling, birds flying in the distance, gentle character movements like breathing or slight head turns) that do not affect the story or advance the plot. Keep all filler activity minimal and non-intrusive."
+    
+    # CRITICAL - No audio that isn't explicitly written
+    no_extra_audio_instruction = "CRITICAL - NO EXTRA AUDIO: The video must contain ONLY the audio that is explicitly written in the Video Content above. Do NOT add any sound effects, ambient sounds, voice-over, narration, or any other audio that is not specifically mentioned in the Video Content. Only include dialogue that is explicitly written (e.g., '[Character Name] says, \"...\"'). Do NOT add footsteps, rustling, chirping, or any other sounds unless they are explicitly described in the Video Content. The only audio should be: 1) Background music (as specified), 2) Dialogue that is explicitly written in the Video Content. Nothing else."
+    
+    # CRITICAL - No text, credits, or logos
+    no_text_instruction = "CRITICAL - NO TEXT OR CREDITS: The video must contain NO text, NO credits, NO logos, NO end screens, NO titles, NO watermarks, NO written words of any kind, and NO closing scenes. The video should end with the story action only - simply end with the characters in their final positions. Do NOT add any text overlays, credits, company logos, or end screens at any point in the video."
+    
     # Use the story's music description, or fallback to generic description
+    # Include fade-out instruction at the end of the scene
     if music_description:
-        music_instruction = f"Background music: {music_description}"
+        music_instruction = f"Background music: {music_description}. The music should fade out gradually at the end of the scene."
     else:
         # Fallback if music_description wasn't generated
-        music_instruction = "Background music: Use kid-friendly, cheerful background music with a magical, uplifting feel. The music should be instrumental, light, and whimsical - think playful piano, gentle strings, soft bells, and airy melodies. The tempo should be moderate and steady. The style should be consistent throughout all scenes - warm, inviting, and suitable for a children's animated story. The music should enhance the story's mood without overwhelming the dialogue or visuals."
+        music_instruction = "Background music: Use kid-friendly, cheerful background music with a magical, uplifting feel. The music should be instrumental, light, and whimsical - think playful piano, gentle strings, soft bells, and airy melodies. The tempo should be moderate and steady. The style should be consistent throughout all scenes - warm, inviting, and suitable for a children's animated story. The music should enhance the story's mood without overwhelming the dialogue or visuals. The music should fade out gradually at the end of the scene."
     
     # Put voice descriptions FIRST for maximum prominence, then scene description
     video_prompt = f"""{voice_section}
@@ -408,7 +418,13 @@ Video Content: {scene.get('video_prompt', '')}
 
 {camera_instruction}
 
-{music_instruction}"""
+{music_instruction}
+
+{constraints_instruction}
+
+{no_extra_audio_instruction}
+
+{no_text_instruction}"""
     
     print(f"[VIDEO] Video prompt: {video_prompt}")
     print(f"[VIDEO] Scene {scene_id}: generating video from image...")

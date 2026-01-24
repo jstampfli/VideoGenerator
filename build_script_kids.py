@@ -20,7 +20,7 @@ client = OpenAI()
 SCRIPT_MODEL = os.getenv("KIDS_SCRIPT_MODEL", "gpt-5.2")
 IMG_MODEL = os.getenv("KIDS_IMAGE_MODEL", "gpt-image-1.5")
 DEFAULT_NUM_SCENES = int(os.getenv("KIDS_SCENES_COUNT", "20"))
-SCENE_DURATION = int(os.getenv("KIDS_SCENE_DURATION", "8")) - 4
+SCENE_DURATION = int(os.getenv("KIDS_SCENE_DURATION", "8")) - 2
 
 SCRIPTS_DIR = Path("kids_scripts")
 SCRIPTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -70,14 +70,9 @@ STORY STRUCTURE:
 - Summary: Brief 2-3 sentence summary of the story
 - Characters: List of 2-4 main characters with simple, clear visual descriptions. For each character, include:
   * Appearance description: Simple, clear description focusing ONLY on what the character looks like visually (size, shape, colors, key physical features). Do NOT include personality traits - only visual appearance that can be seen.
-  * Voice description: Very specific, detailed description of the character's voice to ensure consistency across all scenes. Include:
-    - Age and gender (e.g., "young boy, 6 years old", "wise old woman, 70s")
-    - Vocal pitch/register (e.g., "high-pitched", "mid-range", "deep", "squeaky")
-    - Voice quality/timbre (e.g., "smooth and warm", "raspy", "crisp and clear", "soft and airy", "robotic with mechanical undertones")
-    - Energy level and pace (e.g., "energetic and fast-paced", "calm and slow", "nervous and quick", "confident and steady")
-    - Emotional tone (e.g., "friendly and cheerful", "serious and wise", "anxious and worried", "playful and upbeat")
-    - Any distinctive characteristics (e.g., "slight accent", "breathy quality", "metallic resonance", "childlike lisp")
-    - Example: "young robot, 7 years old, mid-range pitch with mechanical resonance, smooth and steady pace, friendly and curious tone, slight metallic echo"
+  * Voice description: Simple description of the character's voice. Start with a celebrity/character reference (just the name) and what movie they are from, then briefly describe the voice. Format: "Voice reference: [Celebrity/Character Name]. [Brief voice description: age, pitch, tone]"
+    - Example: "Voice reference: Wall-E from Wall-E. Young robot, mid-range pitch, friendly and curious tone with slight metallic echo."
+    - Example: "Voice reference: Dug from Up. Young male, energetic and cheerful, mid-high pitch."
 - Setting: Where the story takes place
 - Theme: Main lesson/message (e.g., "friendship", "bravery", "helping others", "learning from mistakes")
 - Age range: Target age (e.g., "4-10")
@@ -103,7 +98,7 @@ Respond with JSON:
     {{
       "name": "Character name",
       "description": "Simple, clear visual appearance description only (what they look like: size, shape, colors, key features). No personality traits.",
-      "voice_description": "Very specific, detailed voice description including age, gender, vocal pitch/register, voice quality/timbre, energy level, pace, emotional tone, and any distinctive characteristics. Example: 'young robot, 7 years old, mid-range pitch with mechanical resonance, smooth and steady pace, friendly and curious tone, slight metallic echo'"
+      "voice_description": "Start with celebrity/character reference (just the name), then brief voice description. Format: 'Voice reference: [Name]. [Brief description: age, pitch, tone].' Example: 'Voice reference: Wall-E. Young robot, mid-range pitch, friendly and curious tone with slight metallic echo.'"
     }}
   ],
   "setting": "Where the story takes place",
@@ -161,7 +156,62 @@ def generate_kids_scenes(story: dict, num_scenes: int = DEFAULT_NUM_SCENES) -> l
         for c in story.get('characters', [])
     ])
     
-    scenes_prompt = f"""Generate exactly {num_scenes} scenes for this kid-friendly animated story.
+    # Special handling for single-scene videos
+    if num_scenes == 1:
+        scenes_prompt = f"""Generate exactly 1 scene that contains the COMPLETE STORY for this kid-friendly animated video. This is a single 10-second animation that tells the entire story from beginning to end.
+
+STORY:
+Title: {story.get('title', 'Untitled')}
+Summary: {story.get('summary', '')}
+Characters:
+{characters_str}
+Setting: {story.get('setting', '')}
+Theme: {story.get('theme', '')}
+
+CRITICAL REQUIREMENTS FOR SINGLE-SCENE VIDEO:
+- This is ONE complete 10-second animation that tells the FULL STORY
+- The scene must have a clear beginning, middle, and end
+- All characters should be involved in the action
+- Make it interesting, engaging, and visually appealing
+- The story should feel complete and satisfying in just 10 seconds
+- Bright, colorful, animated style for kids (ages 4-10)
+- Positive, engaging tone
+- Keep it simple but complete - tell the whole story visually
+
+For the single scene, provide:
+- "id": 1
+- "title": Short scene title (2-4 words) - can be the story title or a summary title
+- "description": Brief description of what happens in this complete story (1-2 sentences)
+- "image_prompt": Simple visual description of the first frame. Match the first moment of video_prompt. Include only characters and elements present at the very start. Style: animated, bright and colorful. Format: 9:16 vertical.
+- "video_prompt": Detailed description of the COMPLETE STORY happening in this 10-second animation. This must tell the entire story from beginning to end. Use clear, straightforward language. Describe actions in sequence. Guidelines:
+  * CRITICAL - SIMPLE ACTIONS ONLY: All actions must be extremely simple and large-scale. No intricate movements, small details, or subtle gestures. Everything should happen in open space with clear, obvious movements. Examples: walking, running, jumping, waving, reaching out, turning around. Avoid: small hand movements, subtle expressions, detailed interactions with tiny objects.
+  * CRITICAL - MINIMAL DIALOGUE: Keep dialogue to an absolute minimum. Prefer visual storytelling over dialogue. Only include dialogue when absolutely essential to convey the story. The scene should work without dialogue.
+  * CRITICAL - COMPLETE STORY: This single scene must tell the complete story - include the beginning (characters meet or problem starts), middle (action or interaction), and end (resolution or conclusion). All characters should be involved.
+  * CRITICAL - DIALOGUE CLARITY (if dialogue is included): When characters speak, ALWAYS explicitly state which character is speaking. Format: "[Character Name] says, \"[dialogue]\"" or "[Character Name] speaks: \"[dialogue]\"". Never use ambiguous dialogue.
+  * Include 5-8 sentences with simple, large-scale actions that tell the complete story. Example: "The robot walks across the open meadow. A bird flies down and lands in front of the robot. The robot waves its arm. The bird hops closer. The robot reaches out its hand. The bird hops onto the robot's hand. They both smile and walk together across the meadow."
+  * Keep all movements and actions simple, obvious, and happening in open space. Avoid crowded scenes or complex interactions.
+  * At the end, all characters should be clearly visible together, showing the story's resolution.
+  * Use character names consistently. Reference their appearance from the character descriptions when first mentioned.
+
+CRITICAL - NO TEXT OR CREDITS:
+- The video must contain NO text, NO credits, NO logos, NO end screens, NO titles, NO watermarks, NO written words
+- Simply end with the characters in their final positions showing the story's resolution
+
+Respond with JSON:
+{{
+  "scenes": [
+    {{
+      "id": 1,
+      "title": "Scene title (can be story title)",
+      "description": "Complete story description",
+      "image_prompt": "Visual description of the first frame. Match the first moment of video_prompt. Include only characters/elements present at the very start.",
+      "video_prompt": "Complete 10-second story animation. The robot walks across the open meadow. A bird flies down and lands in front of the robot. The robot waves its arm. The bird hops closer. The robot reaches out its hand. The bird hops onto the robot's hand. They both smile and walk together across the meadow. At the end, both characters are clearly visible together, showing friendship.",
+      "duration_estimate": {SCENE_DURATION}
+    }}
+  ]
+}}"""
+    else:
+        scenes_prompt = f"""Generate exactly {num_scenes} scenes for this kid-friendly animated story.
 
 STORY:
 Title: {story.get('title', 'Untitled')}
@@ -173,48 +223,37 @@ Theme: {story.get('theme', '')}
 
 REQUIREMENTS:
 - Exactly {num_scenes} scenes total
-- Each scene should be ~{SCENE_DURATION} seconds when animated
-- Scenes must flow smoothly from one to the next (continuity is critical)
-- Each scene should advance the story
-- Include clear visual descriptions for both static images and animated video
-- Character appearances must be CONSISTENT across all scenes
-- Bright, colorful, animated cartoon style suitable for kids
-- Age-appropriate content (ages 4-10)
+- Each scene is ~{SCENE_DURATION} seconds
+- Scenes flow smoothly from one to the next
+- Character appearances stay consistent across all scenes
+- Bright, colorful, animated style for kids (ages 4-10)
 - Positive, engaging tone
 
-CRITICAL FOR VIDEO CONTINUITY:
-- Each video scene MUST start exactly where the previous scene ended
-- If scene 1 ends with "the girl walks to the clearing", then scene 2 MUST start with "the girl in the clearing"
-- If scene 2 ends with "the girl looks in the bush beside the clearing", then scene 3 MUST start with "the girl looking in the bush"
-- Think of it like a continuous film: the last frame of scene N becomes the first frame of scene N+1
-- Character positions, poses, and the visual state at the end of one scene = the starting state of the next scene
+VIDEO CONTINUITY:
+- Scene 2+ automatically start from the previous scene's final frame
+- For scenes 2+, only describe NEW actions - don't repeat the previous scene's ending
 
 For each scene, provide:
 - "id": Scene number (1 to {num_scenes})
 - "title": Short scene title (2-4 words)
 - "description": What happens in this scene (1-2 sentences)
-- "image_prompt": (ONLY for scene 1) Detailed visual description for generating the INITIAL static image - this should be a snapshot of the VERY FIRST FRAME/INSTANT of scene 1, matching ONLY the first moment described in the video_prompt. Include ONLY characters and elements that are present at the absolute beginning, before any action or dialogue occurs. Include:
-  * Character appearances and initial positions (ONLY characters present at the very start, before any events happen)
-  * Setting/location at the beginning
-  * Composition and framing of the opening frame
-  * Colors and mood of the starting moment
-  * Style: animated, cartoon-like, bright and colorful
-  * Format: 9:16 vertical (1080x1920) for YouTube Shorts
-  * CRITICAL: Match EXACTLY the first moment described in video_prompt. If video_prompt says "Bolt rolls forward, then Luma darts in", the image should show ONLY Bolt at the start, NOT Luma. Do NOT include characters, objects, or elements that appear later in the scene. Only describe what exists in the absolute first frame before any action begins.
-- "video_prompt": Simple, direct description of what happens in the video. Use clear, straightforward language. Tell the story with the video. Keep it concise and focused on what viewers will see. IMPORTANT: Each scene is ~{SCENE_DURATION} seconds long, so limit the number of events to what can realistically happen in that time. Include:
-  * For scene 1: What happens from start to finish. Describe the action clearly.
-  * For scenes 2+: How the scene STARTS (matching the end of previous scene) + what happens + how it ENDS
-  * Use direct, simple language. Limit to 2-4 key actions per scene. Example: "The girl walks into the clearing. She looks around and sees a bunny rabbit." (Simple, fits in ~{SCENE_DURATION} seconds)
-  * CRITICAL: Don't overstuff scenes with too many actions - pick only the most important 2-4 events. Too many events will cause the video to feel rushed or get cut off.
-  * IMPORTANT: Clearly describe the FINAL STATE/FRAME of each scene so the next scene can start there
-  * CRITICAL: When referencing characters by name, include a shortened character description after the first mention in each sentence. Example: Instead of "Beep-Bop puts his hands on the log", write "Beep-Bop, the small robot, puts his hands on the log". Instead of "Luma flies over", write "Luma, the glowing sprite, flies over". This helps the video generation understand who each character is visually.
-  * CRITICAL: If characters speak during the scene, include the dialogue directly in the video_prompt. Integrate it naturally into the action description, specifying when and what each character says. Example: "Luma, the tiny forest sprite, appears and says: 'I'm worried I'm losing my light!' The girl responds: 'Don't worry, we'll help you!'" (Keep dialogue concise - 1-2 exchanges max per scene)
+- "image_prompt": (ONLY for scene 1) Simple visual description of the first frame. Match the first moment of video_prompt. Include only characters and elements present at the very start. Style: animated, bright and colorful. Format: 9:16 vertical.
+- "video_prompt": Detailed description of what happens in the video. Each scene is ~{SCENE_DURATION} seconds, so include enough actions to fill that time. Use clear, straightforward language. Describe actions in sequence. Guidelines:
+  * CRITICAL - SIMPLE ACTIONS ONLY: All actions must be extremely simple and large-scale. No intricate movements, small details, or subtle gestures. Everything should happen in open space with clear, obvious movements. Examples: walking, running, jumping, waving, reaching out, turning around. Avoid: small hand movements, subtle expressions, detailed interactions with tiny objects.
+  * CRITICAL - MINIMAL DIALOGUE: Keep dialogue to an absolute minimum. Prefer visual storytelling over dialogue. Only include dialogue when absolutely essential to convey the story. Most scenes should have NO dialogue at all.
+  * CRITICAL - ONE SCENE PER CHARACTER SPEAKING: Each character can only speak in ONE scene throughout the entire story. Once a character has spoken in a scene, they should NOT speak in any other scenes. This ensures voice consistency is not an issue. Plan dialogue carefully so each character speaks only once.
+  * CRITICAL - DIALOGUE CLARITY (when dialogue is included): When characters speak, ALWAYS explicitly state which character is speaking. Format: "[Character Name] says, \"[dialogue]\"" or "[Character Name] speaks: \"[dialogue]\"". Never use ambiguous dialogue without clearly identifying the speaker.
+  * CRITICAL - END OF SCENE VISIBILITY: At the end of each scene, ALL characters that have been introduced in the story so far must be clearly visible in the frame. Describe their positions clearly so they are all in view.
+  * For scene 1: Describe what happens from start to finish with multiple simple actions and interactions.
+  * For scenes 2+: Start with the new actions that happen in this scene. Do NOT describe how the scene starts - the video automatically begins from the previous scene's final frame.
+  * Include 3-5 sentences with simple, large-scale actions. Example: "The robot walks across the open meadow. A bird flies down and lands in front of the robot. The robot waves its arm. The bird hops closer. The robot reaches out its hand."
+  * Keep all movements and actions simple, obvious, and happening in open space. Avoid crowded scenes or complex interactions.
+  * Use character names consistently. Reference their appearance from the character descriptions when first mentioned in a scene.
 
-CRITICAL FOR CONTINUITY:
-- Characters must look the same across all scenes (same appearance, clothing, colors)
-- Settings should transition naturally between scenes
-- Each scene should logically flow from the previous one
-- The final scene should provide a satisfying conclusion
+CONTINUITY:
+- Keep character appearances consistent (same colors, clothing, features)
+- Scenes should flow naturally from one to the next
+- All introduced characters must be clearly visible at the end of each scene
 
 Respond with JSON:
 {{
@@ -223,26 +262,32 @@ Respond with JSON:
       "id": 1,
       "title": "Scene title",
       "description": "What happens",
-      "image_prompt": "Detailed visual description of the VERY FIRST FRAME of scene 1 (ONLY for scene 1). Match EXACTLY the first moment of video_prompt. Include ONLY characters/elements present at the absolute start. Example: If video_prompt says 'Bolt rolls forward, then Luma darts in', show ONLY Bolt at the start, NOT Luma. If video_prompt says 'The girl walks into the forest, then a bunny appears', show ONLY the girl entering, NOT the bunny.",
-      "video_prompt": "Simple, direct description with 2-4 key actions that fit in ~{SCENE_DURATION} seconds. Use shortened character descriptions after character names. The girl enters the forest. She walks along the path. Luma, the tiny glowing sprite, appears and says: 'Welcome to the magical forest!'",
+      "image_prompt": "Visual description of the first frame of scene 1 (ONLY for scene 1). Match the first moment of video_prompt. Include only characters/elements present at the very start.",
+      "video_prompt": "The young girl walks across an open meadow. A glowing sprite flies down and lands in front of her. The girl stops walking. The girl reaches out her hand. The sprite floats up and hovers near the girl's hand. At the end, both the girl and the sprite are clearly visible standing together in the open meadow.",
       "duration_estimate": {SCENE_DURATION}
     }},
     {{
       "id": 2,
       "title": "Scene title",
       "description": "What happens",
-      "video_prompt": "Simple, direct description with 2-4 key actions that fit in ~{SCENE_DURATION} seconds. Starting from where scene 1 ended. Use shortened character descriptions after character names. The girl in the clearing looks around. A bunny rabbit, small and fluffy, appears from behind a bush and says: 'Hello there!'",
+      "video_prompt": "The girl turns around in the open meadow. A bunny hops out into the open space and stops. The girl walks toward the bunny. The bunny hops closer. The girl reaches out her hand. At the end, the girl, the sprite, and the bunny are all clearly visible together in the open meadow.",
       "duration_estimate": {SCENE_DURATION}
     }},
     ...
-    (exactly {num_scenes} scenes, only scene 1 has image_prompt. Dialogue should be integrated directly into video_prompt when characters speak.)
+    (exactly {num_scenes} scenes, only scene 1 has image_prompt. Keep dialogue to an absolute minimum - most scenes should have NO dialogue. When dialogue is absolutely necessary, each character can only speak in ONE scene total throughout the entire story.)
   ]
 }}"""
+    
+    # Use different system message for single scene vs multiple scenes
+    if num_scenes == 1:
+        system_message = "You are a children's story animator who creates a single complete 10-second animated story. CRITICAL REQUIREMENTS: 1) This is ONE complete 10-second animation that tells the FULL STORY from beginning to end. 2) ALL actions must be extremely simple and large-scale - no intricate movements, small details, or subtle gestures. Everything happens in open space with clear, obvious movements (walking, running, jumping, waving, reaching out). 3) MINIMAL DIALOGUE: Keep dialogue to an absolute minimum - prefer visual storytelling. The scene should work without dialogue. 4) COMPLETE STORY: Include beginning (characters meet or problem starts), middle (action or interaction), and end (resolution or conclusion). All characters should be involved. 5) When characters do speak, ALWAYS explicitly state which character is speaking using format: '[Character Name] says, \"[dialogue]\"'. 6) video_prompt must be detailed enough to fill 10 seconds - include 5-8 sentences with simple, large-scale actions that tell the complete story. 7) At the end, all characters should be clearly visible together, showing the story's resolution. 8) image_prompt should match the first moment of video_prompt. 9) CRITICAL - NO TEXT OR CREDITS: The video must contain NO text, NO credits, NO logos, NO end screens, NO titles, NO watermarks, NO written words. Simply end with the characters in their final positions. Use clear, straightforward language. Respond with valid JSON only."
+    else:
+        system_message = "You are a children's story animator who creates detailed scene descriptions for animated videos. CRITICAL REQUIREMENTS: 1) ALL actions must be extremely simple and large-scale - no intricate movements, small details, or subtle gestures. Everything happens in open space with clear, obvious movements (walking, running, jumping, waving, reaching out). 2) MINIMAL DIALOGUE: Keep dialogue to an absolute minimum - prefer visual storytelling. Most scenes should have NO dialogue. Only include dialogue when absolutely essential. 3) ONE SCENE PER CHARACTER SPEAKING: Each character can only speak in ONE scene throughout the entire story. Once a character has spoken, they should NOT speak in any other scenes. Plan dialogue carefully. 4) When characters do speak, ALWAYS explicitly state which character is speaking using format: '[Character Name] says, \"[dialogue]\"'. 5) At the end of each scene, ALL characters introduced so far must be clearly visible in the frame - describe their positions. 6) video_prompt must be detailed enough to fill the scene duration (~{SCENE_DURATION} seconds) - include 3-5 sentences with simple, large-scale actions. 7) For scenes 2+: Start with new actions only - the video automatically begins from the previous scene's final frame. 8) Keep character appearances consistent across all scenes. 9) image_prompt (scene 1 only) should match the first moment of video_prompt. 10) CRITICAL - NO TEXT OR CREDITS: The video must contain NO text, NO credits, NO logos, NO end screens, NO titles, NO watermarks, NO written words. The final scene should end with story action only - no closing scenes, credits, or text overlays. Use clear, straightforward language. Respond with valid JSON only."
 
     response = client.chat.completions.create(
         model=SCRIPT_MODEL,
         messages=[
-            {"role": "system", "content": "You are a children's story animator who creates simple, clear scene descriptions for animated videos. CRITICAL: Use direct, straightforward language in video_prompt - tell the story clearly with simple sentences. Each scene's video must start exactly where the previous scene ended - like a continuous film where the last frame becomes the first frame. When characters speak, include their dialogue directly in the video_prompt, integrated naturally into the action description. Character descriptions should focus ONLY on visual appearance (what they look like: size, shape, colors, features), not personality traits. CRITICAL for image_prompt: It must match EXACTLY the very first moment of video_prompt - include ONLY characters/elements present at the absolute beginning before any actions or events occur. If video_prompt introduces characters later (e.g., 'Bolt rolls, then Luma darts in'), the image_prompt should show ONLY the initial characters (just Bolt), NOT characters that appear later (NOT Luma). Only scene 1 needs an image_prompt (for initial image generation). All other scenes flow directly from the previous video's ending. Ensure character consistency and smooth, seamless transitions. Respond with valid JSON only."},
+            {"role": "system", "content": system_message},
             {"role": "user", "content": scenes_prompt}
         ],
         temperature=0.8,
