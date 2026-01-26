@@ -11,7 +11,7 @@ from pathlib import Path
 # Add parent directory to path so we can import modules
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from build_script import clean_json_response, sanitize_prompt_for_safety
+from build_scripts_utils import clean_json_response
 
 
 class TestCleanJsonResponse(unittest.TestCase):
@@ -49,31 +49,9 @@ class TestCleanJsonResponse(unittest.TestCase):
         self.assertIn('{"key": "value"}', result)
 
 
-class TestSanitizePromptForSafety(unittest.TestCase):
-    """Test cases for sanitize_prompt_for_safety function."""
-    
-    def test_basic_sanitization(self):
-        """Test basic prompt sanitization."""
-        prompt = "A scene showing a person working"
-        result = sanitize_prompt_for_safety(prompt)
-        self.assertIn("Safe, appropriate", result)
-        self.assertIn(prompt, result)
-    
-    def test_self_harm_violation(self):
-        """Test sanitization with self-harm violation type."""
-        prompt = "A person suffering from pain"
-        result = sanitize_prompt_for_safety(prompt, violation_type="self-harm")
-        self.assertNotIn("suffering", result.lower())
-        self.assertIn("contemplation", result.lower())
-        self.assertIn("Safe, appropriate", result)
-    
-    def test_word_replacements(self):
-        """Test word replacements for safety."""
-        prompt = "A person dealing with death and suffering"
-        result = sanitize_prompt_for_safety(prompt, violation_type="self-harm")
-        self.assertNotIn("death", result.lower())
-        self.assertNotIn("suffering", result.lower())
-        self.assertIn("legacy", result.lower())
+# Note: sanitize_prompt_for_safety was removed from build_script.py
+# It's now only used internally in build_scripts_utils.generate_thumbnail
+# Tests for it are in test_build_video.py
 
 
 class TestMetadataExtraction(unittest.TestCase):

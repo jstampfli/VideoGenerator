@@ -204,6 +204,7 @@ def generate_thumbnail(prompt: str, output_path: Path, size: str = "1024x1024", 
                 size=size,
                 n=1,
                 output_format="jpeg",
+                moderation="low",
             )
             
             b64_data = resp.data[0].b64_json
@@ -394,7 +395,7 @@ Return 4-7 pivotal moments only. Be selective - only the moments that are truly 
         return []
 
 
-def generate_significance_scene(pivotal_scene: dict, next_scene: dict | None, subject_name: str, justification: str, chapter_context: str = None) -> dict:
+def generate_significance_scene(pivotal_scene: dict, next_scene: dict | None, subject_name: str, justification: str, chapter_context: str = None, script_type: str = "biopic") -> dict:
     """
     Generate a significance scene that explains why a pivotal moment matters.
     
@@ -425,6 +426,12 @@ def generate_significance_scene(pivotal_scene: dict, next_scene: dict | None, su
     context_info = ""
     if chapter_context:
         context_info = f"\nCHAPTER CONTEXT: {chapter_context}\n"
+    
+    # Build narration_instructions based on script type
+    if script_type == "horror":
+        narration_instructions_desc = "Match the emotion field with brief delivery guidance. Example: 'Speak with terrified urgency, voice trembling.'"
+    else:
+        narration_instructions_desc = "Match the emotion field with brief delivery guidance. Example: 'Deliver with contemplative weight, emphasizing significance.'"
     
     significance_prompt = f"""Generate a SIGNIFICANCE SCENE that comes immediately after Scene {pivotal_id}: "{pivotal_title}"
 
@@ -461,14 +468,21 @@ Respond with JSON:
   "scene_type": "WHAT" - This scene explains the significance and delivers information about why the moment matters,
   "image_prompt": "Visual that reflects the significance and weight of this moment - contemplative, monumental, or reflective mood. Use the same year/time period AND THE SAME AGE as the pivotal moment (extract age from pivotal scene's image_prompt above). Include {subject_name} at the exact same age as in the pivotal scene. Match the visual style of the documentary. 16:9 cinematic",
   "emotion": "contemplative" or "reflective" or "weighty" or "monumental" - the emotion should reflect the significance being explained,
+  "narration_instructions": "{narration_instructions_desc}",
   "year": Same as pivotal moment (use scene {pivotal_id}'s year)
 }}"""
 
+    # Adjust narration instructions based on script type
+    if script_type == "horror":
+        narration_instructions_note = "CRITICAL: narration_instructions should match the scene's emotion field with brief delivery guidance. Keep it simple - just follow the emotion with some context."
+    else:
+        narration_instructions_note = "CRITICAL: narration_instructions should match the scene's emotion field with brief delivery guidance. Keep it simple - just follow the emotion with some context."
+    
     try:
         response = client.chat.completions.create(
             model=SCRIPT_MODEL,
             messages=[
-                {"role": "system", "content": "You create powerful scenes that explain why pivotal moments matter. You help viewers understand the significance and weight of game-changing moments. Respond with valid JSON only."},
+                {"role": "system", "content": f"You create powerful scenes that explain why pivotal moments matter. You help viewers understand the significance and weight of game-changing moments. {narration_instructions_note} Respond with valid JSON only."},
                 {"role": "user", "content": significance_prompt}
             ],
             temperature=0.7,
@@ -479,7 +493,7 @@ Respond with JSON:
         if not isinstance(scene, dict):
             raise ValueError(f"Expected dict, got {type(scene)}")
         
-        # Ensure all required fields are present
+        # Ensure all required fields are present, with fallbacks if missing
         if 'title' not in scene:
             scene['title'] = "Why This Moment Matters"
         if 'scene_type' not in scene:
@@ -488,6 +502,18 @@ Respond with JSON:
             scene['scene_type'] = "WHAT"  # Default to WHAT if invalid
         if 'narration' not in scene:
             scene['narration'] = f"This moment changes everything - its significance reshapes the entire story."
+        if 'emotion' not in scene:
+            scene['emotion'] = "contemplative"  # Default emotion for significance scenes
+        
+        # CRITICAL: Ensure narration_instructions is always present
+        if 'narration_instructions' not in scene or not scene.get('narration_instructions'):
+            # Generate fallback narration_instructions based on emotion and script type
+            emotion = scene.get('emotion', 'contemplative')
+            if script_type == "horror":
+                scene['narration_instructions'] = f"Speak with {emotion}."
+            else:
+                scene['narration_instructions'] = f"Deliver with {emotion}."
+            print(f"[SIGNIFICANCE SCENE] WARNING: LLM did not provide narration_instructions, generated fallback: {scene['narration_instructions']}")
         if 'image_prompt' not in scene:
             # Use the extracted age_phrase if available, otherwise construct from pivotal scene
             if not age_phrase:
@@ -544,7 +570,7 @@ Respond with JSON:
         }
 
 
-def check_and_add_missing_storyline_scenes(scenes: list[dict], subject_name: str, chapter_context: str = None, max_scenes: int = None) -> list[dict]:
+def check_and_add_missing_storyline_scenes(scenes: list[dict], subject_name: str, chapter_context: str = None, max_scenes: int = None, script_type: str = "biopic") -> list[dict]:
     """
     PASS 1: Check for hanging storylines and add scenes to wrap them up.
     Uses LLM to identify storylines that were introduced but not resolved, then generates scenes to complete them.
@@ -572,16 +598,26 @@ def check_and_add_missing_storyline_scenes(scenes: list[dict], subject_name: str
     if chapter_context:
         context_info = f"\nCHAPTER CONTEXT: {chapter_context}\n"
     
-    hanging_storylines_prompt = f"""Analyze these scenes from a documentary about {subject_name} and identify HANGING STORYLINES - storylines, plot threads, or events that were introduced but NOT resolved or completed.
+    if script_type == "horror":
+        doc_type = "horror story"
+        hanging_focus = "horror threads, threats, or mysteries that were introduced but NOT resolved or left hanging"
+        example = "mystery introduced but never explained, threat mentioned but never confronted, object found but never explained"
+    else:
+        doc_type = "documentary"
+        hanging_focus = "storylines, plot threads, or events that were introduced but NOT resolved or completed"
+        example = "engagement mentioned but marriage never shown, conflict introduced but resolution never shown"
+    
+    hanging_storylines_prompt = f"""Analyze these scenes from a {doc_type} about {subject_name} and identify HANGING STORYLINES - {hanging_focus}.
 
 CURRENT SCENES (JSON):
 {scenes_json}
 {context_info}
 
 HANGING STORYLINES are:
-- Events or situations that were introduced but never shown to completion (e.g., engagement mentioned but marriage never shown, conflict introduced but resolution never shown, promise made but fulfillment never shown)
-- Plot threads that were set up but left hanging (e.g., relationship started but never developed, problem introduced but never solved, question raised but never answered)
+- Events or situations that were introduced but never shown to completion (e.g., {example})
+- Plot threads that were set up but left hanging (e.g., {'mystery introduced but never explained, threat mentioned but never confronted' if script_type == 'horror' else 'relationship started but never developed, problem introduced but never solved'})
 - Storylines from the chapter's key_events or plot_developments that were mentioned but not fully covered
+{'- For horror: Focus on ensuring tension builds properly and no threats are dropped without escalation' if script_type == 'horror' else ''}
 
 Your task: Identify ALL hanging storylines and determine:
 1. What storyline/event was introduced but not completed
@@ -613,7 +649,7 @@ If there are NO hanging storylines, return an empty array []."""
         response = client.chat.completions.create(
             model=SCRIPT_MODEL,
             messages=[
-                {"role": "system", "content": "You are an expert story analyst who identifies incomplete storylines in narratives. You understand narrative structure and ensure all introduced plot threads are resolved. Respond with valid JSON array only."},
+                {"role": "system", "content": f"You are an expert story analyst who identifies incomplete storylines in {'horror stories' if script_type == 'horror' else 'narratives'}. You understand narrative structure and ensure all introduced plot threads are resolved. {'For horror: Focus on tension building and ensuring threats/mysteries are properly developed.' if script_type == 'horror' else ''} Respond with valid JSON array only."},
                 {"role": "user", "content": hanging_storylines_prompt}
             ],
             temperature=0.5,
@@ -653,6 +689,12 @@ If there are NO hanging storylines, return an empty array []."""
             scene_after = updated_scenes[insert_index]
             scene_before = updated_scenes[insert_index - 1] if insert_index > 0 else None
             
+            # Build narration_instructions based on script type
+            if script_type == "horror":
+                narration_instructions_desc = "Match the emotion field with brief delivery guidance. Example: 'Speak with terrified urgency, voice trembling.'"
+            else:
+                narration_instructions_desc = "Match the emotion field with brief delivery guidance. Example: 'Deliver with measured authority, conveying completion.'"
+            
             # Generate scene to complete the storyline
             completion_prompt = f"""Generate a scene to complete a hanging storyline in a documentary about {subject_name}.
 
@@ -685,14 +727,21 @@ Respond with JSON:
   "scene_type": "{scene_type}",
   "image_prompt": "Visual description appropriate for this moment, including {subject_name}'s age at this time ({completion_year}), 16:9 cinematic",
   "emotion": "Appropriate emotion for this moment",
+  "narration_instructions": "{narration_instructions_desc}",
   "year": {completion_year}
 }}"""
 
+            # Adjust system prompt based on script type
+            if script_type == "horror":
+                system_content = "You create scenes that complete hanging horror threads in horror stories. You ensure narrative completeness and maintain horror atmosphere. CRITICAL: narration_instructions should match the scene's emotion field with brief delivery guidance. Keep it simple - just follow the emotion with some context. Respond with valid JSON only."
+            else:
+                system_content = "You create scenes that complete hanging storylines in documentaries. You ensure narrative completeness and chronological accuracy. CRITICAL: narration_instructions should match the scene's emotion field with brief delivery guidance. Keep it simple - just follow the emotion with some context. Respond with valid JSON only."
+            
             try:
                 completion_response = client.chat.completions.create(
                     model=SCRIPT_MODEL,
                     messages=[
-                        {"role": "system", "content": "You create scenes that complete hanging storylines in documentaries. You ensure narrative completeness and chronological accuracy. Respond with valid JSON only."},
+                        {"role": "system", "content": system_content},
                         {"role": "user", "content": completion_prompt}
                     ],
                     temperature=0.7,
@@ -711,6 +760,18 @@ Respond with JSON:
                     new_scene['scene_type'] = 'WHAT'
                 if 'year' not in new_scene:
                     new_scene['year'] = completion_year
+                if 'emotion' not in new_scene:
+                    new_scene['emotion'] = "contemplative"  # Default emotion
+                
+                # CRITICAL: Ensure narration_instructions is always present (fix if missing)
+                if 'narration_instructions' not in new_scene or not new_scene.get('narration_instructions'):
+                    # Generate fallback narration_instructions based on emotion and script type
+                    emotion = new_scene.get('emotion', 'contemplative')
+                    if script_type == "horror":
+                        new_scene['narration_instructions'] = f"Speak with {emotion} urgency, voice trembling."
+                    else:
+                        new_scene['narration_instructions'] = f"Deliver with {emotion} weight, emphasizing completion."
+                    print(f"[STORYLINE CHECK] WARNING: Generated scene missing narration_instructions, generated fallback: {new_scene['narration_instructions']}")
                 
                 # Mark as storyline completion scene
                 new_scene['is_storyline_completion'] = True
@@ -754,7 +815,7 @@ Respond with JSON:
 
 def refine_scenes(scenes: list[dict], subject_name: str, is_short: bool = False, chapter_context: str = None, 
                   diff_output_path: Path | None = None, subject_type: str = "person", skip_significance_scenes: bool = False,
-                  scenes_per_chapter: int = None) -> tuple[list[dict], dict]:
+                  scenes_per_chapter: int = None, script_type: str = "biopic") -> tuple[list[dict], dict]:
     """
     Refine generated scenes through THREE PASSES:
     1. Check for hanging storylines and add scenes to complete them
@@ -784,17 +845,24 @@ def refine_scenes(scenes: list[dict], subject_name: str, is_short: bool = False,
     original_scenes = [scene.copy() for scene in scenes]
     
     # PASS 1: Check for hanging storylines and add completion scenes
-    # For shorts, cap at 5 scenes maximum
-    max_scenes_for_storylines = 5 if is_short else None
-    print(f"\n[REFINEMENT PASS 1] Checking for hanging storylines...")
+    # SKIP for shorts (shorts are trailers with loose storylines by design)
     if is_short:
-        print(f"[REFINEMENT PASS 1]   • Shorts mode: capping at {max_scenes_for_storylines} scenes maximum")
-    scenes_after_storyline_check = check_and_add_missing_storyline_scenes(scenes, subject_name, chapter_context, max_scenes=max_scenes_for_storylines)
+        print(f"\n[REFINEMENT PASS 1] Skipped for shorts (trailers have loose storylines by design)")
+        scenes_after_storyline_check = [scene.copy() for scene in scenes]
+    else:
+        if script_type == "horror":
+            print(f"\n[REFINEMENT PASS 1] Checking for hanging horror threads and tension building...")
+        else:
+            print(f"\n[REFINEMENT PASS 1] Checking for hanging storylines...")
+        scenes_after_storyline_check = check_and_add_missing_storyline_scenes(scenes, subject_name, chapter_context, max_scenes=None, script_type=script_type)
     
     # PASS 2: For main videos (not shorts), identify pivotal moments and insert significance scenes
+    # SKIP for shorts (trailers don't need significance scenes)
     # UNLESS skip_significance_scenes is True (e.g., for top 10 list videos)
     scenes_after_pivotal = [scene.copy() for scene in scenes_after_storyline_check]
-    if not is_short and not skip_significance_scenes:
+    if is_short:
+        print(f"\n[REFINEMENT PASS 2] Skipped for shorts (trailers don't need significance scenes)")
+    elif not skip_significance_scenes:
         print(f"\n[REFINEMENT PASS 2] Identifying pivotal moments and adding significance scenes...")
         print(f"[REFINEMENT] Identifying pivotal moments and adding significance scenes (before refinement)...")
         
@@ -846,8 +914,18 @@ def refine_scenes(scenes: list[dict], subject_name: str, is_short: bool = False,
                     next_scene=next_scene,
                     subject_name=subject_name,
                     justification=justification,
-                    chapter_context=chapter_context
+                    chapter_context=chapter_context,
+                    script_type=script_type
                 )
+                
+                # CRITICAL: Ensure narration_instructions is present (fix if missing)
+                if 'narration_instructions' not in significance_scene or not significance_scene.get('narration_instructions', '').strip():
+                    emotion = significance_scene.get('emotion', 'contemplative')
+                    if script_type == "horror":
+                        significance_scene['narration_instructions'] = f"Speak with {emotion} urgency, voice trembling."
+                    else:
+                        significance_scene['narration_instructions'] = f"Deliver with {emotion} weight, emphasizing significance."
+                    print(f"[REFINEMENT PASS 2] WARNING: Generated significance scene missing narration_instructions, generated fallback: {significance_scene['narration_instructions']}")
                 
                 # Mark this as a significance scene
                 significance_scene['is_significance_scene'] = True
@@ -938,13 +1016,32 @@ Each scene's type is also indicated in the JSON below. Use this information to u
     
     pacing_note = "For shorts: maintain the concise 1-2 sentence per scene format" if is_short else "Maintain the 2-3 sentence per scene format for main video"
     
-    # Adjust prompt based on subject_type
-    subject_descriptor = {
-        "person": "a documentary about",
-        "character": "a documentary about the character",
-        "region": "a documentary about the lore of",
-        "topic": "a documentary about"
-    }.get(subject_type, "a documentary about")
+    # Adjust prompt based on subject_type and script_type
+    if script_type == "horror":
+        subject_descriptor = "a horror story about"
+        narration_style_note = "CRITICAL: This is a FIRST PERSON horror story. All narration must be in first person (I/me/my), present tense. The protagonist is telling their own story. Maintain first person throughout."
+        horror_focus = """
+HORROR-SPECIFIC REFINEMENT FOCUS:
+- TENSION BUILDING: Ensure tension builds progressively - each scene should increase fear/unease
+- ATMOSPHERE: Strengthen horror atmosphere through description: shadows, sounds, feelings, unease
+- SCARE MOMENTS: Ensure key scare moments are impactful and well-timed
+- HORROR PACING: Maintain horror pacing - build tension, deliver scares, create unease
+- OPEN ENDING: For final chapter scenes, ensure ending remains open/unresolved to keep viewers scared
+- FIRST PERSON: All narration must be in first person (I/me/my) - never use third person
+- PRESENT TENSE: Use present tense for immediacy: "I walk...", "I hear...", "I feel..."
+- SENSORY DETAILS: Include what I see, hear, feel, smell - make it visceral
+- INTERNAL THOUGHTS: Include protagonist's thoughts and reactions: "I think...", "I wonder...", "I'm terrified because..."
+- PHYSICAL SENSATIONS: Include physical reactions: "My hands shake...", "My heart races...", "I feel cold..."
+"""
+    else:
+        subject_descriptor = {
+            "person": "a documentary about",
+            "character": "a documentary about the character",
+            "region": "a documentary about the lore of",
+            "topic": "a documentary about"
+        }.get(subject_type, "a documentary about")
+        narration_style_note = "Write from the YouTuber's perspective - natural storytelling without referencing how it's organized."
+        horror_focus = ""
     
     refinement_prompt = f"""You are reviewing and refining scenes for {subject_descriptor} {subject_name}.
 
@@ -955,6 +1052,8 @@ CURRENT SCENES (JSON):
 {significance_scene_info}
 
 CRITICAL: For scenes that contain requests to "like", "subscribe", and "comment" in the narration, you can refine and improve them (clarity, flow, naturalness) BUT you MUST preserve the like/subscribe/comment call-to-action. The CTA is essential and must remain in the narration - refine around it, don't remove it.
+
+{horror_focus}
 
 YOUR TASK: Review these scenes and improve them. Look for:
 1. WHY/WHAT SCENE PURPOSE (CRITICAL) - Each scene has a scene_type of either "WHY" or "WHAT". Understand and refine based on their purpose:
@@ -1028,26 +1127,33 @@ YOUR TASK: Review these scenes and improve them. Look for:
 IMPORTANT GUIDELINES:
 - Keep ALL factual information accurate
 - Maintain the same scene structure and IDs
-- Preserve all fields (id, title, narration, image_prompt, emotion, year, scene_type, etc.)
+- Preserve all fields (id, title, narration, image_prompt, emotion, year, scene_type, narration_instructions, etc.)
 - CRITICAL: Preserve the WHY/WHAT structure - maintain each scene's scene_type field (WHY or WHAT). WHY sections frame mysteries, problems, questions, obstacles, counterintuitive information, secrets, or suggest there's something we haven't considered or don't understand the significance of. WHY sections should set up what will happen, why it matters, and what the stakes are for upcoming WHAT sections. WHAT sections deliver content/solutions and must clearly communicate what is happening, why it's important, and what the stakes are. Ensure WHY sections create anticipation for upcoming WHAT sections by establishing what/why/stakes.
+- CRITICAL: Preserve and refine narration_instructions - Each scene MUST have narration_instructions that match the scene's emotion field with brief delivery guidance. When refining, ensure narration_instructions accurately reflect the scene's emotion. If narration_instructions don't match the refined narration or emotion, update them to be consistent. Keep it simple - just follow the emotion with some context. ABSOLUTELY DO NOT remove narration_instructions - every scene must have this field. If a scene is missing narration_instructions, add it based on the scene's emotion field.
 - Keep the same tone and style
 - {pacing_note}
 - Only make changes that IMPROVE clarity, flow, or naturalness
 - DO NOT add new information or change facts
 - DO NOT add film/camera directions - narration should be pure spoken words
 - ABSOLUTELY REMOVE any meta references to chapters, production elements, or the script structure itself
-- Write from the YouTuber's perspective - natural storytelling without referencing how it's organized
+- {narration_style_note}
 - CRITICAL: For scenes mentioning "like", "subscribe", and "comment", you can improve them but MUST keep all three CTA elements in the narration
 
 Return the SAME JSON structure with refined scenes. Only change what needs improvement - don't rewrite everything.
 
-Respond with JSON array only (no markdown, no explanation):"""
+CRITICAL JSON STRUCTURE REQUIREMENTS:
+- Every scene MUST include ALL required fields: id, title, narration, image_prompt, emotion, year, scene_type, and narration_instructions
+- The "narration_instructions" field is REQUIRED for every scene - it must match the scene's emotion field with brief delivery guidance
+- DO NOT omit any fields from the JSON - every scene must have the complete structure
+- If a scene is missing narration_instructions, add it based on the scene's emotion field
+
+Respond with JSON array only (no markdown, no explanation). Each scene object must include: id, title, narration, image_prompt, emotion, year, scene_type, narration_instructions."""
     
     try:
         response = client.chat.completions.create(
             model=SCRIPT_MODEL,
             messages=[
-                {"role": "system", "content": "You are an expert editor who refines documentary narration for clarity, flow, and naturalness. CRITICAL FOR RETENTION - AVOID VIEWER CONFUSION: The biggest issue for retention is viewer confusion. WHY scenes MUST ensure the viewer knows WHAT IS HAPPENING in the story - provide clear context, establish the situation, and make sure viewers understand the basic facts before introducing mysteries or questions. Don't create confusion by being vague about what's happening. CRITICAL: Create a SEAMLESS JOURNEY through the video - scenes should feel CONNECTED, not like consecutive pieces of disjoint information (A and B and C). Each scene should build on the previous scene, reference what came before naturally, and show how events connect. You understand the WHY/WHAT paradigm: WHY scenes frame mysteries, problems, questions, obstacles, counterintuitive information, secrets, or suggest there's something we haven't considered - they create anticipation by setting up what will happen, why it matters, and what the stakes are for upcoming WHAT sections. WHY scenes MUST clearly establish what is happening (MOST IMPORTANT for retention) before introducing questions or mysteries. WHAT scenes deliver core content, solutions, and information - they satisfy anticipation by clearly communicating what is happening, why it's important, and what the stakes are (what can go wrong, what can go right, what's at risk). You catch awkward transitions, weird sentences, style violations, and especially meta references (chapters, production elements, etc.). You ensure scenes feel connected and build on each other, WHY scenes clearly establish what is happening (avoiding confusion) and set up what/why/stakes for upcoming WHAT sections, and WHAT scenes clearly communicate what/why/stakes. The narration should feel like natural storytelling from the YouTuber's perspective. Respond with valid JSON array only - same structure as input."},
+                {"role": "system", "content": f"You are an expert editor who refines {'horror story' if script_type == 'horror' else 'documentary'} narration for clarity, flow, and naturalness. CRITICAL FOR RETENTION - AVOID VIEWER CONFUSION: The biggest issue for retention is viewer confusion. WHY scenes MUST ensure the viewer knows WHAT IS HAPPENING in the story - provide clear context, establish the situation, and make sure viewers understand the basic facts before introducing mysteries or questions. Don't create confusion by being vague about what's happening. CRITICAL: Create a SEAMLESS JOURNEY through the video - scenes should feel CONNECTED, not like consecutive pieces of disjoint information (A and B and C). Each scene should build on the previous scene, reference what came before naturally, and show how events connect. You understand the WHY/WHAT paradigm: WHY scenes frame mysteries, problems, questions, obstacles, counterintuitive information, secrets, or suggest there's something we haven't considered - they create anticipation by setting up what will happen, why it matters, and what the stakes are for upcoming WHAT sections. WHY scenes MUST clearly establish what is happening (MOST IMPORTANT for retention) before introducing questions or mysteries. WHAT scenes deliver core content, solutions, and information - they satisfy anticipation by clearly communicating what is happening, why it's important, and what the stakes are (what can go wrong, what can go right, what's at risk). {'CRITICAL FOR HORROR: All narration must be in FIRST PERSON (I/me/my), present tense. The protagonist is telling their own story. Focus on tension building, atmosphere, and horror pacing. For final chapter, ensure open ending that keeps viewers scared.' if script_type == 'horror' else ''} You catch awkward transitions, weird sentences, style violations, and especially meta references (chapters, production elements, etc.). You ensure scenes feel connected and build on each other, WHY scenes clearly establish what is happening (avoiding confusion) and set up what/why/stakes for upcoming WHAT sections, and WHAT scenes clearly communicate what/why/stakes. {narration_style_note} CRITICAL JSON REQUIREMENT: Every scene in your response MUST include the 'narration_instructions' field. This field must match the scene's emotion field with brief delivery guidance (e.g., 'Speak with tense urgency, voice trembling.' or 'Deliver with contemplative weight, emphasizing significance.'). DO NOT omit this field from any scene. Respond with valid JSON array only - same structure as input, including narration_instructions for every scene."},
                 {"role": "user", "content": refinement_prompt}
             ],
             temperature=0.3,  # Lower temperature for refinement - more focused changes
@@ -1071,12 +1177,28 @@ Respond with JSON array only (no markdown, no explanation):"""
             for i, scene in enumerate(refined_scenes):
                 scene['id'] = i + 1
          
-        # Validate all required fields are present
+        # Validate all required fields are present and fix missing narration_instructions
         for i, scene in enumerate(refined_scenes):
+            # Check for missing required fields
+            missing_fields = []
             for field in ["id", "title", "narration", "image_prompt", "emotion", "year", "scene_type"]:
                 if field not in scene:
-                    print(f"[REFINEMENT] WARNING: Scene {i+1} missing field '{field}'. Using original scenes.")
-                    return scenes, {}
+                    missing_fields.append(field)
+            
+            if missing_fields:
+                print(f"[REFINEMENT] WARNING: Scene {i+1} missing required fields: {missing_fields}. Using original scenes.")
+                return scenes, {}
+            
+            # CRITICAL: Ensure narration_instructions is always present (fix if missing)
+            if 'narration_instructions' not in scene or not scene.get('narration_instructions'):
+                # Generate fallback narration_instructions based on emotion and script type
+                emotion = scene.get('emotion', 'contemplative')
+                if script_type == "horror":
+                    scene['narration_instructions'] = f"Speak with {emotion} urgency, voice trembling."
+                else:
+                    scene['narration_instructions'] = f"Deliver with {emotion} weight, emphasizing significance."
+                print(f"[REFINEMENT] WARNING: Scene {i+1} missing narration_instructions, generated fallback: {scene['narration_instructions']}")
+            
             # Validate scene_type is valid
             if scene.get('scene_type') not in ['WHY', 'WHAT']:
                 print(f"[REFINEMENT] WARNING: Scene {i+1} has invalid 'scene_type' value: {scene.get('scene_type')}. Using original scenes.")
@@ -1128,6 +1250,18 @@ Respond with JSON array only (no markdown, no explanation):"""
         print(f"[REFINEMENT]   • Narration changes: {changes_stats['narration_changes']}")
         print(f"[REFINEMENT]   • Image prompt changes: {changes_stats['image_prompt_changes']}")
         print(f"[REFINEMENT]   • Total field changes: {changes_stats['total_changes']}")
+        
+        # Final validation: Ensure ALL scenes have narration_instructions (fix any that are missing)
+        # This is a critical safeguard to prevent missing narration_instructions after refinement
+        for i, scene in enumerate(refined_scenes):
+            if 'narration_instructions' not in scene or not scene.get('narration_instructions', '').strip():
+                # Generate fallback narration_instructions based on emotion and script type
+                emotion = scene.get('emotion', 'contemplative')
+                if script_type == "horror":
+                    scene['narration_instructions'] = f"Speak with {emotion} urgency, voice trembling."
+                else:
+                    scene['narration_instructions'] = f"Deliver with {emotion} weight, emphasizing significance."
+                print(f"[REFINEMENT] CRITICAL FIX: Scene {i+1} (ID: {scene.get('id', i+1)}) missing narration_instructions after refinement, generated fallback: {scene['narration_instructions']}")
         
         # Generate diff comparing original scenes to final refined scenes (which may include significance scenes)
         diff_data = generate_refinement_diff(original_scenes, refined_scenes)

@@ -7,6 +7,7 @@ import random
 import argparse
 import tempfile
 import shutil
+import numpy as np
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -27,8 +28,8 @@ IMG_MODEL = "gpt-image-1.5"
 TTS_PROVIDER = os.getenv("TTS_PROVIDER", "google").lower()
 
 # OpenAI TTS settings
-OPENAI_TTS_MODEL = "gpt-4o-mini-tts"
-OPENAI_TTS_VOICE = "cedar"
+OPENAI_TTS_MODEL = "gpt-4o-mini-tts-2025-12-15"
+OPENAI_TTS_VOICE = "marin"
 
 # ElevenLabs TTS settings
 ELEVENLABS_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID", "JBFqnCBsd6RMkjVDRZzb")  # Default: George (narrative)
@@ -41,7 +42,12 @@ GOOGLE_TTS_VOICE = os.getenv("GOOGLE_TTS_VOICE", "en-US-Studio-Q")  # High quali
 GOOGLE_TTS_LANGUAGE = os.getenv("GOOGLE_TTS_LANGUAGE", "en-US")
 GOOGLE_TTS_SPEAKING_RATE = float(os.getenv("GOOGLE_TTS_SPEAKING_RATE", "0.92"))  # 0.25 to 4.0 (slightly slower for clarity)
 GOOGLE_TTS_PITCH = float(os.getenv("GOOGLE_TTS_PITCH", "-1.0"))  # -20.0 to 20.0 semitones (slightly deeper)
-GOOGLE_VOICE_TYPE = os.getenv("GOOGLE_VOICE_TYPE", "").lower()  # "chirp" or empty - chirp voices don't support SSML/prosody
+GOOGLE_VOICE_TYPE = os.getenv("GOOGLE_VOICE_TYPE", "").lower()  # "chirp", "gemini", or empty - chirp voices don't support SSML/prosody, gemini uses new API with prompt parameter
+GOOGLE_GEMINI_MALE_SPEAKER = os.getenv("GOOGLE_GEMINI_MALE_SPEAKER", "Charon")  # Default Gemini male voice
+GOOGLE_GEMINI_FEMALE_SPEAKER = os.getenv("GOOGLE_GEMINI_FEMALE_SPEAKER", "")  # Gemini female voice
+
+# Global flag to track if female voice should be used (set by --female flag)
+USE_FEMALE_VOICE = False
 
 # Scene pause settings
 END_SCENE_PAUSE_LENGTH = float(os.getenv("END_SCENE_PAUSE_LENGTH", "0.15"))  # Pause length in seconds at end of each scene (default: 150ms)
@@ -138,8 +144,9 @@ def text_to_ssml(text: str, emotion: str | None = None) -> str:
     """
     import re
     
-    # If using Chirp voice, skip SSML and return plain text
-    if TTS_PROVIDER == "google" and GOOGLE_VOICE_TYPE == "chirp":
+    # If using Chirp or Gemini voice, skip SSML and return plain text
+    # Chirp doesn't support SSML, Gemini uses prompt parameter instead
+    if TTS_PROVIDER == "google" and GOOGLE_VOICE_TYPE in ["chirp", "gemini"]:
         return text
     
     # Get emotion-based prosody settings
@@ -654,7 +661,8 @@ def generate_image_for_scene(scene: dict, prev_scene: dict | None, global_block_
             model=IMG_MODEL,
             prompt=prompt,
             size=config.image_size,  # vertical for shorts, landscape for main
-            n=1
+            n=1,
+            moderation="low",
         )
 
         b64_data = resp.data[0].b64_json
@@ -728,34 +736,69 @@ def generate_audio_for_scene(scene: dict) -> Path:
         # Google Cloud TTS with SSML for natural pacing and emotion-based prosody
         from google.cloud import texttospeech
         
-        # Check if using Chirp voice (doesn't support SSML/prosody)
+        # Check voice type
         is_chirp_voice = GOOGLE_VOICE_TYPE == "chirp"
+        is_gemini_voice = GOOGLE_VOICE_TYPE == "gemini"
         
-        if is_chirp_voice:
+        if is_gemini_voice:
+            # Gemini TTS uses new API with prompt parameter and model_name
+            # Get narration_instructions from scene if available, otherwise use emotion-based prompt
+            narration_instructions = scene.get("narration_instructions", "")
+            if narration_instructions:
+                prompt_text = narration_instructions
+                print(f"[AUDIO] Scene {scene['id']}: using scene-specific narration instructions for Gemini TTS")
+            else:
+                # Fall back to emotion-based prompt
+                emotion_desc = f"with {emotion} emotion" if emotion else ""
+                prompt_text = f"Read this text {emotion_desc}, matching the scene's emotional tone."
+            
+            # Gemini uses text input (not SSML) with prompt parameter
+            synthesis_input = texttospeech.SynthesisInput(text=text, prompt=prompt_text)
+            
+            # Select Gemini voice based on female flag
+            if USE_FEMALE_VOICE:
+                gemini_voice_name = GOOGLE_GEMINI_FEMALE_SPEAKER if GOOGLE_GEMINI_FEMALE_SPEAKER else GOOGLE_TTS_VOICE
+            else:
+                gemini_voice_name = GOOGLE_GEMINI_MALE_SPEAKER
+            
+            # Gemini voices use model_name instead of just name
+            voice = texttospeech.VoiceSelectionParams(
+                language_code=GOOGLE_TTS_LANGUAGE,
+                name=gemini_voice_name,  # Voice name from GOOGLE_GEMINI_MALE_SPEAKER or GOOGLE_GEMINI_FEMALE_SPEAKER
+                model_name="gemini-2.5-pro-tts"
+            )
+            
+            audio_config = texttospeech.AudioConfig(
+                audio_encoding=texttospeech.AudioEncoding.MP3
+            )
+        elif is_chirp_voice:
             # Chirp voices don't support SSML or prosody - use plain text
             synthesis_input = texttospeech.SynthesisInput(text=text)
+            
+            voice = texttospeech.VoiceSelectionParams(
+                language_code=GOOGLE_TTS_LANGUAGE,
+                name=GOOGLE_TTS_VOICE,
+            )
+            
+            # Chirp voices don't support pitch parameter
+            audio_config = texttospeech.AudioConfig(
+                audio_encoding=texttospeech.AudioEncoding.MP3,
+            )
         else:
-            # Convert text to SSML for natural pauses and emphasis, with emotion-based prosody adjustments
+            # Standard Google TTS with SSML for natural pauses and emotion-based prosody adjustments
             ssml_text = text_to_ssml(text, emotion=emotion)
             synthesis_input = texttospeech.SynthesisInput(ssml=ssml_text)
-        
-        voice = texttospeech.VoiceSelectionParams(
-            language_code=GOOGLE_TTS_LANGUAGE,
-            name=GOOGLE_TTS_VOICE,
-        )
-        
-        # Chirp voices don't support pitch parameter
-        audio_config_params = {
-            "audio_encoding": texttospeech.AudioEncoding.MP3,
-            # "speaking_rate": GOOGLE_TTS_SPEAKING_RATE,
-            # "effects_profile_id": ["headphone-class-device"],
-        }
-        
-        # Only add pitch if not using Chirp voice
-        if not is_chirp_voice:
-            audio_config_params["pitch"] = GOOGLE_TTS_PITCH
-        
-        audio_config = texttospeech.AudioConfig(**audio_config_params)
+            
+            voice = texttospeech.VoiceSelectionParams(
+                language_code=GOOGLE_TTS_LANGUAGE,
+                name=GOOGLE_TTS_VOICE,
+            )
+            
+            audio_config_params = {
+                "audio_encoding": texttospeech.AudioEncoding.MP3,
+                "pitch": GOOGLE_TTS_PITCH,
+            }
+            audio_config = texttospeech.AudioConfig(**audio_config_params)
         
         response = google_tts_client.synthesize_speech(
             input=synthesis_input,
@@ -767,11 +810,21 @@ def generate_audio_for_scene(scene: dict) -> Path:
             f.write(response.audio_content)
     else:
         # OpenAI TTS (fallback)
+        # Use narration_instructions from scene if available, otherwise fall back to default style prompt
+        narration_instructions = scene.get("narration_instructions", "")
+        if narration_instructions:
+            # Use scene-specific narration instructions
+            tts_instructions = narration_instructions
+            print(f"[AUDIO] Scene {scene['id']}: using scene-specific narration instructions")
+        else:
+            # Fall back to default style prompt
+            tts_instructions = OPENAI_TTS_STYLE_PROMPT
+        
         with client.audio.speech.with_streaming_response.create(
             model=OPENAI_TTS_MODEL,
             voice=OPENAI_TTS_VOICE,
             input=text,
-            instructions=OPENAI_TTS_STYLE_PROMPT,
+            instructions=tts_instructions,
         ) as response:
             response.stream_to_file(str(audio_path))
 
@@ -836,6 +889,378 @@ def make_static_clip_with_audio(image_path: Path, audio_clip: AudioFileClip):
     extended_audio = concatenate_audioclips([audio_clip, silent_audio])
 
     return clip.with_audio(extended_audio).with_duration(total_duration)
+
+
+def generate_room_tone(duration: float, sample_rate: int = 44100) -> AudioClip:
+    """
+    Generate barely audible room tone (ambient noise).
+    Prevents the brain from relaxing - almost silence, but not silence.
+    
+    Args:
+        duration: Duration in seconds
+        sample_rate: Sample rate in Hz (default: 44100)
+    
+    Returns:
+        AudioClip with barely audible white/pink noise
+    """
+    # Generate pink noise (more natural than white noise)
+    # Pink noise has equal energy per octave
+    num_samples = int(duration * sample_rate)
+    t = np.linspace(0, duration, num_samples, False)
+    
+    # Generate white noise
+    white_noise = np.random.randn(num_samples)
+    
+    # Convert to pink noise using a simple filter approximation
+    # This creates a more natural ambient sound
+    pink_noise = np.zeros_like(white_noise)
+    pink_noise[0] = white_noise[0]
+    for i in range(1, len(white_noise)):
+        pink_noise[i] = 0.5 * (pink_noise[i-1] + white_noise[i])
+    
+    # Normalize to prevent clipping
+    pink_noise = pink_noise / np.max(np.abs(pink_noise)) if np.max(np.abs(pink_noise)) > 0 else pink_noise
+    
+    # Create audio function for MoviePy
+    # MoviePy's AudioClip expects a function that takes a time array and returns audio samples
+    # Return stereo (2 channels) for compatibility with CompositeAudioClip
+    def make_audio(t):
+        # t can be a scalar or array
+        if np.isscalar(t):
+            idx = int(t * sample_rate)
+            if 0 <= idx < len(pink_noise):
+                # Return stereo: [left, right] with same value
+                return np.array([pink_noise[idx], pink_noise[idx]])
+            return np.array([0.0, 0.0])
+        else:
+            # Array of times - return stereo array
+            indices = (t * sample_rate).astype(int)
+            indices = np.clip(indices, 0, len(pink_noise) - 1)
+            mono_samples = pink_noise[indices]
+            # Convert to stereo by duplicating the channel
+            if mono_samples.ndim == 0:
+                return np.array([mono_samples, mono_samples])
+            else:
+                return np.column_stack([mono_samples, mono_samples])
+    
+    return AudioClip(make_audio, duration=duration, fps=sample_rate)
+
+
+def generate_low_frequency_drone(duration: float, frequency: float = 50.0, sample_rate: int = 44100) -> AudioClip:
+    """
+    Generate low-frequency drone (30-80 Hz).
+    Feels like pressure, not sound - you should feel it more than hear it.
+    
+    Args:
+        duration: Duration in seconds
+        frequency: Frequency in Hz (default: 50, range: 30-80)
+        sample_rate: Sample rate in Hz (default: 44100)
+    
+    Returns:
+        AudioClip with low-frequency sine wave
+    """
+    # Clamp frequency to 30-80 Hz range
+    frequency = max(30.0, min(80.0, frequency))
+    
+    # Generate sine wave
+    num_samples = int(duration * sample_rate)
+    t = np.linspace(0, duration, num_samples, False)
+    sine_wave = np.sin(2 * np.pi * frequency * t)
+    
+    # Normalize
+    sine_wave = sine_wave / np.max(np.abs(sine_wave)) if np.max(np.abs(sine_wave)) > 0 else sine_wave
+    
+    # Create audio function for MoviePy
+    # MoviePy's AudioClip expects a function that takes a time array and returns audio samples
+    # Return stereo (2 channels) for compatibility with CompositeAudioClip
+    def make_audio(t):
+        # t can be a scalar or array
+        if np.isscalar(t):
+            idx = int(t * sample_rate)
+            if 0 <= idx < len(sine_wave):
+                # Return stereo: [left, right] with same value
+                return np.array([sine_wave[idx], sine_wave[idx]])
+            return np.array([0.0, 0.0])
+        else:
+            # Array of times - return stereo array
+            indices = (t * sample_rate).astype(int)
+            indices = np.clip(indices, 0, len(sine_wave) - 1)
+            mono_samples = sine_wave[indices]
+            # Convert to stereo by duplicating the channel
+            if mono_samples.ndim == 0:
+                return np.array([mono_samples, mono_samples])
+            else:
+                return np.column_stack([mono_samples, mono_samples])
+    
+    return AudioClip(make_audio, duration=duration, fps=sample_rate)
+
+
+def generate_detail_sounds(duration: float, sound_type: str = "random", sample_rate: int = 44100) -> AudioClip:
+    """
+    Generate occasional detail sounds (creaks, wind, hum, whispers).
+    Randomly places 3-8 sounds throughout the duration.
+    
+    Args:
+        duration: Duration in seconds
+        sound_type: Type of sound ("creak", "wind", "hum", "whisper", "random")
+        sample_rate: Sample rate in Hz (default: 44100)
+    
+    Returns:
+        AudioClip with occasional detail sounds
+    """
+    HORROR_AUDIO_DIR = Path("horror_audio")
+    
+    # Try to load audio files first
+    sound_files = {
+        "creak": list((HORROR_AUDIO_DIR / "creaks").glob("*.mp3")) + list((HORROR_AUDIO_DIR / "creaks").glob("*.wav")),
+        "wind": list((HORROR_AUDIO_DIR / "wind").glob("*.mp3")) + list((HORROR_AUDIO_DIR / "wind").glob("*.wav")),
+        "hum": list((HORROR_AUDIO_DIR / "hum").glob("*.mp3")) + list((HORROR_AUDIO_DIR / "hum").glob("*.wav")),
+        "whisper": list((HORROR_AUDIO_DIR / "whispers").glob("*.mp3")) + list((HORROR_AUDIO_DIR / "whispers").glob("*.wav")),
+    }
+    
+    # Create silent audio clip (stereo)
+    def make_silence(t):
+        # Handle both scalar and array inputs
+        # Return stereo (2 channels) for compatibility
+        if np.isscalar(t):
+            return np.array([0.0, 0.0])
+        else:
+            # Return stereo array
+            return np.zeros((len(t), 2))
+    
+    result_audio = AudioClip(make_silence, duration=duration, fps=sample_rate)
+    
+    # Determine number of sounds (3-8)
+    num_sounds = random.randint(3, 8)
+    
+    # Generate sound positions (avoid overlapping)
+    min_gap = duration / (num_sounds + 1)
+    positions = []
+    for _ in range(num_sounds):
+        pos = random.uniform(min_gap, duration - min_gap)
+        # Ensure minimum gap between sounds
+        if not positions or all(abs(pos - p) >= min_gap for p in positions):
+            positions.append(pos)
+    
+    # Sort positions
+    positions.sort()
+    
+    # Add sounds at each position
+    for pos in positions:
+        # Select sound type
+        if sound_type == "random":
+            selected_type = random.choice(["creak", "wind", "hum", "whisper"])
+        else:
+            selected_type = sound_type
+        
+        # Try to use audio file if available
+        if sound_files[selected_type]:
+            try:
+                sound_file = random.choice(sound_files[selected_type])
+                sound_clip = AudioFileClip(str(sound_file))
+                # Place sound at position
+                sound_clip = sound_clip.with_start(pos)
+                # Composite with existing audio
+                result_audio = CompositeAudioClip([result_audio, sound_clip])
+                continue
+            except Exception as e:
+                print(f"[HORROR AUDIO] Failed to load {sound_file}: {e}, using programmatic fallback")
+        
+        # Fallback: generate programmatic sound
+        sound_duration = random.uniform(0.5, 2.0)  # 0.5-2 seconds
+        
+        if selected_type == "creak":
+            # Creak: short burst of noise with frequency sweep
+            num_samples = int(sound_duration * sample_rate)
+            t = np.linspace(0, sound_duration, num_samples, False)
+            # Frequency sweep from high to low
+            freq_sweep = np.linspace(800, 200, num_samples)
+            creak = np.sin(2 * np.pi * freq_sweep * t) * np.exp(-t * 2)  # Decay envelope
+            creak = creak / np.max(np.abs(creak)) if np.max(np.abs(creak)) > 0 else creak
+            sound_data = creak
+        elif selected_type == "wind":
+            # Wind: low-frequency noise with modulation
+            num_samples = int(sound_duration * sample_rate)
+            t = np.linspace(0, sound_duration, num_samples, False)
+            wind = np.random.randn(num_samples) * 0.3
+            # Low-pass filter effect (simple)
+            for i in range(1, len(wind)):
+                wind[i] = 0.7 * wind[i-1] + 0.3 * wind[i]
+            wind = wind / np.max(np.abs(wind)) if np.max(np.abs(wind)) > 0 else wind
+            sound_data = wind
+        elif selected_type == "hum":
+            # Hum: low-frequency sine wave with slight variation
+            num_samples = int(sound_duration * sample_rate)
+            t = np.linspace(0, sound_duration, num_samples, False)
+            base_freq = 60.0 + random.uniform(-10, 10)
+            hum = np.sin(2 * np.pi * base_freq * t) * (0.5 + 0.5 * np.sin(2 * np.pi * 0.5 * t))
+            hum = hum / np.max(np.abs(hum)) if np.max(np.abs(hum)) > 0 else hum
+            sound_data = hum
+        else:  # whisper
+            # Whisper: high-frequency filtered noise
+            num_samples = int(sound_duration * sample_rate)
+            t = np.linspace(0, sound_duration, num_samples, False)
+            whisper = np.random.randn(num_samples) * 0.2
+            # High-pass filter effect (simple)
+            for i in range(1, len(whisper)):
+                whisper[i] = 0.3 * whisper[i-1] + 0.7 * whisper[i]
+            whisper = whisper / np.max(np.abs(whisper)) if np.max(np.abs(whisper)) > 0 else whisper
+            sound_data = whisper
+        
+        # Create audio clip for this sound (stereo)
+        def make_sound_audio(t_local):
+            # t_local is relative to the clip start (0 to sound_duration)
+            # t can be a scalar or array
+            # Return stereo (2 channels) for compatibility
+            if np.isscalar(t_local):
+                idx = int(t_local * sample_rate)
+                if 0 <= idx < len(sound_data):
+                    # Return stereo: [left, right] with same value
+                    return np.array([sound_data[idx], sound_data[idx]])
+                return np.array([0.0, 0.0])
+            else:
+                # Array of times - return stereo array
+                indices = (t_local * sample_rate).astype(int)
+                indices = np.clip(indices, 0, len(sound_data) - 1)
+                mono_samples = sound_data[indices]
+                # Convert to stereo by duplicating the channel
+                if mono_samples.ndim == 0:
+                    return np.array([mono_samples, mono_samples])
+                else:
+                    return np.column_stack([mono_samples, mono_samples])
+        
+        sound_clip = AudioClip(make_sound_audio, duration=sound_duration, fps=sample_rate)
+        sound_clip = sound_clip.with_start(pos)
+        result_audio = CompositeAudioClip([result_audio, sound_clip])
+    
+    return result_audio
+
+
+def apply_volume_to_audioclip(clip: AudioClip, volume_factor: float) -> AudioClip:
+    """
+    Apply volume to an AudioClip by wrapping its audio function.
+    
+    Args:
+        clip: The AudioClip to modify
+        volume_factor: Volume multiplier (1.0 = no change, 0.5 = half volume, etc.)
+    
+    Returns:
+        New AudioClip with volume applied
+    """
+    # Access the original audio function
+    # AudioClip stores the function - we'll use get_frame which should work
+    original_get_frame = clip.get_frame
+    
+    # Create a new function that wraps the original and applies volume
+    def volume_adjusted_audio(t):
+        audio = original_get_frame(t)
+        # Handle both scalar and array returns
+        return audio * volume_factor
+    
+    # Create new AudioClip with volume-adjusted function
+    return AudioClip(volume_adjusted_audio, duration=clip.duration, fps=clip.fps)
+
+
+def mix_horror_background_audio(narration_audio: AudioFileClip, duration: float, 
+                                room_tone_volume: float = -45.0, 
+                                drone_volume: float = -25.0, 
+                                detail_volume: float = -30.0) -> CompositeAudioClip:
+    """
+    Mix horror background audio layers with narration.
+    
+    Args:
+        narration_audio: The main narration audio clip
+        duration: Total duration in seconds
+        room_tone_volume: Room tone volume in dB (default: -45)
+        drone_volume: Drone volume in dB (default: -25)
+        detail_volume: Detail sounds volume in dB (default: -30)
+    
+    Returns:
+        CompositeAudioClip with all layers mixed
+    """
+    print(f"[HORROR AUDIO] Generating background layers (duration: {duration:.2f}s)...")
+    
+    # Generate all background layers
+    print("[HORROR AUDIO] Generating room tone...")
+    room_tone = generate_room_tone(duration)
+    
+    print("[HORROR AUDIO] Generating low-frequency drone...")
+    drone = generate_low_frequency_drone(duration, frequency=50.0)
+    
+    print("[HORROR AUDIO] Generating detail sounds...")
+    detail_sounds = generate_detail_sounds(duration, sound_type="random")
+    
+    # Convert dB to linear volume multiplier
+    def db_to_linear(db):
+        return 10 ** (db / 20.0)
+    
+    # Apply volume adjustments
+    room_tone = apply_volume_to_audioclip(room_tone, db_to_linear(room_tone_volume))
+    drone = apply_volume_to_audioclip(drone, db_to_linear(drone_volume))
+    detail_sounds = apply_volume_to_audioclip(detail_sounds, db_to_linear(detail_volume))
+    
+    # Ensure narration audio matches duration (loop or extend if needed)
+    if narration_audio.duration < duration:
+        # Extend narration with silence if needed
+        silence_duration = duration - narration_audio.duration
+        def make_silence(t):
+            # Handle both scalar and array inputs
+            if np.isscalar(t):
+                return 0.0
+            else:
+                return np.zeros_like(t)
+        silence = AudioClip(make_silence, duration=silence_duration, fps=narration_audio.fps)
+        narration_audio = concatenate_audioclips([narration_audio, silence])
+    elif narration_audio.duration > duration:
+        # Trim narration to match duration
+        narration_audio = narration_audio.subclip(0, duration)
+    
+    # All generated clips (room_tone, drone, detail_sounds) are now stereo (2 channels)
+    # But narration_audio might be mono, so ensure it's stereo if needed
+    def ensure_stereo(clip):
+        """Ensure audio clip is stereo (2 channels) - safety check for narration_audio."""
+        try:
+            sample = clip.get_frame(0.0)
+            # Check if it's mono (scalar or single channel)
+            is_mono = (np.isscalar(sample) or 
+                      (hasattr(sample, 'shape') and (len(sample.shape) == 0 or 
+                       (len(sample.shape) == 1 and sample.shape[0] != 2))))
+            if is_mono:
+                # Convert mono to stereo
+                def stereo_func(t):
+                    mono = clip.get_frame(t)
+                    if np.isscalar(mono):
+                        return np.array([mono, mono])
+                    elif mono.ndim == 0:
+                        return np.array([mono, mono])
+                    elif mono.ndim == 1:
+                        if len(mono) == 1:
+                            return np.array([mono[0], mono[0]])
+                        else:
+                            # Already stereo or multi-channel
+                            return mono
+                    else:
+                        # Multi-dimensional - assume compatible
+                        return mono
+                return AudioClip(stereo_func, duration=clip.duration, fps=clip.fps)
+        except:
+            # If we can't determine, assume it's already compatible
+            pass
+        return clip
+    
+    # Ensure narration_audio is stereo (generated clips are already stereo)
+    narration_audio = ensure_stereo(narration_audio)
+    
+    # Mix all layers
+    print("[HORROR AUDIO] Mixing all audio layers...")
+    mixed_audio = CompositeAudioClip([
+        narration_audio,
+        room_tone,
+        drone,
+        detail_sounds
+    ])
+    
+    return mixed_audio
 
 
 def retry_call(name: str, func, *args, max_attempts: int = 3, base_delay: float = 2.0, **kwargs):
@@ -910,7 +1335,9 @@ def generate_audio_for_scene_with_retry(scene: dict) -> Path:
     )
 
 
-def build_video(scenes_path: str, out_video_path: str, save_assets: bool = False, is_short: bool = False, scene_id: int | None = None, audio_only: bool = False):
+def build_video(scenes_path: str, out_video_path: str | None = None, save_assets: bool = False, is_short: bool = False, scene_id: int | None = None, audio_only: bool = False,
+                is_horror: bool = False, horror_bg_enabled: bool = True, room_tone_volume: float = -45.0, 
+                drone_volume: float = -25.0, detail_volume: float = -30.0):
     """
     Build a video from scenes JSON file.
     
@@ -923,6 +1350,10 @@ def build_video(scenes_path: str, out_video_path: str, save_assets: bool = False
                      If False (default), use temp files that are cleaned up.
         is_short: If True, use vertical 9:16 format for YouTube Shorts.
                   If False (default), use landscape 16:9 format.
+        horror_bg_enabled: If True, add horror background audio for horror videos (default: True)
+        room_tone_volume: Room tone volume in dB (default: -45)
+        drone_volume: Drone volume in dB (default: -25)
+        detail_volume: Detail sounds volume in dB (default: -30)
     """
     config.save_assets = save_assets
     config.is_vertical = is_short
@@ -942,13 +1373,15 @@ def build_video(scenes_path: str, out_video_path: str, save_assets: bool = False
     output_dir.mkdir(parents=True, exist_ok=True)
     
     # If output path is just a filename, put it in the appropriate directory
-    out_path = Path(out_video_path)
-    if not out_path.is_absolute() and str(out_path.parent) == ".":
-        # Just a filename, put it in the appropriate directory
-        out_video_path = str(output_dir / out_path.name)
-    elif not out_path.is_absolute() and str(out_path.parent) not in ["finished_shorts", "finished_videos"]:
-        # Relative path but not in the right directory, move it
-        out_video_path = str(output_dir / out_path.name)
+    # Skip this in audio-only mode since we don't need a video output path
+    if out_video_path is not None:
+        out_path = Path(out_video_path)
+        if not out_path.is_absolute() and str(out_path.parent) == ".":
+            # Just a filename, put it in the appropriate directory
+            out_video_path = str(output_dir / out_path.name)
+        elif not out_path.is_absolute() and str(out_path.parent) not in ["finished_shorts", "finished_videos"]:
+            # Relative path but not in the right directory, move it
+            out_video_path = str(output_dir / out_path.name)
     
     # Set up temp directory if not saving assets
     if not config.save_assets:
@@ -956,17 +1389,39 @@ def build_video(scenes_path: str, out_video_path: str, save_assets: bool = False
         print(f"[TEMP] Using temporary directory: {config.temp_dir}")
     
     try:
-        _build_video_impl(scenes_path, out_video_path, scene_id=scene_id, audio_only=audio_only)
+        _build_video_impl(scenes_path, out_video_path, scene_id=scene_id, audio_only=audio_only,
+                          is_horror=is_horror, horror_bg_enabled=horror_bg_enabled, room_tone_volume=room_tone_volume,
+                          drone_volume=drone_volume, detail_volume=detail_volume)
     finally:
         # Clean up temp directory
         if not config.save_assets and config.temp_dir and os.path.exists(config.temp_dir):
             print(f"[TEMP] Cleaning up temporary files...")
-            shutil.rmtree(config.temp_dir)
+            try:
+                # Try to remove the directory
+                shutil.rmtree(config.temp_dir)
+            except PermissionError as e:
+                # Files might still be in use - try again after a short delay
+                import time
+                time.sleep(0.5)
+                try:
+                    shutil.rmtree(config.temp_dir)
+                except PermissionError:
+                    # If still failing, log warning but don't crash
+                    print(f"[WARNING] Could not clean up temp directory {config.temp_dir}: files may still be in use")
+            except Exception as e:
+                # Other errors - log but don't crash
+                print(f"[WARNING] Error cleaning up temp directory {config.temp_dir}: {e}")
 
 
-def _build_video_impl(scenes_path: str, out_video_path: str, scene_id: int | None = None, audio_only: bool = False):
+def _build_video_impl(scenes_path: str, out_video_path: str | None = None, scene_id: int | None = None, audio_only: bool = False,
+                     is_horror: bool = False, horror_bg_enabled: bool = True, room_tone_volume: float = -45.0, 
+                     drone_volume: float = -25.0, detail_volume: float = -30.0):
     """Internal implementation of build_video."""
     scenes, metadata = load_scenes(scenes_path)
+    
+    # Use the is_horror flag passed from command line
+    if is_horror:
+        print("[HORROR] Horror video mode enabled")
     
     # If scene_id is specified, filter to only that scene
     test_mode_prev_scene = None
@@ -1096,29 +1551,60 @@ def _build_video_impl(scenes_path: str, out_video_path: str, scene_id: int | Non
 
     print(f"[VIDEO] Final duration: {final.duration:.3f}s ({final.duration/60:.1f} min)")
 
+    # Apply horror background audio if this is a horror video
+    if is_horror and horror_bg_enabled:
+        print(f"\n[HORROR AUDIO] Adding background audio layers...")
+        try:
+            # Extract narration audio from final video
+            narration_audio = final.audio
+            
+            # Mix with horror background layers
+            mixed_audio = mix_horror_background_audio(
+                narration_audio,
+                final.duration,
+                room_tone_volume=room_tone_volume,
+                drone_volume=drone_volume,
+                detail_volume=detail_volume
+            )
+            
+            # Replace video audio with mixed audio
+            final = final.with_audio(mixed_audio)
+            print("[HORROR AUDIO] Background audio layers added successfully")
+        except Exception as e:
+            print(f"[WARNING] Failed to add horror background audio: {e}")
+            print("[WARNING] Continuing with narration audio only...")
+            import traceback
+            traceback.print_exc()
+
     # Write final video with optimized encoding settings for speed
-    print(f"\n[VIDEO] Encoding video (this may take a while)...")
-    
-    # Use faster preset and more threads for better performance
-    # "fast" preset is ~2-3x faster than "medium" with minimal quality loss
-    # Increase threads based on available CPU cores
-    max_threads = os.cpu_count() or 8  # Use all available CPU cores
-    threads = min(max_threads, 16)  # Cap at 16 to avoid overhead
-    
-    final.write_videofile(
-        out_video_path,
-        fps=FPS,
-        codec="libx264",
-        audio_codec="aac",
-        preset="fast",  # Changed from "medium" to "fast" (~2-3x faster with minimal quality loss)
-        threads=threads,  # Use more CPU cores for faster encoding
-        bitrate=None,  # Let codec choose optimal bitrate
-        ffmpeg_params=[
-            "-movflags", "+faststart",  # Optimize for web streaming
-            "-pix_fmt", "yuv420p",  # Ensure compatibility
-        ],
-    )
-    print("[VIDEO] Done!")
+    if out_video_path is None:
+        print(f"\n[WARNING] No output path provided, skipping video encoding")
+    else:
+        if audio_only:
+            print(f"\n[AUDIO ONLY] Encoding video with stock images (audio files generated)...")
+        else:
+            print(f"\n[VIDEO] Encoding video (this may take a while)...")
+        
+        # Use faster preset and more threads for better performance
+        # "fast" preset is ~2-3x faster than "medium" with minimal quality loss
+        # Increase threads based on available CPU cores
+        max_threads = os.cpu_count() or 8  # Use all available CPU cores
+        threads = min(max_threads, 16)  # Cap at 16 to avoid overhead
+        
+        final.write_videofile(
+            out_video_path,
+            fps=FPS,
+            codec="libx264",
+            audio_codec="aac",
+            preset="fast",  # Changed from "medium" to "fast" (~2-3x faster with minimal quality loss)
+            threads=threads,  # Use more CPU cores for faster encoding
+            bitrate=None,  # Let codec choose optimal bitrate
+            ffmpeg_params=[
+                "-movflags", "+faststart",  # Optimize for web streaming
+                "-pix_fmt", "yuv420p",  # Ensure compatibility
+            ],
+        )
+        print("[VIDEO] Done!")
 
 
 # ------------- ENTRY POINT -------------
@@ -1193,12 +1679,48 @@ Examples:
                         help="Generate only a specific scene by ID (for testing). Creates a short video with just that scene.")
     parser.add_argument("--audio-only", action="store_true",
                         help="Generate only audio files (skip images and video assembly). Useful for testing TTS models.")
+    parser.add_argument("--female", action="store_true",
+                        help="Use female voice (GOOGLE_TTS_FEMALE_VOICE from .env) instead of default GOOGLE_TTS_VOICE")
+    parser.add_argument("--horror-bg-room-tone-volume", type=float, default=-45.0, metavar="DB",
+                        help="Room tone volume in dB for horror videos (default: -45)")
+    parser.add_argument("--horror-bg-drone-volume", type=float, default=-25.0, metavar="DB",
+                        help="Low-frequency drone volume in dB for horror videos (default: -25)")
+    parser.add_argument("--horror-bg-detail-volume", type=float, default=-30.0, metavar="DB",
+                        help="Detail sounds volume in dB for horror videos (default: -30)")
+    parser.add_argument("--horror", action="store_true",
+                        help="Enable horror video mode (adds horror background audio)")
+    parser.add_argument("--horror-bg-disable", action="store_true",
+                        help="Disable horror background audio even for horror videos")
     
     args = parser.parse_args()
     
-    # Validate: need either positional args, --all-shorts, or --audio-only
-    if not args.all_shorts and not args.audio_only and (not args.scenes_file or not args.output_file):
-        parser.error("scenes_file and output_file are required unless using --all-shorts or --audio-only")
+    # Validate: need either positional args or --all-shorts
+    # For --audio-only, output_file is optional (will use default if not provided)
+    if not args.all_shorts and not args.scenes_file:
+        parser.error("scenes_file is required unless using --all-shorts")
+    
+    # Override voice if --female is specified
+    global USE_FEMALE_VOICE, GOOGLE_TTS_VOICE
+    if args.female and TTS_PROVIDER == "google":
+        USE_FEMALE_VOICE = True
+        if GOOGLE_VOICE_TYPE == "gemini":
+            # For Gemini, use the female speaker env var
+            female_voice = GOOGLE_GEMINI_FEMALE_SPEAKER
+            if female_voice:
+                GOOGLE_TTS_VOICE = female_voice
+                print(f"[TTS] Using Gemini female voice: {GOOGLE_TTS_VOICE}")
+            else:
+                print("[WARNING] --female specified for Gemini but GOOGLE_GEMINI_FEMALE_SPEAKER not set in .env. Using default voice.")
+        else:
+            # For standard Google TTS, use GOOGLE_TTS_FEMALE_VOICE
+            female_voice = os.getenv("GOOGLE_TTS_FEMALE_VOICE")
+            if female_voice:
+                GOOGLE_TTS_VOICE = female_voice
+                print(f"[TTS] Using female voice: {GOOGLE_TTS_VOICE}")
+            else:
+                print("[WARNING] --female specified but GOOGLE_TTS_FEMALE_VOICE not set in .env. Using default voice.")
+    else:
+        USE_FEMALE_VOICE = False
     
     return args
 
@@ -1234,7 +1756,11 @@ if __name__ == "__main__":
             print(f"[SHORT {i}/{len(shorts)}] Building: {short_output}")
             print(f"{'='*60}")
             
-            build_video(str(short_path), short_output, save_assets=args.save_assets, is_short=True)
+            build_video(str(short_path), short_output, save_assets=args.save_assets, is_short=True,
+                       is_horror=args.horror, horror_bg_enabled=not args.horror_bg_disable,
+                       room_tone_volume=args.horror_bg_room_tone_volume,
+                       drone_volume=args.horror_bg_drone_volume,
+                       detail_volume=args.horror_bg_detail_volume)
         
         print(f"\n{'='*60}")
         print("[COMPLETE] All shorts built!")
@@ -1247,10 +1773,21 @@ if __name__ == "__main__":
     is_short = ("short" in args.scenes_file.lower() or 
                 "shorts_scripts" in str(scenes_path.parent).lower())
     
+    # Generate default output path if not provided (for audio-only mode)
+    if args.audio_only and not args.output_file:
+        # Generate output name from JSON filename: einstein_script.json → einstein_audio_only.mp4
+        base_name = scenes_path.stem.replace("_script", "")
+        if is_short:
+            output_file = f"finished_shorts/{base_name}_audio_only.mp4"
+        else:
+            output_file = f"finished_videos/{base_name}_audio_only.mp4"
+        args.output_file = output_file
+    
     # Build main video
     print(f"\n{'='*60}")
     if args.audio_only:
         print(f"[AUDIO ONLY MODE] Generating audio only: {args.scenes_file}")
+        print(f"[AUDIO ONLY MODE] Output: {args.output_file}")
     elif args.scene_id is not None:
         print(f"[TEST MODE] Building only scene {args.scene_id}: {args.output_file}")
     elif is_short:
@@ -1258,7 +1795,12 @@ if __name__ == "__main__":
     else:
         print(f"[MAIN VIDEO] Building: {args.output_file}")
     print(f"{'='*60}")
-    build_video(args.scenes_file, args.output_file, save_assets=args.save_assets, is_short=is_short, scene_id=args.scene_id, audio_only=args.audio_only)
+    build_video(args.scenes_file, args.output_file, save_assets=args.save_assets, is_short=is_short, 
+               scene_id=args.scene_id, audio_only=args.audio_only,
+               is_horror=args.horror, horror_bg_enabled=not args.horror_bg_disable,
+               room_tone_volume=args.horror_bg_room_tone_volume,
+               drone_volume=args.horror_bg_drone_volume,
+               detail_volume=args.horror_bg_detail_volume)
     
     # Build shorts if requested
     if args.with_shorts:
@@ -1280,7 +1822,11 @@ if __name__ == "__main__":
                 print(f"{'='*60}")
                 
                 # Shorts are always vertical
-                build_video(str(short_path), short_output, save_assets=args.save_assets, is_short=True)
+                build_video(str(short_path), short_output, save_assets=args.save_assets, is_short=True,
+                           is_horror=args.horror, horror_bg_enabled=not args.horror_bg_disable,
+                           room_tone_volume=args.horror_bg_room_tone_volume,
+                           drone_volume=args.horror_bg_drone_volume,
+                           detail_volume=args.horror_bg_detail_volume)
         
         print(f"\n{'='*60}")
         print("[COMPLETE] All videos built!")
