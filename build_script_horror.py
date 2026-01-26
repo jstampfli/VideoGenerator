@@ -34,6 +34,12 @@ clean_json_response = build_scripts_utils.clean_json_response
 # Import script types
 import script_types
 
+# Valid drone_change values for horror scenes
+VALID_DRONE_CHANGES = ['fade_in', 'fade_out', 'hard_cut', 'hold', 'swell', 'shrink', 'none']
+
+# Valid environment values for horror scenes
+VALID_ENVIRONMENTS = ['blizzard', 'snow', 'forest', 'rain', 'indoors', 'jungle']
+
 
 def generate_horror_outline(story_concept: str, chapters: int, total_scenes: int) -> dict:
     """Generate a detailed outline for a horror story."""
@@ -268,6 +274,81 @@ CRITICAL HORROR REQUIREMENTS:
 - Internal thoughts and reactions: "I think...", "I wonder...", "I'm terrified because..."
 - Physical sensations: "My hands shake...", "My heart races...", "I feel cold..."
 
+LOW FREQUENCY DRONE CHANGES - CRITICAL FOR ATMOSPHERE:
+The low frequency drone (background audio) should change at specific moments to enhance horror atmosphere. 
+For each scene, indicate if the drone should change and how:
+
+1. FADE IN:
+   - What the audience feels: "Something has entered the situation."
+   - When to use:
+     * Early unease scenes
+     * After a normal or calm scene
+     * When suspicion begins
+     * When tension starts building
+   - How: Very slow fade (3-10 seconds), no noticeable start point
+   - Ideally begins before the narration acknowledges fear
+   - Use when drone is not currently present or at low volume
+
+2. HOLD:
+   - What the audience feels: "It's still here."
+   - When to use:
+     * When drone is already present from previous scene
+     * Maintaining the same level of tension
+     * Sustaining unease without escalation
+   - How: Keep drone at current volume level
+   - Use when the threat/presence remains constant
+
+3. SWELL:
+   - What the audience feels: "It's getting closer / worse."
+   - When to use:
+     * When tension needs to escalate
+     * When threat is approaching
+     * Building to a scare or reveal
+     * When fear is intensifying
+   - How: Gradually increase drone volume (3-8 seconds)
+   - Use when drone is already present and needs to intensify
+
+4. SHRINK:
+   - What the audience feels: "It's backing off (for now)."
+   - When to use:
+     * Brief moments of relief (but not safety)
+     * When threat temporarily recedes
+     * Before a bigger escalation
+     * Creating false sense of security
+   - How: Gradually decrease drone volume (3-8 seconds)
+   - Important: Never shrink completely—room tone must remain
+   - Use when drone is already present and needs to decrease
+
+5. FADE OUT:
+   - What the audience feels: "We might be safe."
+   - When to use:
+     * After a scare (brief relief)
+     * When the character convinces themselves everything is fine
+     * Before a bigger escalation (false sense of security)
+   - Important: Never fade out completely—room tone must remain.
+   - Creates contrast that makes the next scare more effective.
+
+6. HARD CUT (Instant Silence of Drone):
+   - What the audience feels: "Reality just snapped."
+   - When to use:
+     * Realization moments
+     * Final lines of a scene or chapter
+     * Right before or after a reveal
+     * End of the video
+   - This is extremely effective when used ONCE or sparingly.
+   - Creates maximum impact through sudden silence.
+
+For each scene, add a "drone_change" field with one of these values:
+- "fade_in" - Drone should fade in (use when drone is not present or at low volume, early unease, after calm scenes)
+- "hold" - Drone should hold at current level (use when drone is already present and tension remains constant)
+- "swell" - Drone should increase in volume (use when drone is already present and tension is escalating)
+- "shrink" - Drone should decrease in volume (use when drone is already present and threat temporarily recedes)
+- "fade_out" - Drone should fade out (use after scares, false safety moments, before bigger escalations)
+- "hard_cut" - Drone should cut instantly to silence (use sparingly for realization moments, reveals, final lines)
+- "none" - No change, maintain current drone level (legacy option, prefer "hold" when drone is already present)
+
+CRITICAL: You can only use hold, swell, shrink, fade_out, and hard_cut once the drone is present. You make the drone present by fade_in. You cannot use fade_in or none when the drone is already present.
+
 {build_scripts_utils.get_shared_scene_flow_instructions()}
 
 {build_scripts_utils.get_shared_scene_requirements("historical")}
@@ -284,6 +365,7 @@ Respond with JSON array:
     "image_prompt": "Horror visual description with dark, shadowy, eerie atmosphere, 16:9 cinematic",
     "emotion": "Horror emotion (e.g., 'terrified', 'tense', 'atmospheric', 'dread-filled', 'fearful', 'paranoid', 'uneasy'). Should match the chapter's emotional tone but be scene-specific.",
     "narration_instructions": "Match the emotion field with brief delivery guidance. Example: 'Speak with terrified urgency, voice trembling.'",
+    "drone_change": "fade_in" or "hold" or "swell" or "shrink" or "fade_out" or "hard_cut" or "none" - Indicate how the low frequency drone should change for this scene. Use fade_in when drone is not present, hold/swell/shrink when drone is already present, fade_out for temporary relief, hard_cut sparingly for realization moments/reveals.",
     "year": "time setting or 'present' or relevant time reference"
   }},
   ...
@@ -316,6 +398,12 @@ Respond with JSON array:
             raise ValueError(f"Scene {i+1} has invalid 'scene_type' value: {scene.get('scene_type')}. Must be 'WHY' or 'WHAT'")
         if 'narration_instructions' not in scene:
             raise ValueError(f"Scene {i+1} missing required 'narration_instructions' field")
+        if 'drone_change' not in scene:
+            # Default to "none" if not specified
+            scene['drone_change'] = "none"
+        elif scene.get('drone_change') not in VALID_DRONE_CHANGES:
+            valid_values_str = ', '.join(f"'{v}'" for v in VALID_DRONE_CHANGES)
+            raise ValueError(f"Scene {i+1} has invalid 'drone_change' value: {scene.get('drone_change')}. Must be one of: {valid_values_str}")
     
     return scenes
 
@@ -344,10 +432,15 @@ The story should be:
 - Open-ended (doesn't need to fully resolve)
 - Designed to make viewers want to watch more content
 
+CRITICAL: TITLE AND THUMBNAIL MUST BE COHESIVE AND SYNCED - They must create the SAME curiosity gap and work together to maximize CTR. The thumbnail should visually represent the same horror/mystery/threat that the title frames.
+
+CRITICAL: ENVIRONMENT SELECTION - You must select ONE environment for the entire short story. This will determine the background ambient sound. Choose from: "blizzard", "snow", "forest", "rain", or "indoors". Base your choice on the story's setting and atmosphere. The environment should match where the horror takes place.
+
 Generate JSON:
 {{
-  "short_title": "Compelling, clickbait-style title for the horror short (e.g., 'I Found Something in My Basement' or 'The Voice That Follows Me')",
+  "short_title": "MYSTERIOUS HORROR TITLE - MAXIMIZE CTR (max 40 chars): Inspired by famous horror book titles like 'The Shining', 'It', 'The Exorcist', 'Pet Sematary', 'The Thing'. Keep it SHORT, MYSTERIOUS, and AMBIGUOUS. Use simple, evocative words that create curiosity through ambiguity, not explicit questions. Avoid verbose explanations or parentheticals. The title should hint at horror without revealing it. Examples: 'The Mimic', 'Blizzard Whistle', 'Something in the Snow', 'The Echo', 'The Shadow', 'The Voice', 'The Presence', 'The Watcher', 'The Copy', 'The Reflection'. Use power words SPARINGLY - only when they add mystery (e.g., 'The Cursed', 'The Haunted'). The title should make viewers think: 'What is this about?' through mystery, not explicit questions. Must create a curiosity gap that makes viewers NEED to click to discover the horror, while staying appropriate.",
   "short_description": "Brief description of what this short horror story is about (1-2 sentences)",
+  "environment": "ONE of: {VALID_ENVIRONMENTS} - the ambient environment for the entire short story",
   "hook_expansion": "The core hook/idea that will be expanded into 3 scenes. This should be a compelling, scary premise that can build tension quickly.",
   "key_facts": ["Key fact 1 about the horror", "Key fact 2", "Key fact 3"],
   "emotional_tone": "The overall emotional tone (e.g., 'terrified', 'paranoid', 'dread-filled', 'atmospheric fear')",
@@ -402,6 +495,52 @@ CRITICAL: This is a QUICK SCARY STORY (3 scenes) that should:
 - End with an open-ended, unsettling conclusion
 - Be designed to drive traffic to the channel
 
+LOW FREQUENCY DRONE CHANGES - CRITICAL FOR ATMOSPHERE:
+The low frequency drone (background audio) should change at specific moments to enhance horror atmosphere. 
+For each scene, indicate if the drone should change and how:
+
+1. FADE IN:
+   - What the audience feels: "Something has entered the situation."
+   - When to use: Early unease scenes, after calm scenes, when suspicion begins, when tension starts building
+   - How: Very slow fade (3-10 seconds), no noticeable start point
+   - Use when drone is not currently present or at low volume
+
+2. HOLD:
+   - What the audience feels: "It's still here."
+   - When to use: When drone is already present from previous scene, maintaining same tension level
+   - How: Keep drone at current volume level
+
+3. SWELL:
+   - What the audience feels: "It's getting closer / worse."
+   - When to use: When tension needs to escalate, threat is approaching, building to a scare
+   - How: Gradually increase drone volume (3-8 seconds)
+   - Use when drone is already present and needs to intensify
+
+4. SHRINK:
+   - What the audience feels: "It's backing off (for now)."
+   - When to use: Brief moments of relief, when threat temporarily recedes, before bigger escalation
+   - How: Gradually decrease drone volume (3-8 seconds)
+   - Important: Never shrink completely—room tone must remain
+
+5. FADE OUT:
+   - What the audience feels: "We might be safe."
+   - When to use: After a scare (brief relief), when character convinces themselves everything is fine
+   - Important: Never fade out completely—room tone must remain.
+
+6. HARD CUT (Instant Silence of Drone):
+   - What the audience feels: "Reality just snapped."
+   - When to use: Realization moments, final lines, right before or after a reveal, end of video
+   - This is extremely effective when used ONCE or sparingly.
+
+For each scene, add a "drone_change" field with one of these values:
+- "fade_in" - Drone should fade in (use when drone is not present or at low volume)
+- "hold" - Drone should hold at current level (use when drone is already present)
+- "swell" - Drone should increase in volume (use when drone is already present and tension escalates)
+- "shrink" - Drone should decrease in volume (use when drone is already present and threat recedes)
+- "fade_out" - Drone should fade out (use after scares, false safety moments)
+- "hard_cut" - Drone should cut instantly to silence (use sparingly for realization moments, reveals, final lines)
+- "none" - No change, maintain current drone level (legacy option, prefer "hold" when drone is already present)
+
 {prompt_builders.get_why_what_paradigm_prompt(is_trailer=True)}
 
 {prompt_builders.get_emotion_generation_prompt(emotional_tone)}
@@ -412,9 +551,9 @@ CRITICAL: This is a QUICK SCARY STORY (3 scenes) that should:
 
 Respond with JSON array of exactly 3 scenes (ALL should be WHY scenes for quick horror format):
 [
-  {{"id": 1, "title": "2-4 words", "narration": "HIGH ENERGY - first-person horror narration that establishes the scary premise, creates immediate tension and fear", "scene_type": "WHY", "image_prompt": "Horror visual with dark, shadowy, eerie atmosphere, 9:16 vertical", "emotion": "Horror emotion (e.g., 'terrified', 'tense', 'atmospheric', 'dread-filled', 'fearful', 'paranoid', 'uneasy')", "narration_instructions": "Match the emotion field with brief delivery guidance. Example: 'Speak with terrified urgency, voice trembling.'", "year": "present or relevant time reference"}},
-  {{"id": 2, "title": "...", "narration": "HIGH ENERGY - escalate the horror, deepen the fear, intensify the threat", "scene_type": "WHY", "image_prompt": "Horror visual with dark, shadowy, eerie atmosphere, 9:16 vertical", "emotion": "Horror emotion", "narration_instructions": "Match the emotion field with brief delivery guidance. Example: 'Deliver with tense paranoia, voice strained.'", "year": "present or relevant time reference"}},
-  {{"id": 3, "title": "...", "narration": "HIGH ENERGY - peak horror moment, open-ended conclusion that leaves viewers scared and wanting more", "scene_type": "WHY", "image_prompt": "Horror visual with dark, shadowy, eerie atmosphere, 9:16 vertical", "emotion": "Horror emotion", "narration_instructions": "Match the emotion field with brief delivery guidance. Example: 'Speak with dread-filled intensity, voice panicked.'", "year": "present or relevant time reference"}}
+  {{"id": 1, "title": "2-4 words", "narration": "HIGH ENERGY - first-person horror narration that establishes the scary premise, creates immediate tension and fear", "scene_type": "WHY", "image_prompt": "Horror visual with dark, shadowy, eerie atmosphere, 9:16 vertical", "emotion": "Horror emotion (e.g., 'terrified', 'tense', 'atmospheric', 'dread-filled', 'fearful', 'paranoid', 'uneasy')", "narration_instructions": "Match the emotion field with brief delivery guidance. Example: 'Speak with terrified urgency, voice trembling.'", "drone_change": "fade_in" or "hold" or "swell" or "shrink" or "fade_out" or "hard_cut" or "none" - Indicate how the low frequency drone should change for this scene.", "year": "present or relevant time reference"}},
+  {{"id": 2, "title": "...", "narration": "HIGH ENERGY - escalate the horror, deepen the fear, intensify the threat", "scene_type": "WHY", "image_prompt": "Horror visual with dark, shadowy, eerie atmosphere, 9:16 vertical", "emotion": "Horror emotion", "narration_instructions": "Match the emotion field with brief delivery guidance. Example: 'Deliver with tense paranoia, voice strained.'", "drone_change": "fade_in" or "hold" or "swell" or "shrink" or "fade_out" or "hard_cut" or "none" - Indicate how the low frequency drone should change for this scene.", "year": "present or relevant time reference"}},
+  {{"id": 3, "title": "...", "narration": "HIGH ENERGY - peak horror moment, open-ended conclusion that leaves viewers scared and wanting more", "scene_type": "WHY", "image_prompt": "Horror visual with dark, shadowy, eerie atmosphere, 9:16 vertical", "emotion": "Horror emotion", "narration_instructions": "Match the emotion field with brief delivery guidance. Example: 'Speak with dread-filled intensity, voice panicked.'", "drone_change": "fade_in" or "hold" or "swell" or "shrink" or "fade_out" or "hard_cut" or "none" - Indicate how the low frequency drone should change for this scene. For final scene, consider "hard_cut" for maximum impact.", "year": "present or relevant time reference"}}
 ]
 
 IMPORTANT: 
@@ -453,6 +592,12 @@ IMPORTANT:
             raise ValueError(f"Scene {i+1} has invalid 'scene_type' value: {scene.get('scene_type')}. Must be 'WHY' or 'WHAT'")
         if 'narration_instructions' not in scene:
             raise ValueError(f"Scene {i+1} missing required 'narration_instructions' field")
+        if 'drone_change' not in scene:
+            # Default to "none" if not specified
+            scene['drone_change'] = "none"
+        elif scene.get('drone_change') not in VALID_DRONE_CHANGES:
+            valid_values_str = ', '.join(f"'{v}'" for v in VALID_DRONE_CHANGES)
+            raise ValueError(f"Scene {i+1} has invalid 'drone_change' value: {scene.get('drone_change')}. Must be one of: {valid_values_str}")
     
     return scenes
 
@@ -503,6 +648,14 @@ def generate_script(story_concept: str, output_path: str, is_short: bool = False
         short_description = short_outline.get('short_description', '')
         tags = short_outline.get('tags', '')
         
+        # Get environment from outline
+        environment = short_outline.get("environment", "indoors")
+        if environment not in VALID_ENVIRONMENTS:
+            print(f"[WARNING] Invalid environment '{environment}', defaulting to 'indoors'")
+            environment = "indoors"
+        
+        print(f"[METADATA] Environment: {environment}")
+        
         # Build short script
         short_script = {
             "metadata": {
@@ -513,6 +666,7 @@ def generate_script(story_concept: str, output_path: str, is_short: bool = False
                 "story_concept": story_concept,
                 "script_type": "horror_short",
                 "num_scenes": len(all_scenes),
+                "environment": environment,  # Store environment in metadata for audio mixing
                 "outline": short_outline
             },
             "scenes": all_scenes
@@ -577,8 +731,15 @@ def generate_script(story_concept: str, output_path: str, is_short: bool = False
     thumbnail_description = initial_metadata["thumbnail_description"]
     global_block = initial_metadata["global_block"]
     
+    # Get environment from outline (will be moved to metadata later)
+    environment = outline.get("environment", "indoors")
+    if environment not in VALID_ENVIRONMENTS:
+        print(f"[WARNING] Invalid environment '{environment}', defaulting to 'indoors'")
+        environment = "indoors"
+    
     print(f"[METADATA] Title: {title}")
     print(f"[METADATA] Tag line: {tag_line}")
+    print(f"[METADATA] Environment: {environment}")
     
     # Generate main video thumbnail
     generated_thumb = None
@@ -743,7 +904,8 @@ Generate JSON:
             "story_concept": story_concept,
             "script_type": "horror",
             "num_scenes": len(all_scenes),
-            "outline": outline,
+            "environment": environment,  # Store environment in metadata for audio mixing
+            "outline": outline,  # Outline without environment (moved to metadata)
             "shorts": []  # Horror shorts not implemented yet
         },
         "scenes": all_scenes

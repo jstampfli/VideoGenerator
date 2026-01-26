@@ -433,6 +433,20 @@ def generate_significance_scene(pivotal_scene: dict, next_scene: dict | None, su
     else:
         narration_instructions_desc = "Match the emotion field with brief delivery guidance. Example: 'Deliver with contemplative weight, emphasizing significance.'"
     
+    # Add drone_change instructions for horror scripts
+    drone_change_note = ""
+    if script_type == "horror":
+        drone_change_note = """
+  "drone_change": "fade_in" or "hold" or "swell" or "shrink" or "fade_out" or "hard_cut" or "none" - Choose based on the scene's emotional intensity and position:
+    - "fade_in": If this is an early scene introducing tension (most common for new scenes)
+    - "hold": If tension should remain constant from previous scene
+    - "swell": If tension should increase
+    - "shrink": If tension should decrease slightly (but not fade out completely)
+    - "fade_out": If this is a moment of temporary relief (rare for significance scenes)
+    - "hard_cut": If this is a dramatic realization moment (very rare)
+    - "none": If no drone change is needed
+    For significance scenes, typically use "hold" or "swell" to maintain or increase the weight of the moment."""
+    
     significance_prompt = f"""Generate a SIGNIFICANCE SCENE that comes immediately after Scene {pivotal_id}: "{pivotal_title}"
 
 PIVOTAL MOMENT (Scene {pivotal_id}):
@@ -461,22 +475,24 @@ This is NOT a repeat of the pivotal moment - it's an EXPLANATION of WHY that mom
 
 CRITICAL: Make this scene feel significant and weighty. The viewer should understand: "This is why this moment changed everything."
 
-Respond with JSON:
+Respond with JSON (ALL FIELDS ARE REQUIRED):
 {{
   "title": "2-5 word title about the significance",
   "narration": "1-3 sentences explaining why this pivotal moment matters - its significance, impact, and what it changed. Make viewers FEEL the weight.",
   "scene_type": "WHAT" - This scene explains the significance and delivers information about why the moment matters,
   "image_prompt": "Visual that reflects the significance and weight of this moment - contemplative, monumental, or reflective mood. Use the same year/time period AND THE SAME AGE as the pivotal moment (extract age from pivotal scene's image_prompt above). Include {subject_name} at the exact same age as in the pivotal scene. Match the visual style of the documentary. 16:9 cinematic",
   "emotion": "contemplative" or "reflective" or "weighty" or "monumental" - the emotion should reflect the significance being explained,
-  "narration_instructions": "{narration_instructions_desc}",
-  "year": Same as pivotal moment (use scene {pivotal_id}'s year)
-}}"""
+  "narration_instructions": "{narration_instructions_desc} - REQUIRED FIELD",
+  "year": Same as pivotal moment (use scene {pivotal_id}'s year){drone_change_note}
+}}
+
+CRITICAL: The "narration_instructions" field is REQUIRED and must be included in your JSON response. Do not omit it."""
 
     # Adjust narration instructions based on script type
     if script_type == "horror":
-        narration_instructions_note = "CRITICAL: narration_instructions should match the scene's emotion field with brief delivery guidance. Keep it simple - just follow the emotion with some context."
+        narration_instructions_note = "CRITICAL: The 'narration_instructions' field is REQUIRED in your JSON response. It should match the scene's emotion field with brief delivery guidance. Keep it simple - just follow the emotion with some context. Example: 'Speak with contemplative weight, emphasizing significance.' DO NOT omit this field."
     else:
-        narration_instructions_note = "CRITICAL: narration_instructions should match the scene's emotion field with brief delivery guidance. Keep it simple - just follow the emotion with some context."
+        narration_instructions_note = "CRITICAL: The 'narration_instructions' field is REQUIRED in your JSON response. It should match the scene's emotion field with brief delivery guidance. Keep it simple - just follow the emotion with some context. Example: 'Deliver with contemplative weight, emphasizing significance.' DO NOT omit this field."
     
     try:
         response = client.chat.completions.create(
@@ -504,6 +520,12 @@ Respond with JSON:
             scene['narration'] = f"This moment changes everything - its significance reshapes the entire story."
         if 'emotion' not in scene:
             scene['emotion'] = "contemplative"  # Default emotion for significance scenes
+        # For horror scripts, ensure drone_change is present
+        if script_type == "horror":
+            if 'drone_change' not in scene or scene.get('drone_change') not in ['fade_in', 'fade_out', 'hard_cut', 'hold', 'swell', 'shrink', 'none']:
+                # Default to "hold" for significance scenes (maintain tension from pivotal moment)
+                scene['drone_change'] = "hold"
+                print(f"[SIGNIFICANCE SCENE] WARNING: LLM did not provide valid drone_change, defaulting to 'hold'")
         
         # CRITICAL: Ensure narration_instructions is always present
         if 'narration_instructions' not in scene or not scene.get('narration_instructions'):
@@ -560,7 +582,7 @@ Respond with JSON:
     except Exception as e:
         print(f"[SIGNIFICANCE SCENE] WARNING: Failed to generate significance scene for Scene {pivotal_id} ({e}).")
         # Return a simple fallback scene
-        return {
+        fallback_scene = {
             "title": "Why This Moment Matters",
             "narration": f"This moment is pivotal because {justification[:100]}... It changes the trajectory of the entire story.",
             "scene_type": "WHAT",  # Significance scenes explain why something matters - they deliver information
@@ -568,6 +590,10 @@ Respond with JSON:
             "emotion": "contemplative",
             "year": pivotal_scene.get('year', 'same period')
         }
+        # Add drone_change for horror scripts
+        if script_type == "horror":
+            fallback_scene['drone_change'] = "hold"
+        return fallback_scene
 
 
 def check_and_add_missing_storyline_scenes(scenes: list[dict], subject_name: str, chapter_context: str = None, max_scenes: int = None, script_type: str = "biopic") -> list[dict]:
@@ -695,6 +721,19 @@ If there are NO hanging storylines, return an empty array []."""
             else:
                 narration_instructions_desc = "Match the emotion field with brief delivery guidance. Example: 'Deliver with measured authority, conveying completion.'"
             
+            # Add drone_change instructions for horror scripts
+            drone_change_note = ""
+            if script_type == "horror":
+                drone_change_note = """,
+  "drone_change": "fade_in" or "hold" or "swell" or "shrink" or "fade_out" or "hard_cut" or "none" - Choose based on the scene's emotional intensity and position:
+    - "fade_in": If this is an early scene introducing tension (most common for new scenes)
+    - "hold": If tension should remain constant from previous scene
+    - "swell": If tension should increase
+    - "shrink": If tension should decrease slightly (but not fade out completely)
+    - "fade_out": If this is a moment of temporary relief (rare)
+    - "hard_cut": If this is a dramatic realization moment (very rare)
+    - "none": If no drone change is needed"""
+            
             # Generate scene to complete the storyline
             completion_prompt = f"""Generate a scene to complete a hanging storyline in a documentary about {subject_name}.
 
@@ -728,7 +767,7 @@ Respond with JSON:
   "image_prompt": "Visual description appropriate for this moment, including {subject_name}'s age at this time ({completion_year}), 16:9 cinematic",
   "emotion": "Appropriate emotion for this moment",
   "narration_instructions": "{narration_instructions_desc}",
-  "year": {completion_year}
+  "year": {completion_year}{drone_change_note}
 }}"""
 
             # Adjust system prompt based on script type
@@ -772,6 +811,13 @@ Respond with JSON:
                     else:
                         new_scene['narration_instructions'] = f"Deliver with {emotion} weight, emphasizing completion."
                     print(f"[STORYLINE CHECK] WARNING: Generated scene missing narration_instructions, generated fallback: {new_scene['narration_instructions']}")
+                
+                # For horror scripts, ensure drone_change is present
+                if script_type == "horror":
+                    if 'drone_change' not in new_scene or new_scene.get('drone_change') not in ['fade_in', 'fade_out', 'hard_cut', 'hold', 'swell', 'shrink', 'none']:
+                        # Default to "fade_in" for new storyline completion scenes (introducing tension)
+                        new_scene['drone_change'] = "fade_in"
+                        print(f"[STORYLINE CHECK] WARNING: Generated scene missing valid drone_change, defaulting to 'fade_in'")
                 
                 # Mark as storyline completion scene
                 new_scene['is_storyline_completion'] = True
@@ -1130,6 +1176,7 @@ IMPORTANT GUIDELINES:
 - Preserve all fields (id, title, narration, image_prompt, emotion, year, scene_type, narration_instructions, etc.)
 - CRITICAL: Preserve the WHY/WHAT structure - maintain each scene's scene_type field (WHY or WHAT). WHY sections frame mysteries, problems, questions, obstacles, counterintuitive information, secrets, or suggest there's something we haven't considered or don't understand the significance of. WHY sections should set up what will happen, why it matters, and what the stakes are for upcoming WHAT sections. WHAT sections deliver content/solutions and must clearly communicate what is happening, why it's important, and what the stakes are. Ensure WHY sections create anticipation for upcoming WHAT sections by establishing what/why/stakes.
 - CRITICAL: Preserve and refine narration_instructions - Each scene MUST have narration_instructions that match the scene's emotion field with brief delivery guidance. When refining, ensure narration_instructions accurately reflect the scene's emotion. If narration_instructions don't match the refined narration or emotion, update them to be consistent. Keep it simple - just follow the emotion with some context. ABSOLUTELY DO NOT remove narration_instructions - every scene must have this field. If a scene is missing narration_instructions, add it based on the scene's emotion field.
+- CRITICAL FOR HORROR: Preserve and refine drone_change - Each scene MUST have a drone_change field (one of: 'fade_in', 'fade_out', 'hard_cut', 'hold', 'swell', 'shrink', 'none'). When refining scenes, if the emotional intensity, tension level, or narrative flow has changed, UPDATE the drone_change to match. For example: if a scene's tension increased significantly, change drone_change to 'swell'; if tension decreased, use 'shrink' or 'fade_out'; if it's a dramatic realization, consider 'hard_cut'. The drone_change should reflect the scene's emotional arc and how it transitions from the previous scene. ABSOLUTELY DO NOT remove drone_change - every scene must have this field. If a scene is missing drone_change, add it based on the scene's emotion and position in the narrative.
 - Keep the same tone and style
 - {pacing_note}
 - Only make changes that IMPROVE clarity, flow, or naturalness
@@ -1146,8 +1193,9 @@ CRITICAL JSON STRUCTURE REQUIREMENTS:
 - The "narration_instructions" field is REQUIRED for every scene - it must match the scene's emotion field with brief delivery guidance
 - DO NOT omit any fields from the JSON - every scene must have the complete structure
 - If a scene is missing narration_instructions, add it based on the scene's emotion field
+- FOR HORROR SCRIPTS: The "drone_change" field is REQUIRED for every scene - it must be one of: 'fade_in', 'fade_out', 'hard_cut', 'hold', 'swell', 'shrink', 'none'. Update drone_change if the scene's emotional intensity or narrative flow changed during refinement.
 
-Respond with JSON array only (no markdown, no explanation). Each scene object must include: id, title, narration, image_prompt, emotion, year, scene_type, narration_instructions."""
+Respond with JSON array only (no markdown, no explanation). Each scene object must include: id, title, narration, image_prompt, emotion, year, scene_type, narration_instructions{', and drone_change (for horror scripts)' if script_type == 'horror' else ''}."""
     
     try:
         response = client.chat.completions.create(
@@ -1203,6 +1251,25 @@ Respond with JSON array only (no markdown, no explanation). Each scene object mu
             if scene.get('scene_type') not in ['WHY', 'WHAT']:
                 print(f"[REFINEMENT] WARNING: Scene {i+1} has invalid 'scene_type' value: {scene.get('scene_type')}. Using original scenes.")
                 return scenes, {}
+            
+            # For horror scripts, validate and fix drone_change
+            if script_type == "horror":
+                if 'drone_change' not in scene or scene.get('drone_change') not in ['fade_in', 'fade_out', 'hard_cut', 'hold', 'swell', 'shrink', 'none']:
+                    # Try to infer from original scene or default
+                    original_drone = scenes_before_refinement[i].get('drone_change', 'none') if i < len(scenes_before_refinement) else 'none'
+                    if original_drone in ['fade_in', 'fade_out', 'hard_cut', 'hold', 'swell', 'shrink', 'none']:
+                        scene['drone_change'] = original_drone
+                        print(f"[REFINEMENT] WARNING: Scene {i+1} missing drone_change, using original: {original_drone}")
+                    else:
+                        # Default based on scene position and emotion
+                        emotion = scene.get('emotion', 'tense')
+                        if i == 0:
+                            scene['drone_change'] = 'fade_in'
+                        elif 'terrified' in emotion.lower() or 'fear' in emotion.lower():
+                            scene['drone_change'] = 'swell'
+                        else:
+                            scene['drone_change'] = 'hold'
+                        print(f"[REFINEMENT] WARNING: Scene {i+1} missing drone_change, generated default: {scene['drone_change']}")
         
         # Track changes made during refinement
         changes_stats = {
@@ -1239,6 +1306,55 @@ Respond with JSON array only (no markdown, no explanation). Each scene object mu
             if scene_changed:
                 changes_stats["scenes_changed"] += 1
         
+        # For horror scripts: Post-refinement drone_change update based on scene changes
+        if script_type == "horror":
+            print(f"[REFINEMENT] Updating drone_change instructions based on refined scenes...")
+            drone_updates = 0
+            for i, (original_scene, refined_scene) in enumerate(zip(scenes_before_refinement, refined_scenes)):
+                # Check if emotion or narration changed significantly
+                original_emotion = original_scene.get('emotion', '').lower()
+                refined_emotion = refined_scene.get('emotion', '').lower()
+                original_narration = original_scene.get('narration', '').lower()
+                refined_narration = refined_scene.get('narration', '').lower()
+                
+                # Get original drone_change
+                original_drone = original_scene.get('drone_change', 'none')
+                current_drone = refined_scene.get('drone_change', original_drone)
+                
+                # If emotion became more intense (e.g., tense -> terrified), consider swell
+                intensity_keywords = {
+                    'terrified': 5, 'horrified': 5, 'panicked': 5,
+                    'fearful': 4, 'anxious': 4, 'tense': 3,
+                    'uneasy': 2, 'nervous': 2, 'calm': 1
+                }
+                original_intensity = max([intensity_keywords.get(kw, 0) for kw in intensity_keywords if kw in original_emotion] or [0])
+                refined_intensity = max([intensity_keywords.get(kw, 0) for kw in intensity_keywords if kw in refined_emotion] or [0])
+                
+                # Update drone_change if intensity changed significantly
+                if refined_intensity > original_intensity + 1 and current_drone not in ['swell', 'fade_in']:
+                    # Intensity increased significantly - use swell if not already at max
+                    refined_scene['drone_change'] = 'swell'
+                    drone_updates += 1
+                    print(f"[REFINEMENT]   • Scene {i+1}: Intensity increased ({original_emotion} → {refined_emotion}), updated drone_change: {current_drone} → swell")
+                elif refined_intensity < original_intensity - 1 and current_drone not in ['shrink', 'fade_out']:
+                    # Intensity decreased significantly - use shrink
+                    refined_scene['drone_change'] = 'shrink'
+                    drone_updates += 1
+                    print(f"[REFINEMENT]   • Scene {i+1}: Intensity decreased ({original_emotion} → {refined_emotion}), updated drone_change: {current_drone} → shrink")
+                elif 'realization' in refined_narration or 'suddenly' in refined_narration or 'realized' in refined_narration:
+                    # Dramatic realization moment - consider hard_cut
+                    if current_drone != 'hard_cut':
+                        refined_scene['drone_change'] = 'hard_cut'
+                        drone_updates += 1
+                        print(f"[REFINEMENT]   • Scene {i+1}: Dramatic realization detected, updated drone_change: {current_drone} → hard_cut")
+                
+                # Ensure drone_change is valid
+                if refined_scene.get('drone_change') not in ['fade_in', 'fade_out', 'hard_cut', 'hold', 'swell', 'shrink', 'none']:
+                    refined_scene['drone_change'] = original_drone if original_drone in ['fade_in', 'fade_out', 'hard_cut', 'hold', 'swell', 'shrink', 'none'] else 'none'
+            
+            if drone_updates > 0:
+                print(f"[REFINEMENT]   • Updated {drone_updates} drone_change instruction(s) based on scene changes")
+        
         # Log refinement statistics
         total_scenes = len(refined_scenes)
         unchanged_scenes = total_scenes - changes_stats["scenes_changed"]
@@ -1262,6 +1378,23 @@ Respond with JSON array only (no markdown, no explanation). Each scene object mu
                 else:
                     scene['narration_instructions'] = f"Deliver with {emotion} weight, emphasizing significance."
                 print(f"[REFINEMENT] CRITICAL FIX: Scene {i+1} (ID: {scene.get('id', i+1)}) missing narration_instructions after refinement, generated fallback: {scene['narration_instructions']}")
+            
+            # For horror scripts, ensure drone_change is present and valid
+            if script_type == "horror":
+                if 'drone_change' not in scene or scene.get('drone_change') not in ['fade_in', 'fade_out', 'hard_cut', 'hold', 'swell', 'shrink', 'none']:
+                    # Try to get from original scene
+                    original_idx = i if i < len(scenes_before_refinement) else None
+                    if original_idx is not None:
+                        original_drone = scenes_before_refinement[original_idx].get('drone_change', 'none')
+                        if original_drone in ['fade_in', 'fade_out', 'hard_cut', 'hold', 'swell', 'shrink', 'none']:
+                            scene['drone_change'] = original_drone
+                            print(f"[REFINEMENT] CRITICAL FIX: Scene {i+1} missing drone_change, restored from original: {original_drone}")
+                        else:
+                            scene['drone_change'] = 'none'
+                            print(f"[REFINEMENT] CRITICAL FIX: Scene {i+1} missing drone_change, defaulting to 'none'")
+                    else:
+                        scene['drone_change'] = 'none'
+                        print(f"[REFINEMENT] CRITICAL FIX: Scene {i+1} missing drone_change, defaulting to 'none'")
         
         # Generate diff comparing original scenes to final refined scenes (which may include significance scenes)
         diff_data = generate_refinement_diff(original_scenes, refined_scenes)

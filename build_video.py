@@ -46,6 +46,21 @@ GOOGLE_VOICE_TYPE = os.getenv("GOOGLE_VOICE_TYPE", "").lower()  # "chirp", "gemi
 GOOGLE_GEMINI_MALE_SPEAKER = os.getenv("GOOGLE_GEMINI_MALE_SPEAKER", "Charon")  # Default Gemini male voice
 GOOGLE_GEMINI_FEMALE_SPEAKER = os.getenv("GOOGLE_GEMINI_FEMALE_SPEAKER", "")  # Gemini female voice
 
+# Horror background audio volume settings (from .env or defaults)
+# More impactful defaults: room tone louder, drone more prominent
+DRONE_BASE_VOLUME_DB = float(os.getenv("DRONE_BASE", "-20.0"))  # Base drone volume (default: -20 dB, was -25)
+DRONE_MAX_VOLUME_DB = float(os.getenv("DRONE_MAX", "-15.0"))  # Max drone volume for swell (default: -15 dB, was -20)
+ROOM_SOUND_BASE_VOLUME_DB = float(os.getenv("ROOM_SOUND_BASE", "-35.0"))  # Room tone volume (default: -35 dB, was -45)
+ENV_AUDIO_VOLUME_DB = float(os.getenv("ENV_AUDIO_VOLUME", "-28.0"))  # Environment audio volume (default: -28 dB)
+
+# Environment audio file paths (from .env)
+ENV_BLIZZARD_AUDIO = os.getenv("ENV_BLIZZARD_AUDIO", None)
+ENV_SNOW_AUDIO = os.getenv("ENV_SNOW_AUDIO", None)
+ENV_FOREST_AUDIO = os.getenv("ENV_FOREST_AUDIO", None)
+ENV_RAIN_AUDIO = os.getenv("ENV_RAIN_AUDIO", None)
+ENV_INDOORS_AUDIO = os.getenv("ENV_INDOORS_AUDIO", None)
+ENV_JUNGLE_AUDIO = os.getenv("ENV_JUNGLE_AUDIO", None)
+
 # Global flag to track if female voice should be used (set by --female flag)
 USE_FEMALE_VOICE = False
 
@@ -891,52 +906,168 @@ def make_static_clip_with_audio(image_path: Path, audio_clip: AudioFileClip):
     return clip.with_audio(extended_audio).with_duration(total_duration)
 
 
-def generate_room_tone(duration: float, sample_rate: int = 44100) -> AudioClip:
+def generate_room_tone(
+    duration: float,
+    sample_rate: int = 44100,
+    gain: float = 0.008,          # start low; room tone should be subtle
+    fade_in: float = 0.05,        # 50 ms
+    fade_out: float = 0.05,       # 50 ms
+    seed: int | None = None
+) -> AudioClip:
     """
-    Generate barely audible room tone (ambient noise).
-    Prevents the brain from relaxing - almost silence, but not silence.
+    Generate barely audible room tone (pink-ish noise).
+    """
+
+    num_samples = int(duration * sample_rate)
+    if num_samples <= 0:
+        return AudioClip(lambda t: np.array([0.0, 0.0], dtype=np.float32), duration=duration, fps=sample_rate)
+
+    rng = np.random.default_rng(seed)
+
+    # --- FFT-based pink noise approximation ---
+    # Generate random complex spectrum and scale by 1/sqrt(f) (pink ~ 1/f power)
+    freqs = np.fft.rfftfreq(num_samples, d=1.0 / sample_rate)
+    spectrum = rng.normal(size=len(freqs)) + 1j * rng.normal(size=len(freqs))
+
+    # Avoid division by zero at DC; keep DC very small (we'll remove mean anyway)
+    scale = np.ones_like(freqs)
+    scale[1:] = 1.0 / np.sqrt(freqs[1:])  # ~1/sqrt(f) amplitude => ~1/f power
+
+    spectrum *= scale
+    noise = np.fft.irfft(spectrum, n=num_samples)
+
+    # Remove DC / center
+    noise = noise - np.mean(noise)
+
+    # Normalize to a reasonable RMS (not peak=1), then apply gain
+    rms = np.sqrt(np.mean(noise**2)) + 1e-9
+    noise = (noise / rms) * gain
+
+    # Tiny fades to prevent clicks when spliced
+    env = np.ones(num_samples, dtype=np.float32)
+
+    fi = int(min(fade_in, duration) * sample_rate)
+    fo = int(min(fade_out, duration) * sample_rate)
+
+    if fi > 0:
+        x = np.linspace(0, 1, fi, endpoint=False)
+        env[:fi] *= 0.5 - 0.5 * np.cos(np.pi * x)
+
+    if fo > 0:
+        x = np.linspace(0, 1, fo, endpoint=False)
+        env[-fo:] *= 0.5 + 0.5 * np.cos(np.pi * x)
+
+    tone = (noise * env).astype(np.float32)
+
+    def make_audio(tt):
+        if np.isscalar(tt):
+            idx = int(tt * sample_rate)
+            if 0 <= idx < len(tone):
+                v = float(tone[idx])
+                return np.array([v, v], dtype=np.float32)
+            return np.array([0.0, 0.0], dtype=np.float32)
+        else:
+            indices = (tt * sample_rate).astype(int)
+            indices = np.clip(indices, 0, len(tone) - 1)
+            mono = tone[indices]
+            return np.column_stack([mono, mono]).astype(np.float32)
+
+    return AudioClip(make_audio, duration=duration, fps=sample_rate)
+
+
+def generate_low_frequency_drone_with_transition(duration: float, frequency: float = 50.0, 
+                                                  transition_type: str = "none", 
+                                                  start_volume: float = 1.0,
+                                                  end_volume: float = 1.0,
+                                                  transition_duration: float = 5.0,
+                                                  sample_rate: int = 44100) -> AudioClip:
+    """
+    Generate low-frequency drone with volume transitions.
     
     Args:
-        duration: Duration in seconds
+        duration: Total duration in seconds
+        frequency: Frequency in Hz (default: 50, range: 30-80)
+        transition_type: Type of transition - "fade_in", "fade_out", "swell", "shrink", "hold", "hard_cut", or "none"
+        start_volume: Starting volume (0.0 to 1.0) - used for fade_in, swell, shrink, hold
+        end_volume: Ending volume (0.0 to 1.0) - used for fade_out, swell, shrink
+        transition_duration: Duration of transition in seconds (default: 5.0 for fade_in/fade_out, 3-8 for swell/shrink)
         sample_rate: Sample rate in Hz (default: 44100)
     
     Returns:
-        AudioClip with barely audible white/pink noise
+        AudioClip with low-frequency sine wave and volume transition
     """
-    # Generate pink noise (more natural than white noise)
-    # Pink noise has equal energy per octave
+    # Clamp frequency to 30-80 Hz range
+    frequency = max(30.0, min(80.0, frequency))
+    
+    # Generate sine wave
     num_samples = int(duration * sample_rate)
     t = np.linspace(0, duration, num_samples, False)
+    sine_wave = np.sin(2 * np.pi * frequency * t)
     
-    # Generate white noise
-    white_noise = np.random.randn(num_samples)
-    
-    # Convert to pink noise using a simple filter approximation
-    # This creates a more natural ambient sound
-    pink_noise = np.zeros_like(white_noise)
-    pink_noise[0] = white_noise[0]
-    for i in range(1, len(white_noise)):
-        pink_noise[i] = 0.5 * (pink_noise[i-1] + white_noise[i])
-    
-    # Normalize to prevent clipping
-    pink_noise = pink_noise / np.max(np.abs(pink_noise)) if np.max(np.abs(pink_noise)) > 0 else pink_noise
+    # Apply volume envelope based on transition type
+    if transition_type == "fade_in":
+        # Fade in from 0 to end_volume over transition_duration (3-10 seconds)
+        transition_samples = int(transition_duration * sample_rate)
+        fade_envelope = np.linspace(0.0, end_volume, min(transition_samples, num_samples))
+        if len(fade_envelope) < num_samples:
+            fade_envelope = np.pad(fade_envelope, (0, num_samples - len(fade_envelope)), mode='constant', constant_values=end_volume)
+        sine_wave = sine_wave * fade_envelope
+    elif transition_type == "fade_out":
+        # Fade out from start_volume to minimum (not zero - room tone remains)
+        min_volume = 0.0
+        transition_samples = int(transition_duration * sample_rate)
+        fade_start = max(0, num_samples - transition_samples)
+        fade_envelope = np.ones(num_samples) * start_volume
+        fade_portion = np.linspace(start_volume, min_volume, num_samples - fade_start)
+        fade_envelope[fade_start:] = fade_portion
+        sine_wave = sine_wave * fade_envelope
+    elif transition_type == "swell":
+        # Increase volume from start_volume to end_volume over transition_duration (3-8 seconds)
+        transition_samples = int(transition_duration * sample_rate)
+        swell_envelope = np.ones(num_samples) * start_volume
+        swell_portion = np.linspace(start_volume, end_volume, min(transition_samples, num_samples))
+        if len(swell_portion) <= num_samples:
+            swell_envelope[:len(swell_portion)] = swell_portion
+            if len(swell_portion) < num_samples:
+                swell_envelope[len(swell_portion):] = end_volume
+        sine_wave = sine_wave * swell_envelope
+    elif transition_type == "shrink":
+        # Decrease volume from start_volume to end_volume over transition_duration (3-8 seconds)
+        min_volume = 0.1  # Never shrink completely
+        end_volume = max(min_volume, end_volume)
+        transition_samples = int(transition_duration * sample_rate)
+        shrink_envelope = np.ones(num_samples) * start_volume
+        shrink_portion = np.linspace(start_volume, end_volume, min(transition_samples, num_samples))
+        if len(shrink_portion) <= num_samples:
+            shrink_envelope[:len(shrink_portion)] = shrink_portion
+            if len(shrink_portion) < num_samples:
+                shrink_envelope[len(shrink_portion):] = end_volume
+        sine_wave = sine_wave * shrink_envelope
+    elif transition_type == "hard_cut":
+        # Instant cut to silence (or very low volume)
+        sine_wave = np.zeros_like(sine_wave)
+    elif transition_type == "hold":
+        # Hold at start_volume throughout
+        sine_wave = sine_wave * start_volume
+    else:  # "none" or default
+        # Constant volume
+        sine_wave = sine_wave * start_volume
     
     # Create audio function for MoviePy
-    # MoviePy's AudioClip expects a function that takes a time array and returns audio samples
-    # Return stereo (2 channels) for compatibility with CompositeAudioClip
+    # Return stereo (2 channels) for compatibility
     def make_audio(t):
         # t can be a scalar or array
         if np.isscalar(t):
             idx = int(t * sample_rate)
-            if 0 <= idx < len(pink_noise):
+            if 0 <= idx < len(sine_wave):
                 # Return stereo: [left, right] with same value
-                return np.array([pink_noise[idx], pink_noise[idx]])
+                return np.array([sine_wave[idx], sine_wave[idx]])
             return np.array([0.0, 0.0])
         else:
             # Array of times - return stereo array
             indices = (t * sample_rate).astype(int)
-            indices = np.clip(indices, 0, len(pink_noise) - 1)
-            mono_samples = pink_noise[indices]
+            indices = np.clip(indices, 0, len(sine_wave) - 1)
+            mono_samples = sine_wave[indices]
             # Convert to stereo by duplicating the channel
             if mono_samples.ndim == 0:
                 return np.array([mono_samples, mono_samples])
@@ -946,7 +1077,7 @@ def generate_room_tone(duration: float, sample_rate: int = 44100) -> AudioClip:
     return AudioClip(make_audio, duration=duration, fps=sample_rate)
 
 
-def generate_low_frequency_drone(duration: float, frequency: float = 50.0, sample_rate: int = 44100) -> AudioClip:
+def generate_low_frequency_drone(duration: float, frequency: float = 90.0, sample_rate: int = 44100) -> AudioClip:
     """
     Generate low-frequency drone (30-80 Hz).
     Feels like pressure, not sound - you should feel it more than hear it.
@@ -960,15 +1091,12 @@ def generate_low_frequency_drone(duration: float, frequency: float = 50.0, sampl
         AudioClip with low-frequency sine wave
     """
     # Clamp frequency to 30-80 Hz range
-    frequency = max(30.0, min(80.0, frequency))
+    frequency = max(60.0, min(120.0, frequency))
     
     # Generate sine wave
     num_samples = int(duration * sample_rate)
     t = np.linspace(0, duration, num_samples, False)
     sine_wave = np.sin(2 * np.pi * frequency * t)
-    
-    # Normalize
-    sine_wave = sine_wave / np.max(np.abs(sine_wave)) if np.max(np.abs(sine_wave)) > 0 else sine_wave
     
     # Create audio function for MoviePy
     # MoviePy's AudioClip expects a function that takes a time array and returns audio samples
@@ -1136,6 +1264,160 @@ def generate_detail_sounds(duration: float, sound_type: str = "random", sample_r
     return result_audio
 
 
+def generate_drone_with_scene_transitions(scenes: list[dict], scene_audio_clips: list[AudioFileClip], 
+                                         base_drone_volume_db: float = None,
+                                         max_drone_volume_db: float = None) -> AudioClip:
+    """
+    Generate low-frequency drone with transitions based on scene drone_change values.
+    Tracks drone state across scenes to ensure smooth transitions.
+    
+    Args:
+        scenes: List of scene dictionaries with drone_change field
+        scene_audio_clips: List of audio clips for each scene (used to get scene durations)
+        base_drone_volume_db: Base drone volume in dB (default: from DRONE_BASE env var or -20)
+        max_drone_volume_db: Maximum drone volume in dB (default: from DRONE_MAX env var or -15, used to clip swell)
+    
+    Returns:
+        AudioClip with drone that transitions based on scene instructions
+    """
+    # Use environment variable defaults if not provided
+    if base_drone_volume_db is None:
+        base_drone_volume_db = DRONE_BASE_VOLUME_DB
+    if max_drone_volume_db is None:
+        max_drone_volume_db = DRONE_MAX_VOLUME_DB
+    
+    # Convert dB to linear volume multiplier
+    def db_to_linear(db):
+        return 10 ** (db / 20.0)
+    
+    base_volume_linear = db_to_linear(base_drone_volume_db)
+    max_volume_linear = db_to_linear(max_drone_volume_db)
+    
+    # Calculate total duration for continuous generation (prevents pops)
+    total_duration = sum(clip.duration + END_SCENE_PAUSE_LENGTH for clip in scene_audio_clips)
+    sample_rate = 44100
+    num_samples = int(total_duration * sample_rate)
+    
+    # Generate continuous sine wave for entire duration
+    t = np.arange(num_samples) / sample_rate
+    sine_wave = np.sin(2 * np.pi * 50.0 * t)
+    
+    # Build volume envelope for entire duration
+    volume_envelope = np.zeros(num_samples)
+    current_time = 0.0
+    current_drone_volume = 0.0  # Start with no drone
+    
+    # Process each scene to build the volume envelope
+    for i, (scene, audio_clip) in enumerate(zip(scenes, scene_audio_clips)):
+        scene_id = scene.get('id', i + 1)
+        scene_duration = audio_clip.duration + END_SCENE_PAUSE_LENGTH  # Include pause
+        drone_change = scene.get('drone_change', 'none')
+        
+        # Determine transition parameters based on drone_change
+        if drone_change == "fade_in":
+            # Fade in from 0 to base volume (3-10 seconds)
+            start_volume = 0.0
+            end_volume = min(max_volume_linear, base_volume_linear)
+            transition_duration = min(10.0, max(3.0, scene_duration * 0.3))  # 3-10 seconds, adaptive to scene length
+            transition_type = "fade_in"
+            current_drone_volume = end_volume  # Update state
+        elif drone_change == "hold":
+            # Hold at current volume (no transition)
+            start_volume = current_drone_volume
+            end_volume = start_volume
+            transition_duration = 0.0  # No transition
+            transition_type = "hold"
+            current_drone_volume = start_volume  # Maintain state
+        elif drone_change == "swell":
+            # Increase from current to higher volume (3-8 seconds)
+            # Clip by max volume, not base volume
+            start_volume = current_drone_volume
+            end_volume = min(max_volume_linear, start_volume * 1.4)  # Increase by up to 40%, but clip at max
+            transition_duration = min(8.0, max(3.0, scene_duration * 0.3))  # 3-8 seconds
+            transition_type = "swell"
+            current_drone_volume = end_volume  # Update state
+        elif drone_change == "shrink":
+            # Decrease from current volume (but not to zero) (3-8 seconds)
+            min_volume = base_volume_linear * 0.1  # Minimum 10% of base
+            start_volume = current_drone_volume
+            end_volume = max(min_volume, start_volume * 0.6)  # Decrease to 60% of start
+            transition_duration = min(8.0, max(3.0, scene_duration * 0.3))  # 3-8 seconds
+            transition_type = "shrink"
+            current_drone_volume = end_volume  # Update state
+        elif drone_change == "fade_out":
+            # Fade out from current to minimum (3-10 seconds, but never completely)
+            min_volume = 0.0 
+            start_volume = current_drone_volume
+            end_volume = min_volume
+            transition_duration = min(10.0, max(3.0, scene_duration * 0.3))  # 3-10 seconds
+            transition_type = "fade_out"
+            current_drone_volume = end_volume  # Update state
+        elif drone_change == "hard_cut":
+            # Instant cut to silence
+            start_volume = current_drone_volume
+            end_volume = 0.0
+            transition_duration = 0.0  # Instant
+            transition_type = "hard_cut"
+            current_drone_volume = 0.0  # Update state
+        else:  # "none" or unknown
+            # No change - hold at current volume (or default to base if no previous state)
+            start_volume = current_drone_volume
+            end_volume = start_volume
+            transition_duration = 0.0
+            transition_type = "hold"
+            current_drone_volume = start_volume  # Maintain state
+        
+        transition_duration = min(transition_duration, scene_duration)
+        
+        # Calculate sample indices for this scene
+        start_sample = int(current_time * sample_rate)
+        end_sample = int((current_time + scene_duration) * sample_rate)
+        transition_samples = int(transition_duration * sample_rate)
+        
+        # Apply volume envelope for this scene (continuous, no cuts = no pops)
+        if transition_duration > 0 and transition_samples > 0:
+            # Transition portion
+            transition_end_sample = min(start_sample + transition_samples, end_sample)
+            transition_indices = np.arange(start_sample, transition_end_sample)
+            if len(transition_indices) > 0:
+                transition_volumes = np.linspace(start_volume, end_volume, len(transition_indices))
+                volume_envelope[transition_indices] = transition_volumes
+            
+            # Rest of scene at end_volume
+            if transition_end_sample < end_sample:
+                volume_envelope[transition_end_sample:end_sample] = end_volume
+        else:
+            # No transition - constant volume
+            volume_envelope[start_sample:end_sample] = end_volume
+        
+        print(f"[HORROR AUDIO] Scene {scene_id}: drone_change={drone_change}, volume={start_volume:.3f}->{end_volume:.3f}")
+        
+        current_time += scene_duration
+    
+    # Apply volume envelope to sine wave (ensure it's a contiguous array)
+    sine_wave = (sine_wave * volume_envelope).copy()
+    
+    # Create audio function for MoviePy (stereo)
+    def make_audio(t):
+        if np.isscalar(t):
+            idx = int(t * sample_rate)
+            if 0 <= idx < len(sine_wave):
+                return np.array([sine_wave[idx], sine_wave[idx]])
+            else:
+                return np.array([0.0, 0.0])
+        else:
+            indices = (t * sample_rate).astype(int)
+            indices = np.clip(indices, 0, len(sine_wave) - 1)
+            samples = sine_wave[indices]
+            # Return stereo: [left, right] with same values
+            return np.column_stack([samples, samples])
+    
+    # Create AudioClip (continuous, no concatenation = no pops)
+    drone = AudioClip(make_audio, duration=total_duration, fps=sample_rate)
+    
+    return drone
+
+
 def apply_volume_to_audioclip(clip: AudioClip, volume_factor: float) -> AudioClip:
     """
     Apply volume to an AudioClip by wrapping its audio function.
@@ -1162,33 +1444,132 @@ def apply_volume_to_audioclip(clip: AudioClip, volume_factor: float) -> AudioCli
 
 
 def mix_horror_background_audio(narration_audio: AudioFileClip, duration: float, 
-                                room_tone_volume: float = -45.0, 
-                                drone_volume: float = -25.0, 
-                                detail_volume: float = -30.0) -> CompositeAudioClip:
+                                scenes: list[dict] = None,
+                                scene_audio_clips: list[AudioFileClip] = None,
+                                room_tone_volume: float = None, 
+                                drone_volume: float = None,
+                                max_drone_volume: float = None,
+                                detail_volume: float = -30.0,
+                                environment: str = None,
+                                env_audio_volume: float = None) -> CompositeAudioClip:
     """
     Mix horror background audio layers with narration.
     
     Args:
         narration_audio: The main narration audio clip
         duration: Total duration in seconds
-        room_tone_volume: Room tone volume in dB (default: -45)
-        drone_volume: Drone volume in dB (default: -25)
+        scenes: List of scene dictionaries (optional, for drone transitions)
+        scene_audio_clips: List of audio clips for each scene (optional, for calculating scene durations)
+        room_tone_volume: Room tone volume in dB (default: from ROOM_SOUND_BASE env var or -35)
+        drone_volume: Base drone volume in dB (default: from DRONE_BASE env var or -20)
+        max_drone_volume: Maximum drone volume in dB (default: from DRONE_MAX env var or -15, used to clip swell)
         detail_volume: Detail sounds volume in dB (default: -30)
+        environment: Environment type for ambient audio: "blizzard", "snow", "forest", "rain", or "indoors" (optional)
+        env_audio_volume: Environment audio volume in dB (default: from ENV_AUDIO_VOLUME env var or -28)
     
     Returns:
         CompositeAudioClip with all layers mixed
     """
+    # Use environment variable defaults if not provided
+    if room_tone_volume is None:
+        room_tone_volume = ROOM_SOUND_BASE_VOLUME_DB
+    if drone_volume is None:
+        drone_volume = DRONE_BASE_VOLUME_DB
+    if max_drone_volume is None:
+        max_drone_volume = DRONE_MAX_VOLUME_DB
+    if env_audio_volume is None:
+        env_audio_volume = ENV_AUDIO_VOLUME_DB
+    
     print(f"[HORROR AUDIO] Generating background layers (duration: {duration:.2f}s)...")
     
     # Generate all background layers
     print("[HORROR AUDIO] Generating room tone...")
     room_tone = generate_room_tone(duration)
     
-    print("[HORROR AUDIO] Generating low-frequency drone...")
-    drone = generate_low_frequency_drone(duration, frequency=50.0)
+    # Generate drone with transitions if scenes are provided
+    if scenes and scene_audio_clips and len(scenes) == len(scene_audio_clips):
+        print("[HORROR AUDIO] Generating low-frequency drone with scene-based transitions...")
+        drone = generate_drone_with_scene_transitions(scenes, scene_audio_clips, 
+                                                     base_drone_volume_db=drone_volume,
+                                                     max_drone_volume_db=max_drone_volume)
+    else:
+        print("[HORROR AUDIO] Generating low-frequency drone (constant volume)...")
+        drone = generate_low_frequency_drone(duration, frequency=50.0)
     
     print("[HORROR AUDIO] Generating detail sounds...")
     detail_sounds = generate_detail_sounds(duration, sound_type="random")
+    
+    # Load environment audio if specified
+    env_audio = None
+    env_audio_original_path = None  # Store original path for FFmpeg trimming if needed later
+    if environment:
+        env_audio_path = None
+        env_map = {
+            "blizzard": ENV_BLIZZARD_AUDIO,
+            "snow": ENV_SNOW_AUDIO,
+            "forest": ENV_FOREST_AUDIO,
+            "rain": ENV_RAIN_AUDIO,
+            "indoors": ENV_INDOORS_AUDIO,
+            "jungle": ENV_JUNGLE_AUDIO
+        }
+        env_audio_path = env_map.get(environment.lower())
+        env_audio_original_path = env_audio_path  # Store for later use
+        
+        if env_audio_path and Path(env_audio_path).exists():
+            try:
+                print(f"[HORROR AUDIO] Loading environment audio: {environment} from {env_audio_path}")
+                env_audio = AudioFileClip(str(env_audio_path))
+                
+                # Loop the environment audio to match duration
+                if env_audio.duration < duration:
+                    loops_needed = int(np.ceil(duration / env_audio.duration))
+                    env_audio_clips = [env_audio] * loops_needed
+                    env_audio = concatenate_audioclips(env_audio_clips)
+                    # After concatenation, we can use subclip
+                    if env_audio.duration > duration:
+                        env_audio = env_audio.subclip(0, duration)
+                elif env_audio.duration > duration:
+                    # For AudioFileClip, try subclip first, but if it doesn't work, use FFmpeg directly
+                    try:
+                        env_audio = env_audio.subclip(0, duration)
+                    except (AttributeError, TypeError):
+                        # If subclip doesn't work, use FFmpeg directly to trim the file
+                        # This avoids recursion issues with get_frame wrappers
+                        try:
+                            import subprocess
+                            temp_audio_file = tempfile.NamedTemporaryFile(suffix='.wav', delete=False)
+                            temp_audio_path = temp_audio_file.name
+                            temp_audio_file.close()
+                            
+                            # Use FFmpeg to trim the audio file directly
+                            result = subprocess.run([
+                                'ffmpeg', '-y', '-i', str(env_audio_path),
+                                '-t', str(duration),
+                                '-acodec', 'copy',
+                                temp_audio_path
+                            ], check=True, capture_output=True, text=True)
+                            
+                            # Close the original clip and reload the trimmed version
+                            try:
+                                env_audio.close()
+                            except:
+                                pass
+                            env_audio = AudioFileClip(temp_audio_path)
+                            
+                            # Note: Temp file will be cleaned up when clip is closed or process ends
+                        except (subprocess.CalledProcessError, FileNotFoundError, Exception) as e:
+                            print(f"[HORROR AUDIO] Warning: Could not trim environment audio using FFmpeg: {e}")
+                            print(f"[HORROR AUDIO] Using full audio duration ({env_audio.duration:.2f}s) instead of requested {duration:.2f}s")
+                            # Will be handled later in the duration matching section
+                
+                print(f"[HORROR AUDIO] Environment audio loaded: {env_audio.duration:.2f}s")
+            except Exception as e:
+                print(f"[HORROR AUDIO] Warning: Failed to load environment audio '{env_audio_path}': {e}")
+                env_audio = None
+        elif env_audio_path:
+            print(f"[HORROR AUDIO] Warning: Environment audio file not found: {env_audio_path}")
+        else:
+            print(f"[HORROR AUDIO] No audio file path configured for environment: {environment}")
     
     # Convert dB to linear volume multiplier
     def db_to_linear(db):
@@ -1196,8 +1577,14 @@ def mix_horror_background_audio(narration_audio: AudioFileClip, duration: float,
     
     # Apply volume adjustments
     room_tone = apply_volume_to_audioclip(room_tone, db_to_linear(room_tone_volume))
-    drone = apply_volume_to_audioclip(drone, db_to_linear(drone_volume))
+    # Drone volume is already applied in generate_drone_with_scene_transitions if scenes are provided
+    if not (scenes and scene_audio_clips and len(scenes) == len(scene_audio_clips)):
+        drone = apply_volume_to_audioclip(drone, db_to_linear(drone_volume))
     detail_sounds = apply_volume_to_audioclip(detail_sounds, db_to_linear(detail_volume))
+    
+    # Apply volume to environment audio if loaded
+    if env_audio:
+        env_audio = apply_volume_to_audioclip(env_audio, db_to_linear(env_audio_volume))
     
     # Ensure narration audio matches duration (loop or extend if needed)
     if narration_audio.duration < duration:
@@ -1251,14 +1638,132 @@ def mix_horror_background_audio(narration_audio: AudioFileClip, duration: float,
     # Ensure narration_audio is stereo (generated clips are already stereo)
     narration_audio = ensure_stereo(narration_audio)
     
+    # Ensure environment audio is stereo and matches duration
+    if env_audio:
+        env_audio = ensure_stereo(env_audio)
+        if env_audio.duration < duration:
+            # Extend with silence if needed
+            silence_duration = duration - env_audio.duration
+            def make_silence(t):
+                if np.isscalar(t):
+                    return np.array([0.0, 0.0])
+                else:
+                    return np.zeros((len(t), 2))
+            silence = AudioClip(make_silence, duration=silence_duration, fps=env_audio.fps)
+            env_audio = concatenate_audioclips([env_audio, silence])
+        elif env_audio.duration > duration:
+            # Try subclip first (should work on processed clips from concatenation/ensure_stereo)
+            try:
+                env_audio = env_audio.subclip(0, duration)
+            except (AttributeError, TypeError):
+                # If subclip doesn't work, try FFmpeg using the original file path we stored
+                try:
+                    import subprocess
+                    if env_audio_original_path and Path(env_audio_original_path).exists():
+                        temp_audio_file = tempfile.NamedTemporaryFile(suffix='.wav', delete=False)
+                        temp_audio_path = temp_audio_file.name
+                        temp_audio_file.close()
+                        
+                        result = subprocess.run([
+                            'ffmpeg', '-y', '-i', str(env_audio_original_path),
+                            '-t', str(duration),
+                            '-acodec', 'copy',
+                            temp_audio_path
+                        ], check=True, capture_output=True, text=True)
+                        
+                        try:
+                            env_audio.close()
+                        except:
+                            pass
+                        env_audio = AudioFileClip(temp_audio_path)
+                        # Re-apply stereo conversion and volume after reloading
+                        env_audio = ensure_stereo(env_audio)
+                        env_audio = apply_volume_to_audioclip(env_audio, db_to_linear(env_audio_volume))
+                    else:
+                        print(f"[HORROR AUDIO] Warning: Could not trim environment audio (original path not available), using full duration")
+                except Exception as e:
+                    print(f"[HORROR AUDIO] Warning: Could not trim environment audio: {e}, using full duration")
+    
+    # Ensure drone duration matches total duration
+    if drone.duration < duration:
+        # Extend drone with silence (maintain last volume level)
+        silence_duration = duration - drone.duration
+        last_volume = drone.get_frame(drone.duration - 0.1) if drone.duration > 0.1 else np.array([0.0, 0.0])
+        # Get the average volume from the last sample
+        if hasattr(last_volume, '__len__') and len(last_volume) > 0:
+            avg_volume = np.mean(np.abs(last_volume))
+        else:
+            avg_volume = 0.0
+        
+        def make_silence(t):
+            # Return silence (or maintain last volume if needed)
+            if np.isscalar(t):
+                return np.array([0.0, 0.0])
+            else:
+                return np.zeros((len(t), 2))
+        silence = AudioClip(make_silence, duration=silence_duration, fps=drone.fps)
+        drone = concatenate_audioclips([drone, silence])
+    elif drone.duration > duration:
+        # Trim drone to match duration
+        drone = drone.subclip(0, duration)
+    
     # Mix all layers
     print("[HORROR AUDIO] Mixing all audio layers...")
-    mixed_audio = CompositeAudioClip([
+    
+    # Debug: Check audio levels before mixing (sample multiple points to avoid zero crossings)
+    try:
+        # Sample multiple points across a short window for better RMS estimation
+        # This avoids issues with sine waves where single-point sampling can hit zero crossings
+        sample_window = 0.1  # Sample 0.1 seconds of audio
+        mid_start = duration * 0.3
+        mid_end = duration * 0.7
+        num_samples = max(10, int(sample_window * 44100))  # At least 10 samples
+        sample_times = np.linspace(mid_start, mid_end, num_samples)
+        
+        def calc_rms_from_samples(clip, times):
+            """Calculate RMS from multiple sample points."""
+            samples = []
+            for t in times:
+                if 0 <= t < clip.duration:
+                    try:
+                        sample = clip.get_frame(t)
+                        if np.isscalar(sample):
+                            samples.append(abs(sample))
+                        else:
+                            sample_array = np.asarray(sample)
+                            samples.extend(np.abs(sample_array).flatten())
+                    except:
+                        pass
+            if len(samples) == 0:
+                return 0.0
+            return np.sqrt(np.mean(np.array(samples) ** 2))
+        
+        room_rms = calc_rms_from_samples(room_tone, sample_times)
+        drone_rms = calc_rms_from_samples(drone, sample_times)
+        narration_rms = calc_rms_from_samples(narration_audio, sample_times)
+        
+        rms_msg = f"[HORROR AUDIO] Audio levels (RMS from {len(sample_times)} samples): room_tone={room_rms:.6f}, drone={drone_rms:.6f}, narration={narration_rms:.6f}"
+        if env_audio:
+            env_rms = calc_rms_from_samples(env_audio, sample_times)
+            rms_msg += f", environment={env_rms:.6f}"
+        print(rms_msg)
+    except Exception as e:
+        print(f"[HORROR AUDIO] Warning: Could not check audio levels: {e}")
+    
+    # Build list of audio clips to mix
+    audio_clips = [
         narration_audio,
         room_tone,
         drone,
-        detail_sounds
-    ])
+        # detail_sounds
+    ]
+    
+    # Add environment audio if loaded
+    if env_audio:
+        audio_clips.append(env_audio)
+        print(f"[HORROR AUDIO] Environment audio added to mix: {environment}")
+    
+    mixed_audio = CompositeAudioClip(audio_clips)
     
     return mixed_audio
 
@@ -1336,8 +1841,8 @@ def generate_audio_for_scene_with_retry(scene: dict) -> Path:
 
 
 def build_video(scenes_path: str, out_video_path: str | None = None, save_assets: bool = False, is_short: bool = False, scene_id: int | None = None, audio_only: bool = False,
-                is_horror: bool = False, horror_bg_enabled: bool = True, room_tone_volume: float = -45.0, 
-                drone_volume: float = -25.0, detail_volume: float = -30.0):
+                is_horror: bool = False, horror_bg_enabled: bool = True, room_tone_volume: float = None, 
+                drone_volume: float = None, detail_volume: float = -30.0):
     """
     Build a video from scenes JSON file.
     
@@ -1351,8 +1856,8 @@ def build_video(scenes_path: str, out_video_path: str | None = None, save_assets
         is_short: If True, use vertical 9:16 format for YouTube Shorts.
                   If False (default), use landscape 16:9 format.
         horror_bg_enabled: If True, add horror background audio for horror videos (default: True)
-        room_tone_volume: Room tone volume in dB (default: -45)
-        drone_volume: Drone volume in dB (default: -25)
+        room_tone_volume: Room tone volume in dB (default: from ROOM_SOUND_BASE env var or -35)
+        drone_volume: Drone volume in dB (default: from DRONE_BASE env var or -20)
         detail_volume: Detail sounds volume in dB (default: -30)
     """
     config.save_assets = save_assets
@@ -1382,6 +1887,12 @@ def build_video(scenes_path: str, out_video_path: str | None = None, save_assets
         elif not out_path.is_absolute() and str(out_path.parent) not in ["finished_shorts", "finished_videos"]:
             # Relative path but not in the right directory, move it
             out_video_path = str(output_dir / out_path.name)
+    
+    # Use environment variable defaults if not provided
+    if room_tone_volume is None:
+        room_tone_volume = ROOM_SOUND_BASE_VOLUME_DB
+    if drone_volume is None:
+        drone_volume = DRONE_BASE_VOLUME_DB
     
     # Set up temp directory if not saving assets
     if not config.save_assets:
@@ -1414,9 +1925,15 @@ def build_video(scenes_path: str, out_video_path: str | None = None, save_assets
 
 
 def _build_video_impl(scenes_path: str, out_video_path: str | None = None, scene_id: int | None = None, audio_only: bool = False,
-                     is_horror: bool = False, horror_bg_enabled: bool = True, room_tone_volume: float = -45.0, 
-                     drone_volume: float = -25.0, detail_volume: float = -30.0):
+                     is_horror: bool = False, horror_bg_enabled: bool = True, room_tone_volume: float = None, 
+                     drone_volume: float = None, detail_volume: float = -30.0):
     """Internal implementation of build_video."""
+    # Use environment variable defaults if not provided
+    if room_tone_volume is None:
+        room_tone_volume = ROOM_SOUND_BASE_VOLUME_DB
+    if drone_volume is None:
+        drone_volume = DRONE_BASE_VOLUME_DB
+    
     scenes, metadata = load_scenes(scenes_path)
     
     # Use the is_horror flag passed from command line
@@ -1558,13 +2075,23 @@ def _build_video_impl(scenes_path: str, out_video_path: str | None = None, scene
             # Extract narration audio from final video
             narration_audio = final.audio
             
+            # Get environment from metadata if available
+            environment = None
+            if metadata:
+                environment = metadata.get("environment")
+            
             # Mix with horror background layers
             mixed_audio = mix_horror_background_audio(
                 narration_audio,
                 final.duration,
+                scenes=scenes,
+                scene_audio_clips=scene_audio_clips,
                 room_tone_volume=room_tone_volume,
                 drone_volume=drone_volume,
-                detail_volume=detail_volume
+                max_drone_volume=None,
+                detail_volume=detail_volume,
+                environment=environment,
+                env_audio_volume=None  # Use default from env var
             )
             
             # Replace video audio with mixed audio
@@ -1681,10 +2208,10 @@ Examples:
                         help="Generate only audio files (skip images and video assembly). Useful for testing TTS models.")
     parser.add_argument("--female", action="store_true",
                         help="Use female voice (GOOGLE_TTS_FEMALE_VOICE from .env) instead of default GOOGLE_TTS_VOICE")
-    parser.add_argument("--horror-bg-room-tone-volume", type=float, default=-45.0, metavar="DB",
-                        help="Room tone volume in dB for horror videos (default: -45)")
-    parser.add_argument("--horror-bg-drone-volume", type=float, default=-25.0, metavar="DB",
-                        help="Low-frequency drone volume in dB for horror videos (default: -25)")
+    parser.add_argument("--horror-bg-room-tone-volume", type=float, default=None, metavar="DB",
+                        help=f"Room tone volume in dB for horror videos (default: {ROOM_SOUND_BASE_VOLUME_DB} from ROOM_SOUND_BASE env var)")
+    parser.add_argument("--horror-bg-drone-volume", type=float, default=None, metavar="DB",
+                        help=f"Low-frequency drone volume in dB for horror videos (default: {DRONE_BASE_VOLUME_DB} from DRONE_BASE env var)")
     parser.add_argument("--horror-bg-detail-volume", type=float, default=-30.0, metavar="DB",
                         help="Detail sounds volume in dB for horror videos (default: -30)")
     parser.add_argument("--horror", action="store_true",
@@ -1693,6 +2220,12 @@ Examples:
                         help="Disable horror background audio even for horror videos")
     
     args = parser.parse_args()
+    
+    # Set default values from environment variables if not provided via command line
+    if args.horror_bg_room_tone_volume is None:
+        args.horror_bg_room_tone_volume = ROOM_SOUND_BASE_VOLUME_DB
+    if args.horror_bg_drone_volume is None:
+        args.horror_bg_drone_volume = DRONE_BASE_VOLUME_DB
     
     # Validate: need either positional args or --all-shorts
     # For --audio-only, output_file is optional (will use default if not provided)
