@@ -132,6 +132,16 @@ def get_shared_scene_flow_instructions() -> str:
 - Instead, let the story flow through what actually happened and how events connect: "The paper is published. Physicists worldwide take notice."
 - Each scene should feel inevitable because of what came before, not because of a transition phrase
 - Build narrative momentum through actual events and their connections, not filler words
+- CRITICAL: SMOOTH EMOTIONAL TRANSITIONS - The emotion field and narration_instructions must flow smoothly between scenes:
+  * Emotions should only change GRADUALLY from one scene to the next - avoid dramatic jumps (e.g., don't go from "calm" to "terrified" in one scene)
+  * Build emotional intensity gradually: "uneasy" → "tense" → "anxious" → "fearful" → "terrified" (not "calm" → "terrified")
+  * If the previous scene was "contemplative", the next scene might be "thoughtful" or "reflective" or "somber" - not "urgent" or "excited"
+  * If the previous scene was "tense", the next scene might be "anxious" or "uneasy" or "worried" - not "triumphant" or "calm"
+  * Consider the emotional arc: each scene's emotion should be a natural progression from the previous scene's emotion
+  * narration_instructions should also transition smoothly - if previous scene was "Focus on tension", next might be "Focus on anxiety" or "Focus on concern" - not "Focus on panic" (gradual progression)
+  * Keep narration_instructions to ONE SENTENCE focusing on a single emotion: "Focus on [emotion]."
+  * The narration should not sound completely different from one scene to the next - maintain consistency while allowing subtle emotional shifts
+  * Think of emotions as a spectrum: move gradually along the spectrum rather than jumping to opposite ends
 - CRITICAL: Each scene must cover DIFFERENT, NON-OVERLAPPING events. Do NOT repeat the same event, moment, or action that was already covered in a previous scene. Each scene should advance the story with NEW information, not re-tell what happened before. If an event was already described in detail, move to its consequences or the next significant event instead of describing it again.
 - The goal: When scenes are strung together, they should feel like one continuous, connected story, not separate disconnected pieces."""
 
@@ -416,6 +426,20 @@ def generate_significance_scene(pivotal_scene: dict, next_scene: dict | None, su
     pivotal_title = pivotal_scene.get('title', '')
     pivotal_narration = pivotal_scene.get('narration', '')
     pivotal_image_prompt = pivotal_scene.get('image_prompt', '')
+    
+    # Extract age_phrase from pivotal scene's image_prompt early (before LLM call)
+    age_phrase = None
+    if pivotal_image_prompt:
+        age_match = re.search(rf'(\d+)[-\s]year[-\s]old\s+{re.escape(subject_name)}|{re.escape(subject_name)}[,\s]+(\d+)[-\s]year[-\s]old|{re.escape(subject_name)}\s+in\s+(?:his|her|their)\s+(\d+)s|{re.escape(subject_name)}\s+at\s+age\s+(\d+)', pivotal_image_prompt, re.IGNORECASE)
+        if age_match:
+            age_num = age_match.group(1) or age_match.group(2) or age_match.group(3) or age_match.group(4)
+            if 'year-old' in age_match.group(0):
+                age_phrase = f"{age_num}-year-old {subject_name}"
+            elif 'in his' in age_match.group(0) or 'in her' in age_match.group(0) or 'in their' in age_match.group(0):
+                age_phrase = f"{subject_name} in his {age_num}s"
+            else:
+                age_phrase = f"{subject_name} at age {age_num}"
+    
     age_instruction = f"\nCRITICAL - AGE: The pivotal scene's image_prompt is: \"{pivotal_image_prompt[:300]}...\". Extract the age information from this (look for phrases like \"26-year-old\", \"in his 40s\", \"at age 20\") and include the SAME age description in your image_prompt. The significance scene should show {subject_name} at the SAME age as in the pivotal moment."
     
     next_context = ""
@@ -429,9 +453,9 @@ def generate_significance_scene(pivotal_scene: dict, next_scene: dict | None, su
     
     # Build narration_instructions based on script type
     if script_type == "horror":
-        narration_instructions_desc = "Match the emotion field with brief delivery guidance. Example: 'Speak with terrified urgency, voice trembling.'"
+        narration_instructions_desc = "ONE SENTENCE: Focus on a single emotion from the emotion field. Example: 'Focus on tension.' or 'Focus on unease.' Keep it simple - just the emotion to emphasize."
     else:
-        narration_instructions_desc = "Match the emotion field with brief delivery guidance. Example: 'Deliver with contemplative weight, emphasizing significance.'"
+        narration_instructions_desc = "ONE SENTENCE: Focus on a single emotion from the emotion field. Example: 'Focus on contemplation.' or 'Focus on thoughtfulness.' Keep it simple - just the emotion to emphasize."
     
     # Add drone_change instructions for horror scripts
     drone_change_note = ""
@@ -490,9 +514,9 @@ CRITICAL: The "narration_instructions" field is REQUIRED and must be included in
 
     # Adjust narration instructions based on script type
     if script_type == "horror":
-        narration_instructions_note = "CRITICAL: The 'narration_instructions' field is REQUIRED in your JSON response. It should match the scene's emotion field with brief delivery guidance. Keep it simple - just follow the emotion with some context. Example: 'Speak with contemplative weight, emphasizing significance.' DO NOT omit this field."
+        narration_instructions_note = "CRITICAL: The 'narration_instructions' field is REQUIRED in your JSON response. It must be ONE SENTENCE focusing on a single emotion from the emotion field. Keep it simple: 'Focus on [emotion].' Examples: 'Focus on tension.' or 'Focus on unease.' The narration_instructions should flow smoothly from the previous scene's narration_instructions (gradual emotion progression). DO NOT omit this field."
     else:
-        narration_instructions_note = "CRITICAL: The 'narration_instructions' field is REQUIRED in your JSON response. It should match the scene's emotion field with brief delivery guidance. Keep it simple - just follow the emotion with some context. Example: 'Deliver with contemplative weight, emphasizing significance.' DO NOT omit this field."
+        narration_instructions_note = "CRITICAL: The 'narration_instructions' field is REQUIRED in your JSON response. It must be ONE SENTENCE focusing on a single emotion from the emotion field. Keep it simple: 'Focus on [emotion].' Examples: 'Focus on contemplation.' or 'Focus on thoughtfulness.' The narration_instructions should flow smoothly from the previous scene's narration_instructions (gradual emotion progression). DO NOT omit this field."
     
     try:
         response = client.chat.completions.create(
@@ -532,27 +556,12 @@ CRITICAL: The "narration_instructions" field is REQUIRED and must be included in
             # Generate fallback narration_instructions based on emotion and script type
             emotion = scene.get('emotion', 'contemplative')
             if script_type == "horror":
-                scene['narration_instructions'] = f"Speak with {emotion}."
+                scene['narration_instructions'] = f"Focus on {emotion}."
             else:
-                scene['narration_instructions'] = f"Deliver with {emotion}."
+                scene['narration_instructions'] = f"Focus on {emotion}."
             print(f"[SIGNIFICANCE SCENE] WARNING: LLM did not provide narration_instructions, generated fallback: {scene['narration_instructions']}")
         if 'image_prompt' not in scene:
-            # Use the extracted age_phrase if available, otherwise construct from pivotal scene
-            if not age_phrase:
-                # Fallback: try to extract age from pivotal scene's image_prompt
-                pivotal_img_prompt = pivotal_scene.get('image_prompt', '')
-                if pivotal_img_prompt:
-                    age_match = re.search(rf'(\d+)[-\s]year[-\s]old\s+{re.escape(subject_name)}|{re.escape(subject_name)}[,\s]+(\d+)[-\s]year[-\s]old|{re.escape(subject_name)}\s+in\s+(?:his|her|their)\s+(\d+)s|{re.escape(subject_name)}\s+at\s+age\s+(\d+)', pivotal_img_prompt, re.IGNORECASE)
-                    if age_match:
-                        age_num = age_match.group(1) or age_match.group(2) or age_match.group(3) or age_match.group(4)
-                        if 'year-old' in age_match.group(0):
-                            age_phrase = f"{age_num}-year-old {subject_name}"
-                        elif 'in his' in age_match.group(0) or 'in her' in age_match.group(0):
-                            age_phrase = f"{subject_name} in his {age_num}s"
-                        else:
-                            age_phrase = f"{subject_name} at age {age_num}"
-            
-            # If still no age_phrase, just use subject name
+            # Use the extracted age_phrase if available, otherwise use subject name
             if not age_phrase:
                 age_phrase = subject_name
             
@@ -717,9 +726,9 @@ If there are NO hanging storylines, return an empty array []."""
             
             # Build narration_instructions based on script type
             if script_type == "horror":
-                narration_instructions_desc = "Match the emotion field with brief delivery guidance. Example: 'Speak with terrified urgency, voice trembling.'"
+                narration_instructions_desc = "ONE SENTENCE: Focus on a single emotion from the emotion field. Example: 'Focus on tension.' or 'Focus on unease.'"
             else:
-                narration_instructions_desc = "Match the emotion field with brief delivery guidance. Example: 'Deliver with measured authority, conveying completion.'"
+                narration_instructions_desc = "ONE SENTENCE: Focus on a single emotion from the emotion field. Example: 'Focus on contemplation.' or 'Focus on thoughtfulness.'"
             
             # Add drone_change instructions for horror scripts
             drone_change_note = ""
@@ -807,9 +816,9 @@ Respond with JSON:
                     # Generate fallback narration_instructions based on emotion and script type
                     emotion = new_scene.get('emotion', 'contemplative')
                     if script_type == "horror":
-                        new_scene['narration_instructions'] = f"Speak with {emotion} urgency, voice trembling."
+                        new_scene['narration_instructions'] = f"Focus on {emotion}."
                     else:
-                        new_scene['narration_instructions'] = f"Deliver with {emotion} weight, emphasizing completion."
+                        new_scene['narration_instructions'] = f"Focus on {emotion}."
                     print(f"[STORYLINE CHECK] WARNING: Generated scene missing narration_instructions, generated fallback: {new_scene['narration_instructions']}")
                 
                 # For horror scripts, ensure drone_change is present
@@ -968,9 +977,9 @@ def refine_scenes(scenes: list[dict], subject_name: str, is_short: bool = False,
                 if 'narration_instructions' not in significance_scene or not significance_scene.get('narration_instructions', '').strip():
                     emotion = significance_scene.get('emotion', 'contemplative')
                     if script_type == "horror":
-                        significance_scene['narration_instructions'] = f"Speak with {emotion} urgency, voice trembling."
+                        significance_scene['narration_instructions'] = f"Focus on {emotion}."
                     else:
-                        significance_scene['narration_instructions'] = f"Deliver with {emotion} weight, emphasizing significance."
+                        significance_scene['narration_instructions'] = f"Focus on {emotion}."
                     print(f"[REFINEMENT PASS 2] WARNING: Generated significance scene missing narration_instructions, generated fallback: {significance_scene['narration_instructions']}")
                 
                 # Mark this as a significance scene
@@ -1138,11 +1147,15 @@ YOUR TASK: Review these scenes and improve them. Look for:
    * Internal experience details (what they're thinking, feeling, fearing)
    * Physical sensations and reactions that create empathy
    * Make events feel significant by connecting them to human emotions
-5. EMOTION CONSISTENCY - Ensure the scene's "emotion" field matches the narration tone and image mood:
+5. EMOTION CONSISTENCY AND SMOOTH TRANSITIONS - Ensure the scene's "emotion" field matches the narration tone and image mood, AND flows smoothly from the previous scene:
    * The emotion field should accurately reflect how the scene FEELS
    * Narration tone should match the emotion (e.g., "desperate" → urgent/anxious narration)
    * Image prompt mood should match the emotion (e.g., "desperate" → tense atmosphere in image)
    * If narration or image don't match the emotion field, refine them to be consistent
+   * CRITICAL: Emotions must flow SMOOTHLY between scenes - only change gradually from the previous scene's emotion
+   * Build intensity gradually: 'contemplative' → 'thoughtful' → 'somber' → 'serious' → 'tense' (not 'calm' → 'urgent')
+   * Avoid dramatic emotional jumps - each scene's emotion should be a natural progression from the previous scene
+   * narration_instructions should also transition smoothly - keep to ONE SENTENCE focusing on a single emotion: "Focus on [emotion]." If previous scene was "Focus on tension", next might be "Focus on anxiety" (gradual progression)
 6. VIEWER CONFUSION (CRITICAL FOR RETENTION) - The biggest issue for retention is viewer confusion. Ensure WHY scenes make it clear what is happening:
    * WHY scenes MUST ensure the viewer knows WHAT IS HAPPENING in the story - provide clear context, establish the situation, and make sure viewers understand the basic facts before introducing mysteries or questions
    * If a WHY scene is confusing or vague about what's happening, strengthen it by adding: clear context about the situation, specific facts about what's happening, and clear establishment of the story state
@@ -1175,7 +1188,7 @@ IMPORTANT GUIDELINES:
 - Maintain the same scene structure and IDs
 - Preserve all fields (id, title, narration, image_prompt, emotion, year, scene_type, narration_instructions, etc.)
 - CRITICAL: Preserve the WHY/WHAT structure - maintain each scene's scene_type field (WHY or WHAT). WHY sections frame mysteries, problems, questions, obstacles, counterintuitive information, secrets, or suggest there's something we haven't considered or don't understand the significance of. WHY sections should set up what will happen, why it matters, and what the stakes are for upcoming WHAT sections. WHAT sections deliver content/solutions and must clearly communicate what is happening, why it's important, and what the stakes are. Ensure WHY sections create anticipation for upcoming WHAT sections by establishing what/why/stakes.
-- CRITICAL: Preserve and refine narration_instructions - Each scene MUST have narration_instructions that match the scene's emotion field with brief delivery guidance. When refining, ensure narration_instructions accurately reflect the scene's emotion. If narration_instructions don't match the refined narration or emotion, update them to be consistent. Keep it simple - just follow the emotion with some context. ABSOLUTELY DO NOT remove narration_instructions - every scene must have this field. If a scene is missing narration_instructions, add it based on the scene's emotion field.
+- CRITICAL: Preserve and refine narration_instructions - Each scene MUST have narration_instructions as ONE SENTENCE focusing on a single emotion from the emotion field. Keep it simple: 'Focus on [emotion].' Examples: 'Focus on tension.' or 'Focus on unease.' CRITICAL: SMOOTH EMOTIONAL TRANSITIONS - Ensure emotions and narration_instructions flow smoothly between scenes. Emotions should only change GRADUALLY from one scene to the next. narration_instructions should also transition smoothly - if previous scene was 'Focus on tension', next might be 'Focus on anxiety' (gradual progression). The narration should not sound completely different from one scene to the next. ABSOLUTELY DO NOT remove narration_instructions - every scene must have this field. If a scene is missing narration_instructions, add it based on the scene's emotion field: 'Focus on [emotion].'
 - CRITICAL FOR HORROR: Preserve and refine drone_change - Each scene MUST have a drone_change field (one of: 'fade_in', 'fade_out', 'hard_cut', 'hold', 'swell', 'shrink', 'none'). When refining scenes, if the emotional intensity, tension level, or narrative flow has changed, UPDATE the drone_change to match. For example: if a scene's tension increased significantly, change drone_change to 'swell'; if tension decreased, use 'shrink' or 'fade_out'; if it's a dramatic realization, consider 'hard_cut'. The drone_change should reflect the scene's emotional arc and how it transitions from the previous scene. ABSOLUTELY DO NOT remove drone_change - every scene must have this field. If a scene is missing drone_change, add it based on the scene's emotion and position in the narrative.
 - Keep the same tone and style
 - {pacing_note}
@@ -1190,7 +1203,7 @@ Return the SAME JSON structure with refined scenes. Only change what needs impro
 
 CRITICAL JSON STRUCTURE REQUIREMENTS:
 - Every scene MUST include ALL required fields: id, title, narration, image_prompt, emotion, year, scene_type, and narration_instructions
-- The "narration_instructions" field is REQUIRED for every scene - it must match the scene's emotion field with brief delivery guidance
+- The "narration_instructions" field is REQUIRED for every scene - it must be ONE SENTENCE focusing on a single emotion from the emotion field. Keep it simple: 'Focus on [emotion].' Examples: 'Focus on tension.' or 'Focus on contemplation.'
 - DO NOT omit any fields from the JSON - every scene must have the complete structure
 - If a scene is missing narration_instructions, add it based on the scene's emotion field
 - FOR HORROR SCRIPTS: The "drone_change" field is REQUIRED for every scene - it must be one of: 'fade_in', 'fade_out', 'hard_cut', 'hold', 'swell', 'shrink', 'none'. Update drone_change if the scene's emotional intensity or narrative flow changed during refinement.
@@ -1201,7 +1214,7 @@ Respond with JSON array only (no markdown, no explanation). Each scene object mu
         response = client.chat.completions.create(
             model=SCRIPT_MODEL,
             messages=[
-                {"role": "system", "content": f"You are an expert editor who refines {'horror story' if script_type == 'horror' else 'documentary'} narration for clarity, flow, and naturalness. CRITICAL FOR RETENTION - AVOID VIEWER CONFUSION: The biggest issue for retention is viewer confusion. WHY scenes MUST ensure the viewer knows WHAT IS HAPPENING in the story - provide clear context, establish the situation, and make sure viewers understand the basic facts before introducing mysteries or questions. Don't create confusion by being vague about what's happening. CRITICAL: Create a SEAMLESS JOURNEY through the video - scenes should feel CONNECTED, not like consecutive pieces of disjoint information (A and B and C). Each scene should build on the previous scene, reference what came before naturally, and show how events connect. You understand the WHY/WHAT paradigm: WHY scenes frame mysteries, problems, questions, obstacles, counterintuitive information, secrets, or suggest there's something we haven't considered - they create anticipation by setting up what will happen, why it matters, and what the stakes are for upcoming WHAT sections. WHY scenes MUST clearly establish what is happening (MOST IMPORTANT for retention) before introducing questions or mysteries. WHAT scenes deliver core content, solutions, and information - they satisfy anticipation by clearly communicating what is happening, why it's important, and what the stakes are (what can go wrong, what can go right, what's at risk). {'CRITICAL FOR HORROR: All narration must be in FIRST PERSON (I/me/my), present tense. The protagonist is telling their own story. Focus on tension building, atmosphere, and horror pacing. For final chapter, ensure open ending that keeps viewers scared.' if script_type == 'horror' else ''} You catch awkward transitions, weird sentences, style violations, and especially meta references (chapters, production elements, etc.). You ensure scenes feel connected and build on each other, WHY scenes clearly establish what is happening (avoiding confusion) and set up what/why/stakes for upcoming WHAT sections, and WHAT scenes clearly communicate what/why/stakes. {narration_style_note} CRITICAL JSON REQUIREMENT: Every scene in your response MUST include the 'narration_instructions' field. This field must match the scene's emotion field with brief delivery guidance (e.g., 'Speak with tense urgency, voice trembling.' or 'Deliver with contemplative weight, emphasizing significance.'). DO NOT omit this field from any scene. Respond with valid JSON array only - same structure as input, including narration_instructions for every scene."},
+                {"role": "system", "content": f"You are an expert editor who refines {'horror story' if script_type == 'horror' else 'documentary'} narration for clarity, flow, and naturalness. CRITICAL FOR RETENTION - AVOID VIEWER CONFUSION: The biggest issue for retention is viewer confusion. WHY scenes MUST ensure the viewer knows WHAT IS HAPPENING in the story - provide clear context, establish the situation, and make sure viewers understand the basic facts before introducing mysteries or questions. Don't create confusion by being vague about what's happening. CRITICAL: Create a SEAMLESS JOURNEY through the video - scenes should feel CONNECTED, not like consecutive pieces of disjoint information (A and B and C). Each scene should build on the previous scene, reference what came before naturally, and show how events connect. You understand the WHY/WHAT paradigm: WHY scenes frame mysteries, problems, questions, obstacles, counterintuitive information, secrets, or suggest there's something we haven't considered - they create anticipation by setting up what will happen, why it matters, and what the stakes are for upcoming WHAT sections. WHY scenes MUST clearly establish what is happening (MOST IMPORTANT for retention) before introducing questions or mysteries. WHAT scenes deliver core content, solutions, and information - they satisfy anticipation by clearly communicating what is happening, why it's important, and what the stakes are (what can go wrong, what can go right, what's at risk). {'CRITICAL FOR HORROR: All narration must be in FIRST PERSON (I/me/my), present tense. The protagonist is telling their own story. Focus on tension building, atmosphere, and horror pacing. For final chapter, ensure open ending that keeps viewers scared.' if script_type == 'horror' else ''} You catch awkward transitions, weird sentences, style violations, and especially meta references (chapters, production elements, etc.). You ensure scenes feel connected and build on each other, WHY scenes clearly establish what is happening (avoiding confusion) and set up what/why/stakes for upcoming WHAT sections, and WHAT scenes clearly communicate what/why/stakes. {narration_style_note} CRITICAL JSON REQUIREMENT: Every scene in your response MUST include the 'narration_instructions' field. This field must be ONE SENTENCE focusing on a single emotion from the emotion field. Keep it simple: 'Focus on [emotion].' Examples: 'Focus on tension.' or 'Focus on contemplation.' The narration_instructions should flow smoothly from the previous scene's narration_instructions (gradual emotion progression). DO NOT omit this field from any scene. Respond with valid JSON array only - same structure as input, including narration_instructions for every scene."},
                 {"role": "user", "content": refinement_prompt}
             ],
             temperature=0.3,  # Lower temperature for refinement - more focused changes
@@ -1242,9 +1255,9 @@ Respond with JSON array only (no markdown, no explanation). Each scene object mu
                 # Generate fallback narration_instructions based on emotion and script type
                 emotion = scene.get('emotion', 'contemplative')
                 if script_type == "horror":
-                    scene['narration_instructions'] = f"Speak with {emotion} urgency, voice trembling."
+                    scene['narration_instructions'] = f"Focus on {emotion}."
                 else:
-                    scene['narration_instructions'] = f"Deliver with {emotion} weight, emphasizing significance."
+                    scene['narration_instructions'] = f"Focus on {emotion}."
                 print(f"[REFINEMENT] WARNING: Scene {i+1} missing narration_instructions, generated fallback: {scene['narration_instructions']}")
             
             # Validate scene_type is valid
@@ -1374,9 +1387,9 @@ Respond with JSON array only (no markdown, no explanation). Each scene object mu
                 # Generate fallback narration_instructions based on emotion and script type
                 emotion = scene.get('emotion', 'contemplative')
                 if script_type == "horror":
-                    scene['narration_instructions'] = f"Speak with {emotion} urgency, voice trembling."
+                    scene['narration_instructions'] = f"Focus on {emotion}."
                 else:
-                    scene['narration_instructions'] = f"Deliver with {emotion} weight, emphasizing significance."
+                    scene['narration_instructions'] = f"Focus on {emotion}."
                 print(f"[REFINEMENT] CRITICAL FIX: Scene {i+1} (ID: {scene.get('id', i+1)}) missing narration_instructions after refinement, generated fallback: {scene['narration_instructions']}")
             
             # For horror scripts, ensure drone_change is present and valid

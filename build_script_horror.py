@@ -94,14 +94,19 @@ Your scenes should naturally continue from where the previous chapter ended."""
     else:
         prev_context = "This is the FIRST chapter - establish the horror story setup."
     
-    # Build recent scenes context
+    # Build recent scenes context - include FULL scene JSON for proper transitions
     scenes_context = ""
     if prev_scenes and len(prev_scenes) > 0:
         recent_scenes = prev_scenes[-5:]
-        scenes_context = "RECENT SCENES - AVOID REPEATING THESE EVENTS, maintain continuity:\n"
+        scenes_context = "RECENT SCENES - AVOID REPEATING THESE EVENTS, maintain continuity, and ensure smooth transitions:\n"
         for sc in recent_scenes:
-            scenes_context += f"  Scene {sc.get('id')}: \"{sc.get('title')}\" - {sc.get('narration', '')[:150]}...\n"
-        scenes_context += "\nCRITICAL: Do NOT repeat or overlap with events already covered. Each scene must cover DIFFERENT events."
+            # Include full scene JSON for proper emotion, narration_instructions, and drone_change transitions
+            scenes_context += f"  Scene {sc.get('id')} (FULL JSON): {json.dumps(sc, indent=2)}\n"
+        scenes_context += "\nCRITICAL: Do NOT repeat or overlap with events already covered. Each scene must cover DIFFERENT events.\n"
+        scenes_context += "CRITICAL: For smooth transitions, ensure:\n"
+        scenes_context += "- emotion flows gradually from the previous scene's emotion\n"
+        scenes_context += "- narration_instructions flow smoothly from the previous scene's narration_instructions\n"
+        scenes_context += "- drone_change is correct based on the previous scene's drone_change (use hold/swell/shrink/fade_out/hard_cut if drone was present, fade_in if it wasn't)"
     else:
         scenes_context = ""
     
@@ -363,8 +368,8 @@ Respond with JSON array:
     "narration": "First-person, present tense horror narration (I/me/my)...",
     "scene_type": "WHY" or "WHAT" - MUST be one of these two values. WHY sections frame mysteries, questions, unease, "what's happening?" moments. WHAT sections reveal scares, show threats, deliver horror moments.",
     "image_prompt": "Horror visual description with dark, shadowy, eerie atmosphere, 16:9 cinematic",
-    "emotion": "Horror emotion (e.g., 'terrified', 'tense', 'atmospheric', 'dread-filled', 'fearful', 'paranoid', 'uneasy'). Should match the chapter's emotional tone but be scene-specific.",
-    "narration_instructions": "Match the emotion field with brief delivery guidance. Example: 'Speak with terrified urgency, voice trembling.'",
+    "emotion": "Horror emotion (e.g., 'terrified', 'tense', 'atmospheric', 'dread-filled', 'fearful', 'paranoid', 'uneasy'). Should match the chapter's emotional tone but be scene-specific. CRITICAL: Emotions must flow SMOOTHLY between scenes - only change gradually from the previous scene's emotion. Build intensity gradually: 'uneasy' → 'tense' → 'anxious' → 'fearful' → 'terrified'. Avoid dramatic jumps like 'calm' → 'terrified'.",
+    "narration_instructions": "ONE SENTENCE: Focus on a single emotion from the emotion field. Example: 'Focus on tension.' or 'Focus on unease.' Keep it simple - just the emotion to emphasize.",
     "drone_change": "fade_in" or "hold" or "swell" or "shrink" or "fade_out" or "hard_cut" or "none" - Indicate how the low frequency drone should change for this scene. Use fade_in when drone is not present, hold/swell/shrink when drone is already present, fade_out for temporary relief, hard_cut sparingly for realization moments/reveals.",
     "year": "time setting or 'present' or relevant time reference"
   }},
@@ -375,7 +380,7 @@ Respond with JSON array:
     response = build_scripts_utils.client.chat.completions.create(
         model=build_scripts_utils.SCRIPT_MODEL,
         messages=[
-            {"role": "system", "content": "You are a horror storyteller creating a first-person scary story. Write narration in FIRST PERSON (I/me/my), present tense. CRITICAL: Use first person throughout - the protagonist is telling their own story. Create tension, atmosphere, and fear. Use WHY/WHAT paradigm at scene level. Build horror progressively. Focus on atmosphere and unease. CRITICAL: For each scene, provide narration_instructions that match the scene's emotion field with some context about the delivery. Keep it simple - just follow the emotion with brief delivery guidance. Respond with valid JSON array only."},
+            {"role": "system", "content": "You are a horror storyteller creating a first-person scary story. Write narration in FIRST PERSON (I/me/my), present tense. CRITICAL: Use first person throughout - the protagonist is telling their own story. Create tension, atmosphere, and fear. Use WHY/WHAT paradigm at scene level. Build horror progressively. Focus on atmosphere and unease. CRITICAL: For each scene, provide narration_instructions as ONE SENTENCE focusing on a single emotion from the emotion field. Keep it simple: 'Focus on [emotion].' Examples: 'Focus on tension.' or 'Focus on unease.' The narration_instructions should flow smoothly between scenes - if previous scene was 'Focus on tension', next might be 'Focus on anxiety' (gradual progression). Avoid overly dramatic language. Respond with valid JSON array only."},
             {"role": "user", "content": scene_prompt}
         ],
         temperature=0.85,
@@ -551,9 +556,9 @@ For each scene, add a "drone_change" field with one of these values:
 
 Respond with JSON array of exactly 3 scenes (ALL should be WHY scenes for quick horror format):
 [
-  {{"id": 1, "title": "2-4 words", "narration": "HIGH ENERGY - first-person horror narration that establishes the scary premise, creates immediate tension and fear", "scene_type": "WHY", "image_prompt": "Horror visual with dark, shadowy, eerie atmosphere, 9:16 vertical", "emotion": "Horror emotion (e.g., 'terrified', 'tense', 'atmospheric', 'dread-filled', 'fearful', 'paranoid', 'uneasy')", "narration_instructions": "Match the emotion field with brief delivery guidance. Example: 'Speak with terrified urgency, voice trembling.'", "drone_change": "fade_in" or "hold" or "swell" or "shrink" or "fade_out" or "hard_cut" or "none" - Indicate how the low frequency drone should change for this scene.", "year": "present or relevant time reference"}},
-  {{"id": 2, "title": "...", "narration": "HIGH ENERGY - escalate the horror, deepen the fear, intensify the threat", "scene_type": "WHY", "image_prompt": "Horror visual with dark, shadowy, eerie atmosphere, 9:16 vertical", "emotion": "Horror emotion", "narration_instructions": "Match the emotion field with brief delivery guidance. Example: 'Deliver with tense paranoia, voice strained.'", "drone_change": "fade_in" or "hold" or "swell" or "shrink" or "fade_out" or "hard_cut" or "none" - Indicate how the low frequency drone should change for this scene.", "year": "present or relevant time reference"}},
-  {{"id": 3, "title": "...", "narration": "HIGH ENERGY - peak horror moment, open-ended conclusion that leaves viewers scared and wanting more", "scene_type": "WHY", "image_prompt": "Horror visual with dark, shadowy, eerie atmosphere, 9:16 vertical", "emotion": "Horror emotion", "narration_instructions": "Match the emotion field with brief delivery guidance. Example: 'Speak with dread-filled intensity, voice panicked.'", "drone_change": "fade_in" or "hold" or "swell" or "shrink" or "fade_out" or "hard_cut" or "none" - Indicate how the low frequency drone should change for this scene. For final scene, consider "hard_cut" for maximum impact.", "year": "present or relevant time reference"}}
+  {{"id": 1, "title": "2-4 words", "narration": "HIGH ENERGY - first-person horror narration that establishes the scary premise, creates immediate tension and fear", "scene_type": "WHY", "image_prompt": "Horror visual with dark, shadowy, eerie atmosphere, 9:16 vertical", "emotion": "Horror emotion (e.g., 'uneasy', 'tense', 'atmospheric', 'dread-filled', 'fearful', 'paranoid'). CRITICAL: Emotions must flow SMOOTHLY between scenes - only change gradually. Build intensity gradually: 'uneasy' → 'tense' → 'anxious' → 'fearful' → 'terrified'.", "narration_instructions": "ONE SENTENCE: Focus on a single emotion from the emotion field. Example: 'Focus on tension.' or 'Focus on unease.'", "drone_change": "fade_in" or "hold" or "swell" or "shrink" or "fade_out" or "hard_cut" or "none" - Indicate how the low frequency drone should change for this scene.", "year": "present or relevant time reference"}},
+  {{"id": 2, "title": "...", "narration": "HIGH ENERGY - escalate the horror, deepen the fear, intensify the threat", "scene_type": "WHY", "image_prompt": "Horror visual with dark, shadowy, eerie atmosphere, 9:16 vertical", "emotion": "Horror emotion - must be a GRADUAL progression from scene 1's emotion (e.g., if scene 1 was 'uneasy', this might be 'tense' or 'anxious', not 'terrified').", "narration_instructions": "ONE SENTENCE: Focus on a single emotion from the emotion field, flowing smoothly from scene 1. Example: if scene 1 was 'Focus on tension.', this might be 'Focus on anxiety.'", "drone_change": "fade_in" or "hold" or "swell" or "shrink" or "fade_out" or "hard_cut" or "none" - Indicate how the low frequency drone should change for this scene.", "year": "present or relevant time reference"}},
+  {{"id": 3, "title": "...", "narration": "HIGH ENERGY - peak horror moment, open-ended conclusion that leaves viewers scared and wanting more", "scene_type": "WHY", "image_prompt": "Horror visual with dark, shadowy, eerie atmosphere, 9:16 vertical", "emotion": "Horror emotion - must be a GRADUAL progression from scene 2's emotion (e.g., if scene 2 was 'tense', this might be 'anxious' or 'fearful', building naturally).", "narration_instructions": "ONE SENTENCE: Focus on a single emotion from the emotion field, flowing smoothly from scene 2. Example: if scene 2 was 'Focus on anxiety.', this might be 'Focus on fear.'", "drone_change": "fade_in" or "hold" or "swell" or "shrink" or "fade_out" or "hard_cut" or "none" - Indicate how the low frequency drone should change for this scene. For final scene, consider "hard_cut" for maximum impact.", "year": "present or relevant time reference"}}
 ]
 
 IMPORTANT: 
@@ -569,7 +574,7 @@ IMPORTANT:
     response = build_scripts_utils.client.chat.completions.create(
         model=build_scripts_utils.SCRIPT_MODEL,
         messages=[
-            {"role": "system", "content": "You are a horror storyteller creating a quick, scary first-person horror story for YouTube Shorts. Write narration in FIRST PERSON (I/me/my), present tense. CRITICAL: Use first person throughout - the protagonist is telling their own story. Create tension, atmosphere, and fear quickly. This is a short horror story designed to drive traffic - make it compelling and open-ended. All scenes should be WHY scenes that build fear. CRITICAL: For each scene, provide narration_instructions that match the scene's emotion field with some context about the delivery. Keep it simple - just follow the emotion with brief delivery guidance. Respond with valid JSON array only."},
+            {"role": "system", "content": "You are a horror storyteller creating a quick, scary first-person horror story for YouTube Shorts. Write narration in FIRST PERSON (I/me/my), present tense. CRITICAL: Use first person throughout - the protagonist is telling their own story. Create tension, atmosphere, and fear quickly. This is a short horror story designed to drive traffic - make it compelling and open-ended. All scenes should be WHY scenes that build fear. CRITICAL: For each scene, provide narration_instructions as ONE SENTENCE focusing on a single emotion from the emotion field. Keep it simple: 'Focus on [emotion].' Examples: 'Focus on tension.' or 'Focus on unease.' The narration_instructions should flow smoothly between scenes - if previous scene was 'Focus on tension', next might be 'Focus on anxiety' (gradual progression). Avoid overly dramatic language. Respond with valid JSON array only."},
             {"role": "user", "content": scene_prompt}
         ],
         temperature=0.85,

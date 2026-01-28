@@ -46,6 +46,12 @@ GOOGLE_VOICE_TYPE = os.getenv("GOOGLE_VOICE_TYPE", "").lower()  # "chirp", "gemi
 GOOGLE_GEMINI_MALE_SPEAKER = os.getenv("GOOGLE_GEMINI_MALE_SPEAKER", "Charon")  # Default Gemini male voice
 GOOGLE_GEMINI_FEMALE_SPEAKER = os.getenv("GOOGLE_GEMINI_FEMALE_SPEAKER", "")  # Gemini female voice
 
+# Narration instructions for Gemini/OpenAI TTS (from .env): biopic vs horror mode
+BIOPIC_NARRATION_INSTRUCTIONS = os.getenv("BIOPIC_NARRATION_INSTRUCTIONS", "")
+HORROR_NARRATION_INSTRUCTIONS = os.getenv("HORROR_NARRATION_INSTRUCTIONS", "")
+# Set at start of build_video based on --horror: which instructions to use for this run
+NARRATION_INSTRUCTIONS_FOR_TTS = ""
+
 # Horror background audio volume settings (from .env or defaults)
 # More impactful defaults: room tone louder, drone more prominent
 DRONE_BASE_VOLUME_DB = float(os.getenv("DRONE_BASE", "-20.0"))  # Base drone volume (default: -20 dB, was -25)
@@ -757,11 +763,10 @@ def generate_audio_for_scene(scene: dict) -> Path:
         
         if is_gemini_voice:
             # Gemini TTS uses new API with prompt parameter and model_name
-            # Get narration_instructions from scene if available, otherwise use emotion-based prompt
-            narration_instructions = scene.get("narration_instructions", "")
-            if narration_instructions:
-                prompt_text = narration_instructions
-                print(f"[AUDIO] Scene {scene['id']}: using scene-specific narration instructions for Gemini TTS")
+            # Use BIOPIC_NARRATION_INSTRUCTIONS or HORROR_NARRATION_INSTRUCTIONS from env (set by --horror)
+            if NARRATION_INSTRUCTIONS_FOR_TTS:
+                prompt_text = NARRATION_INSTRUCTIONS_FOR_TTS
+                print(f"[AUDIO] Scene {scene['id']}: using narration instructions from env for Gemini TTS")
             else:
                 # Fall back to emotion-based prompt
                 emotion_desc = f"with {emotion} emotion" if emotion else ""
@@ -769,6 +774,7 @@ def generate_audio_for_scene(scene: dict) -> Path:
             
             # Gemini uses text input (not SSML) with prompt parameter
             synthesis_input = texttospeech.SynthesisInput(text=text, prompt=prompt_text)
+            # synthesis_input = texttospeech.SynthesisInput(text=text)
             
             # Select Gemini voice based on female flag
             if USE_FEMALE_VOICE:
@@ -825,12 +831,10 @@ def generate_audio_for_scene(scene: dict) -> Path:
             f.write(response.audio_content)
     else:
         # OpenAI TTS (fallback)
-        # Use narration_instructions from scene if available, otherwise fall back to default style prompt
-        narration_instructions = scene.get("narration_instructions", "")
-        if narration_instructions:
-            # Use scene-specific narration instructions
-            tts_instructions = narration_instructions
-            print(f"[AUDIO] Scene {scene['id']}: using scene-specific narration instructions")
+        # Use BIOPIC_NARRATION_INSTRUCTIONS or HORROR_NARRATION_INSTRUCTIONS from env (set by --horror)
+        if NARRATION_INSTRUCTIONS_FOR_TTS:
+            tts_instructions = NARRATION_INSTRUCTIONS_FOR_TTS
+            print(f"[AUDIO] Scene {scene['id']}: using narration instructions from env")
         else:
             # Fall back to default style prompt
             tts_instructions = OPENAI_TTS_STYLE_PROMPT
@@ -1312,6 +1316,9 @@ def generate_drone_with_scene_transitions(scenes: list[dict], scene_audio_clips:
         scene_id = scene.get('id', i + 1)
         scene_duration = audio_clip.duration + END_SCENE_PAUSE_LENGTH  # Include pause
         drone_change = scene.get('drone_change', 'none')
+
+        if current_drone_volume == 0.0 and drone_change == "swell":
+            drone_change = "fade_in"
         
         # Determine transition parameters based on drone_change
         if drone_change == "fade_in":
@@ -1521,13 +1528,70 @@ def mix_horror_background_audio(narration_audio: AudioFileClip, duration: float,
                 env_audio = AudioFileClip(str(env_audio_path))
                 
                 # Loop the environment audio to match duration
+                # NOTE: This initial loop may not work reliably with MoviePy concatenation
+                # We'll check again after volume/stereo processing and use FFmpeg if needed
                 if env_audio.duration < duration:
+                    print(f"[HORROR AUDIO] Initial loop attempt: {env_audio.duration:.3f}s < {duration:.3f}s")
                     loops_needed = int(np.ceil(duration / env_audio.duration))
+                    print(f"[HORROR AUDIO] Attempting to loop {loops_needed} times using MoviePy concatenation")
                     env_audio_clips = [env_audio] * loops_needed
                     env_audio = concatenate_audioclips(env_audio_clips)
-                    # After concatenation, we can use subclip
+                    print(f"[HORROR AUDIO] After initial loop: {env_audio.duration:.3f}s (target: {duration:.3f}s)")
+                    # After concatenation, try subclip (may not work on CompositeAudioClip)
                     if env_audio.duration > duration:
-                        env_audio = env_audio.subclip(0, duration)
+                        try:
+                            env_audio = env_audio.subclip(0, duration)
+                        except (AttributeError, TypeError):
+                            # If subclip doesn't work on CompositeAudioClip, write to file and trim with FFmpeg
+                            try:
+                                import subprocess
+                                temp_audio_file = tempfile.NamedTemporaryFile(suffix='.wav', delete=False)
+                                temp_audio_path = temp_audio_file.name
+                                temp_audio_file.close()
+                                
+                                # Write the concatenated audio to temp file
+                                try:
+                                    env_audio.write_audiofile(temp_audio_path, verbose=False, logger=None)
+                                    # Now trim the written file to exact duration
+                                    temp_trimmed_file = tempfile.NamedTemporaryFile(suffix='.wav', delete=False)
+                                    temp_trimmed_path = temp_trimmed_file.name
+                                    temp_trimmed_file.close()
+                                    
+                                    result = subprocess.run([
+                                        'ffmpeg', '-y', '-i', temp_audio_path,
+                                        '-t', str(duration),
+                                        '-acodec', 'copy',
+                                        temp_trimmed_path
+                                    ], check=True, capture_output=True, text=True)
+                                    
+                                    try:
+                                        env_audio.close()
+                                    except:
+                                        pass
+                                    env_audio = AudioFileClip(temp_trimmed_path)
+                                except Exception as write_error:
+                                    # If write_audiofile fails, close the concatenated clip and use original file approach
+                                    try:
+                                        env_audio.close()
+                                    except:
+                                        pass
+                                    # Reload original and use FFmpeg to create properly looped and trimmed version
+                                    env_audio = AudioFileClip(str(env_audio_path))
+                                    # Calculate how many loops we need
+                                    loops_needed = int(np.ceil(duration / env_audio.duration))
+                                    # Use FFmpeg aloop filter to loop and trim in one go (more reliable than -stream_loop)
+                                    result = subprocess.run([
+                                        'ffmpeg', '-y',
+                                        '-i', str(env_audio_path),
+                                        '-filter_complex', f'aloop=loop={loops_needed - 1}:size=2e+09',
+                                        '-t', str(duration),
+                                        '-acodec', 'pcm_s16le',  # Re-encode needed for aloop filter
+                                        temp_audio_path
+                                    ], check=True, capture_output=True, text=True)
+                                    env_audio = AudioFileClip(temp_audio_path)
+                            except Exception as e:
+                                print(f"[HORROR AUDIO] Warning: Could not trim concatenated environment audio: {e}")
+                                print(f"[HORROR AUDIO] Using full audio duration ({env_audio.duration:.2f}s) instead of requested {duration:.2f}s")
                 elif env_audio.duration > duration:
                     # For AudioFileClip, try subclip first, but if it doesn't work, use FFmpeg directly
                     try:
@@ -1586,7 +1650,8 @@ def mix_horror_background_audio(narration_audio: AudioFileClip, duration: float,
     if env_audio:
         env_audio = apply_volume_to_audioclip(env_audio, db_to_linear(env_audio_volume))
     
-    # Ensure narration audio matches duration (loop or extend if needed)
+    # Ensure narration audio matches duration - NEVER trim narration, it's the source of truth
+    # If narration is longer than expected duration, use narration duration as the actual duration
     if narration_audio.duration < duration:
         # Extend narration with silence if needed
         silence_duration = duration - narration_audio.duration
@@ -1599,8 +1664,54 @@ def mix_horror_background_audio(narration_audio: AudioFileClip, duration: float,
         silence = AudioClip(make_silence, duration=silence_duration, fps=narration_audio.fps)
         narration_audio = concatenate_audioclips([narration_audio, silence])
     elif narration_audio.duration > duration:
-        # Trim narration to match duration
-        narration_audio = narration_audio.subclip(0, duration)
+        # Narration is longer than expected - use narration duration as the actual duration
+        # This means the video duration calculation was slightly off, but narration is correct
+        # We must NEVER trim narration - it's the source of truth
+        narration_duration = narration_audio.duration
+        print(f"[HORROR AUDIO] Narration audio ({narration_duration:.3f}s) is longer than expected duration ({duration:.3f}s)")
+        print(f"[HORROR AUDIO] Using narration duration as actual duration - extending other audio layers to match")
+        
+        # Extend all other audio layers to match narration duration
+        extension_needed = narration_duration - duration
+        
+        # Extend room_tone
+        if room_tone.duration < narration_duration:
+            silence_duration = narration_duration - room_tone.duration
+            def make_silence(t):
+                if np.isscalar(t):
+                    return np.array([0.0, 0.0])
+                else:
+                    return np.zeros((len(t), 2))
+            silence = AudioClip(make_silence, duration=silence_duration, fps=room_tone.fps)
+            room_tone = concatenate_audioclips([room_tone, silence])
+            print(f"[HORROR AUDIO] Extended room_tone from {duration:.3f}s to {narration_duration:.3f}s")
+        
+        # Extend drone
+        if drone.duration < narration_duration:
+            silence_duration = narration_duration - drone.duration
+            def make_silence(t):
+                if np.isscalar(t):
+                    return np.array([0.0, 0.0])
+                else:
+                    return np.zeros((len(t), 2))
+            silence = AudioClip(make_silence, duration=silence_duration, fps=drone.fps)
+            drone = concatenate_audioclips([drone, silence])
+            print(f"[HORROR AUDIO] Extended drone from {duration:.3f}s to {narration_duration:.3f}s")
+        
+        # Extend detail_sounds
+        if detail_sounds and detail_sounds.duration < narration_duration:
+            silence_duration = narration_duration - detail_sounds.duration
+            def make_silence(t):
+                if np.isscalar(t):
+                    return np.array([0.0, 0.0])
+                else:
+                    return np.zeros((len(t), 2))
+            silence = AudioClip(make_silence, duration=silence_duration, fps=detail_sounds.fps)
+            detail_sounds = concatenate_audioclips([detail_sounds, silence])
+            print(f"[HORROR AUDIO] Extended detail_sounds from {duration:.3f}s to {narration_duration:.3f}s")
+        
+        # Update duration to narration duration (will be used for env_audio check below)
+        duration = narration_duration
     
     # All generated clips (room_tone, drone, detail_sounds) are now stereo (2 channels)
     # But narration_audio might be mono, so ensure it's stereo if needed
@@ -1641,16 +1752,103 @@ def mix_horror_background_audio(narration_audio: AudioFileClip, duration: float,
     # Ensure environment audio is stereo and matches duration
     if env_audio:
         env_audio = ensure_stereo(env_audio)
-        if env_audio.duration < duration:
-            # Extend with silence if needed
-            silence_duration = duration - env_audio.duration
-            def make_silence(t):
-                if np.isscalar(t):
-                    return np.array([0.0, 0.0])
-                else:
-                    return np.zeros((len(t), 2))
-            silence = AudioClip(make_silence, duration=silence_duration, fps=env_audio.fps)
-            env_audio = concatenate_audioclips([env_audio, silence])
+        # Check duration after stereo conversion (duration might have changed slightly)
+        # CRITICAL: Always check if we need to loop, even if it was looped earlier
+        # The initial loop might not have worked, or duration might have changed
+        print(f"[HORROR AUDIO] Environment audio duration check: {env_audio.duration:.3f}s vs target {duration:.3f}s")
+        if env_audio.duration < duration:  # No tolerance - if shorter, we MUST loop
+            print(f"[HORROR AUDIO] Environment audio is shorter than target duration - looping required")
+            # Loop the environment audio to match duration (don't extend with silence)
+            # Use FFmpeg to loop from original file for better reliability
+            if env_audio_original_path and Path(env_audio_original_path).exists():
+                try:
+                    import subprocess
+                    # Get original file duration to calculate loops needed
+                    original_clip = AudioFileClip(str(env_audio_original_path))
+                    original_duration = original_clip.duration
+                    original_clip.close()
+                    
+                    loops_needed = int(np.ceil(duration / original_duration))
+                    print(f"[HORROR AUDIO] Looping environment audio: {loops_needed} loops needed (original: {original_duration:.2f}s, target: {duration:.2f}s)")
+                    
+                    # Use FFmpeg aloop filter to loop audio (more reliable than -stream_loop for audio files)
+                    temp_audio_file = tempfile.NamedTemporaryFile(suffix='.wav', delete=False)
+                    temp_audio_path = temp_audio_file.name
+                    temp_audio_file.close()
+                    
+                    # aloop filter: loop=LOOPS means the input will play (LOOPS+1) times total
+                    # So if we need 5 loops total, we use loop=4
+                    # size=2e+09 sets a large buffer size to ensure the entire file fits
+                    result = subprocess.run([
+                        'ffmpeg', '-y',
+                        '-i', str(env_audio_original_path),
+                        '-filter_complex', f'aloop=loop={loops_needed - 1}:size=2e+09',
+                        '-t', str(duration),
+                        '-acodec', 'pcm_s16le',  # Use PCM for better compatibility
+                        temp_audio_path
+                    ], check=True, capture_output=True, text=True)
+                    
+                    # Close old clip and load looped version
+                    try:
+                        env_audio.close()
+                    except:
+                        pass
+                    
+                    env_audio = AudioFileClip(temp_audio_path)
+                    env_audio = ensure_stereo(env_audio)
+                    env_audio = apply_volume_to_audioclip(env_audio, db_to_linear(env_audio_volume))
+                    # Verify the looped audio has the correct duration (within 0.1s tolerance)
+                    if abs(env_audio.duration - duration) > 0.1:
+                        print(f"[HORROR AUDIO] Warning: Looped audio duration ({env_audio.duration:.2f}s) doesn't match target ({duration:.2f}s)")
+                        # If duration is still too short, we need to loop again or extend
+                        if env_audio.duration < duration:
+                            print(f"[HORROR AUDIO] Audio is still too short, attempting additional loop...")
+                            # This shouldn't happen with aloop filter, but handle it gracefully
+                    print(f"[HORROR AUDIO] Environment audio looped successfully: {env_audio.duration:.2f}s (target: {duration:.2f}s)")
+                except Exception as e:
+                    print(f"[HORROR AUDIO] Warning: Could not loop environment audio with FFmpeg: {e}")
+                    print(f"[HORROR AUDIO] Attempting MoviePy concatenation fallback...")
+                    # Fallback to MoviePy concatenation
+                    try:
+                        loops_needed = int(np.ceil(duration / env_audio.duration))
+                        env_audio_clips = [env_audio] * loops_needed
+                        env_audio = concatenate_audioclips(env_audio_clips)
+                        # Trim to exact duration if needed
+                        if env_audio.duration > duration + 0.1:
+                            try:
+                                env_audio = env_audio.subclip(0, duration)
+                            except (AttributeError, TypeError):
+                                # If subclip fails, write and trim with FFmpeg
+                                temp_audio_file = tempfile.NamedTemporaryFile(suffix='.wav', delete=False)
+                                temp_audio_path = temp_audio_file.name
+                                temp_audio_file.close()
+                                
+                                try:
+                                    env_audio.write_audiofile(temp_audio_path, verbose=False, logger=None)
+                                    temp_trimmed_file = tempfile.NamedTemporaryFile(suffix='.wav', delete=False)
+                                    temp_trimmed_path = temp_trimmed_file.name
+                                    temp_trimmed_file.close()
+                                    
+                                    result = subprocess.run([
+                                        'ffmpeg', '-y', '-i', temp_audio_path,
+                                        '-t', str(duration),
+                                        '-acodec', 'copy',
+                                        temp_trimmed_path
+                                    ], check=True, capture_output=True, text=True)
+                                    
+                                    try:
+                                        env_audio.close()
+                                    except:
+                                        pass
+                                    env_audio = AudioFileClip(temp_trimmed_path)
+                                    env_audio = ensure_stereo(env_audio)
+                                    env_audio = apply_volume_to_audioclip(env_audio, db_to_linear(env_audio_volume))
+                                except Exception as write_error:
+                                    print(f"[HORROR AUDIO] Warning: Could not trim looped audio: {write_error}")
+                    except Exception as fallback_error:
+                        print(f"[HORROR AUDIO] Warning: MoviePy concatenation fallback also failed: {fallback_error}")
+            else:
+                print(f"[HORROR AUDIO] Warning: Could not loop environment audio (original path not available), using current duration")
         elif env_audio.duration > duration:
             # Try subclip first (should work on processed clips from concatenation/ensure_stereo)
             try:
@@ -1684,7 +1882,7 @@ def mix_horror_background_audio(narration_audio: AudioFileClip, duration: float,
                 except Exception as e:
                     print(f"[HORROR AUDIO] Warning: Could not trim environment audio: {e}, using full duration")
     
-    # Ensure drone duration matches total duration
+    # Ensure drone duration matches total duration (use narration duration as source of truth)
     if drone.duration < duration:
         # Extend drone with silence (maintain last volume level)
         silence_duration = duration - drone.duration
@@ -1704,8 +1902,43 @@ def mix_horror_background_audio(narration_audio: AudioFileClip, duration: float,
         silence = AudioClip(make_silence, duration=silence_duration, fps=drone.fps)
         drone = concatenate_audioclips([drone, silence])
     elif drone.duration > duration:
-        # Trim drone to match duration
-        drone = drone.subclip(0, duration)
+        # Trim drone to match duration (narration is source of truth, so drone should match it)
+        try:
+            drone = drone.subclip(0, duration)
+        except (AttributeError, TypeError):
+            # If subclip doesn't work on AudioClip, write to temp file and trim with FFmpeg
+            try:
+                import subprocess
+                temp_audio_file = tempfile.NamedTemporaryFile(suffix='.wav', delete=False)
+                temp_audio_path = temp_audio_file.name
+                temp_audio_file.close()
+                
+                # Write the AudioClip to a temporary file
+                try:
+                    drone.write_audiofile(temp_audio_path, verbose=False, logger=None)
+                    # Now trim the written file to exact duration
+                    temp_trimmed_file = tempfile.NamedTemporaryFile(suffix='.wav', delete=False)
+                    temp_trimmed_path = temp_trimmed_file.name
+                    temp_trimmed_file.close()
+                    
+                    result = subprocess.run([
+                        'ffmpeg', '-y', '-i', temp_audio_path,
+                        '-t', str(duration),
+                        '-acodec', 'copy',
+                        temp_trimmed_path
+                    ], check=True, capture_output=True, text=True)
+                    
+                    try:
+                        drone.close()
+                    except:
+                        pass
+                    drone = AudioFileClip(temp_trimmed_path)
+                except Exception as write_error:
+                    print(f"[HORROR AUDIO] Warning: Could not write drone audio to file for trimming: {write_error}")
+                    print(f"[HORROR AUDIO] Using full drone duration ({drone.duration:.2f}s) instead of requested {duration:.2f}s")
+            except Exception as e:
+                print(f"[HORROR AUDIO] Warning: Could not trim drone audio: {e}")
+                print(f"[HORROR AUDIO] Using full drone duration ({drone.duration:.2f}s) instead of requested {duration:.2f}s")
     
     # Mix all layers
     print("[HORROR AUDIO] Mixing all audio layers...")
@@ -1862,7 +2095,13 @@ def build_video(scenes_path: str, out_video_path: str | None = None, save_assets
     """
     config.save_assets = save_assets
     config.is_vertical = is_short
-    
+
+    # Set which narration instructions to use for TTS based on horror mode (--horror)
+    global NARRATION_INSTRUCTIONS_FOR_TTS
+    NARRATION_INSTRUCTIONS_FOR_TTS = (HORROR_NARRATION_INSTRUCTIONS if is_horror else BIOPIC_NARRATION_INSTRUCTIONS) or ""
+    if NARRATION_INSTRUCTIONS_FOR_TTS and (GOOGLE_VOICE_TYPE == "gemini" or TTS_PROVIDER == "openai"):
+        print(f"[TTS] Using {'horror' if is_horror else 'biopic'} narration instructions from env")
+
     if config.is_vertical:
         print(f"[FORMAT] Vertical 9:16 (YouTube Short)")
     else:

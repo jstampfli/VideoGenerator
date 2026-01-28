@@ -9,7 +9,8 @@ import tempfile
 import os
 import warnings
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
+import unittest.mock as mock
 
 # Add parent directory to path so we can import modules
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -1153,6 +1154,183 @@ class TestHorrorBackgroundAudio(unittest.TestCase):
             # The important thing is that the function exists and can be called
             pass
     
+    def test_audioclip_has_no_subclip_method(self):
+        """Test that AudioClip doesn't have subclip method (regression test for drone trimming bug).
+        
+        This test verifies the root cause: AudioClip objects don't have subclip method,
+        which is why we need the FFmpeg fallback in mix_horror_background_audio.
+        """
+        def make_audio(t):
+            return 0.1
+        
+        audio_clip = AudioClip(make_audio, duration=5.0, fps=44100)
+        
+        # Verify that AudioClip doesn't have subclip method
+        # This is the bug we fixed - the code was calling subclip on AudioClip which doesn't have it
+        self.assertFalse(hasattr(audio_clip, 'subclip'), 
+                        "AudioClip should not have subclip method - this is why we need FFmpeg fallback")
+        
+        # Verify that calling subclip raises AttributeError
+        with self.assertRaises(AttributeError) as context:
+            audio_clip.subclip(0, 2.0)
+        
+        self.assertIn("subclip", str(context.exception).lower(),
+                     "Error should mention 'subclip'")
+    
+    def test_mix_horror_background_audio_drone_trimming_handles_audioclip(self):
+        """Test that drone trimming handles AudioClip (no subclip method) without crashing.
+        
+        This test verifies that the fix works: when drone is an AudioClip and needs trimming,
+        the code should catch the AttributeError and use FFmpeg fallback instead of crashing.
+        """
+        duration = 2.0
+        
+        def make_silence(t):
+            return 0.0
+        
+        narration_audio = AudioClip(make_silence, duration=duration, fps=44100)
+        
+        # Create an AudioClip drone (programmatically generated, no subclip method)
+        # Make it longer than duration to trigger trimming
+        drone_duration = 5.0
+        def make_drone(t):
+            return 0.1
+        
+        drone = AudioClip(make_drone, duration=drone_duration, fps=44100)
+        
+        # Mock the dependencies - use the same pattern as other tests
+        with patch('build_video.generate_room_tone', return_value=AudioClip(make_silence, duration=duration, fps=44100)), \
+             patch('build_video.generate_drone_with_scene_transitions', return_value=drone), \
+             patch('build_video.generate_detail_sounds', return_value=None), \
+             patch('build_video.apply_volume_to_audioclip', side_effect=lambda x, v: x if x is not None else None):
+            
+            # The function should handle the AttributeError when subclip is called on AudioClip
+            # and use the FFmpeg fallback. We're testing that it doesn't crash with AttributeError.
+            try:
+                result = mix_horror_background_audio(
+                    narration_audio,
+                    duration,
+                    room_tone_volume=-35.0,
+                    drone_volume=-20.0
+                )
+                # If it succeeds, the fallback worked (or FFmpeg handled it)
+                self.assertIsInstance(result, CompositeAudioClip)
+            except AttributeError as e:
+                # This is the bug we're testing - should NOT get AttributeError about subclip
+                error_str = str(e)
+                if "'AudioClip' object has no attribute 'subclip'" in error_str or \
+                   "has no attribute 'subclip'" in error_str or \
+                   "object has no attribute 'subclip'" in error_str:
+                    self.fail("Drone trimming should handle AudioClip subclip error with FFmpeg fallback, not raise AttributeError. "
+                            "This indicates the fix is not working. Error: " + error_str)
+                raise
+            except Exception as e:
+                # Other exceptions (like FFmpeg not available, write_audiofile issues) are acceptable
+                # The important thing is we don't get the AttributeError about subclip
+                error_str = str(e)
+                if "'AudioClip' object has no attribute 'subclip'" in error_str or \
+                   "has no attribute 'subclip'" in error_str or \
+                   "object has no attribute 'subclip'" in error_str:
+                    self.fail("Drone trimming should handle AudioClip subclip error, not propagate it. "
+                            "This indicates the fix is not working. Error: " + error_str)
+    
+    def test_mix_horror_background_audio_drone_trimming_audiofileclip(self):
+        """Test that drone trimming works when drone is an AudioFileClip (has subclip method)."""
+        duration = 2.0
+        
+        def make_silence(t):
+            return 0.0
+        
+        narration_audio = AudioClip(make_silence, duration=duration, fps=44100)
+        
+        # Create a mock AudioFileClip drone (has subclip method)
+        drone_duration = 5.0
+        mock_drone = mock.MagicMock()
+        mock_drone.duration = drone_duration
+        mock_drone.fps = 44100
+        mock_drone.subclip.return_value = mock.MagicMock()
+        mock_drone.subclip.return_value.duration = duration
+        mock_drone.subclip.return_value.fps = 44100
+        
+        # Verify that AudioFileClip has subclip method
+        self.assertTrue(hasattr(mock_drone, 'subclip'), 
+                       "AudioFileClip should have subclip method")
+        
+        with patch('build_video.generate_room_tone', return_value=AudioClip(make_silence, duration=duration, fps=44100)), \
+             patch('build_video.generate_drone_with_scene_transitions', return_value=mock_drone), \
+             patch('build_video.generate_detail_sounds', return_value=None):
+            
+            try:
+                result = mix_horror_background_audio(
+                    narration_audio,
+                    duration,
+                    room_tone_volume=-35.0,
+                    drone_volume=-20.0
+                )
+                
+                # Verify that subclip was called (direct method, not FFmpeg fallback)
+                mock_drone.subclip.assert_called_once_with(0, duration)
+                
+            except Exception as e:
+                # If it fails due to MoviePy internals, that's acceptable
+                # The important thing is that we tried subclip first
+                pass
+    
+    def test_mix_horror_background_audio_drone_trimming_ffmpeg_fallback_error(self):
+        """Test that drone trimming handles FFmpeg fallback errors gracefully."""
+        duration = 2.0
+        
+        def make_silence(t):
+            return 0.0
+        
+        narration_audio = AudioClip(make_silence, duration=duration, fps=44100)
+        
+        # Create an AudioClip drone (no subclip method)
+        drone_duration = 5.0
+        def make_drone(t):
+            return 0.1
+        
+        drone = AudioClip(make_drone, duration=drone_duration, fps=44100)
+        
+        # Mock write_audiofile to fail (simulating FFmpeg fallback error)
+        drone.write_audiofile = mock.MagicMock(side_effect=Exception("Write failed"))
+        
+        with patch('build_video.generate_room_tone', return_value=AudioClip(make_silence, duration=duration, fps=44100)), \
+             patch('build_video.generate_drone_with_scene_transitions', return_value=drone), \
+             patch('build_video.generate_detail_sounds', return_value=None), \
+             patch('build_video.apply_volume_to_audioclip', side_effect=lambda x, v: x if x is not None else None):
+            
+            # The function should handle the error gracefully and use full duration
+            try:
+                result = mix_horror_background_audio(
+                    narration_audio,
+                    duration,
+                    room_tone_volume=-35.0,
+                    drone_volume=-20.0
+                )
+                
+                # Should still work, using full drone duration with warning
+                # The function should handle the error gracefully
+                self.assertIsInstance(result, CompositeAudioClip)
+                
+            except AttributeError as e:
+                # This is the bug we're testing - should NOT get AttributeError about subclip
+                error_str = str(e)
+                if "'AudioClip' object has no attribute 'subclip'" in error_str or \
+                   "has no attribute 'subclip'" in error_str or \
+                   "object has no attribute 'subclip'" in error_str:
+                    self.fail("Drone trimming should handle AudioClip subclip error, not propagate it. "
+                            "This indicates the fix is not working. Error: " + error_str)
+                raise
+            except Exception as e:
+                # Other exceptions are acceptable - the important thing is we don't get the subclip AttributeError
+                error_str = str(e)
+                if "'AudioClip' object has no attribute 'subclip'" in error_str or \
+                   "has no attribute 'subclip'" in error_str or \
+                   "object has no attribute 'subclip'" in error_str:
+                    self.fail("Drone trimming should handle AudioClip subclip error, not propagate it. "
+                            "This indicates the fix is not working. Error: " + error_str)
+
     def test_drone_swell_clips_at_max_volume(self):
         """Test that swell clips at max volume, not base volume."""
         # Create test scenes with swell

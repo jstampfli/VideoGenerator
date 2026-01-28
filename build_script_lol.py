@@ -760,13 +760,16 @@ End with a transition like "But how did it all begin?" to set up Chapter 2."""
     else:
         prev_context = "This is the OPENING chapter - establish the story with impact!"
     
-    # Include last few scenes for continuity and to avoid overlapping events
+    # Include last few scenes for continuity and to avoid overlapping events - include FULL scene JSON
     if prev_scenes and len(prev_scenes) > 0:
         recent_scenes = prev_scenes[-5:]
-        scenes_context = "RECENT SCENES - AVOID REPEATING THESE EVENTS, maintain continuity to naturally continue the story:\n"
+        scenes_context = "RECENT SCENES - AVOID REPEATING THESE EVENTS, maintain continuity to naturally continue the story, and ensure smooth transitions:\n"
         for sc in recent_scenes:
-            scenes_context += f"  Scene {sc.get('id')}: \"{sc.get('title')}\" - {sc.get('narration', '')[:150]}...\n"
-        scenes_context += "\nCRITICAL: Do NOT repeat or overlap with events already covered in the scenes above. Each scene must cover DIFFERENT events. If an event was already described, move to its consequences or the next significant moment."
+            # Include full scene JSON for proper emotion and narration_instructions transitions
+            scenes_context += f"  Scene {sc.get('id')} (FULL JSON): {json.dumps(sc, indent=2)}\n"
+        scenes_context += "\nCRITICAL: Do NOT repeat or overlap with events already covered in the scenes above. Each scene must cover DIFFERENT events. If an event was already described, move to its consequences or the next significant moment.\n"
+        scenes_context += "CRITICAL: For smooth transitions, ensure:\n"
+        scenes_context += "- emotion flows gradually from the previous scene's emotion\n"
     else:
         scenes_context = ""
     
@@ -1022,7 +1025,7 @@ Respond with JSON array:
     "title": "Evocative 2-5 word title",
     "narration": "Vivid, dramatic narration...",
     "image_prompt": "Detailed visual description with fantasy/magical elements, {subject_type}-appropriate details, 16:9 cinematic",
-    "emotion": "A single word or short phrase describing the scene's emotional tone (e.g., 'tense', 'triumphant', 'desperate', 'contemplative', 'exhilarating', 'somber', 'urgent', 'defiant'). Should match the chapter's emotional tone but be scene-specific.",
+    "emotion": "A single word or short phrase describing the scene's emotional tone (e.g., 'tense', 'triumphant', 'desperate', 'contemplative', 'exhilarating', 'somber', 'urgent', 'defiant'). Should match the chapter's emotional tone but be scene-specific. CRITICAL: Emotions must flow SMOOTHLY between scenes - only change gradually from the previous scene's emotion. Build intensity gradually: 'contemplative' → 'thoughtful' → 'somber' → 'serious' → 'tense'. Avoid dramatic jumps like 'calm' → 'urgent' or 'contemplative' → 'exhilarating'.",
     "year": YYYY or "YYYY-YYYY" or timeline era (the specific year/timeline when this scene takes place)
   }},
   ...
@@ -1031,7 +1034,7 @@ Respond with JSON array:
     response = client.chat.completions.create(
         model=SCRIPT_MODEL,
         messages=[
-            {"role": "system", "content": "You are a YouTuber creating lore documentary content. Write narration from YOUR perspective - this is YOUR script that YOU wrote. Tell the story naturally, directly to the viewer. Avoid any meta references to chapters, production elements, or the script structure. Focus on what actually happened in the lore, why it mattered, and how it felt. Respond with valid JSON array only."},
+            {"role": "system", "content": "You are a YouTuber creating lore documentary content. Write narration from YOUR perspective - this is YOUR script that YOU wrote. Tell the story naturally, directly to the viewer. Avoid any meta references to chapters, production elements, or the script structure. Focus on what actually happened in the lore, why it mattered, and how it felt. CRITICAL: SMOOTH EMOTIONAL TRANSITIONS - The emotion field must flow smoothly between scenes. Emotions should only change GRADUALLY from one scene to the next. Build intensity gradually: 'contemplative' → 'thoughtful' → 'somber' → 'serious' → 'tense'. Avoid dramatic jumps. The narration should not sound completely different from one scene to the next. Respond with valid JSON array only."},
             {"role": "user", "content": scene_prompt}
         ],
         temperature=0.85,
@@ -1231,23 +1234,23 @@ IMAGE PROMPTS:
 
 Respond with JSON array of exactly 5 scenes:
 [
-  {{"id": 1, "title": "2-4 words", "narration": "...", "image_prompt": "... (include fantasy/magical elements and {subject_type}-appropriate details)", "emotion": "A single word or short phrase (e.g., 'tense', 'triumphant', 'desperate', 'contemplative')", "year": "YYYY or YYYY-YYYY or timeline era"}},
-  {{"id": 2, "title": "...", "narration": "...", "image_prompt": "... (include fantasy/magical elements and {subject_type}-appropriate details)", "emotion": "A single word or short phrase describing the scene's emotional tone", "year": "YYYY or YYYY-YYYY or timeline era"}},
-  {{"id": 3, "title": "...", "narration": "...", "image_prompt": "... (include fantasy/magical elements and {subject_type}-appropriate details)", "emotion": "A single word or short phrase describing the scene's emotional tone", "year": "YYYY or YYYY-YYYY or timeline era"}},
-  {{"id": 4, "title": "...", "narration": "...", "image_prompt": "... (include fantasy/magical elements and {subject_type}-appropriate details)", "emotion": "A single word or short phrase describing the scene's emotional tone", "year": "YYYY or YYYY-YYYY or timeline era"}},
-  {{"id": 5, "title": "...", "narration": "...", "image_prompt": "... (include fantasy/magical elements and {subject_type}-appropriate details)", "emotion": "A single word or short phrase describing the scene's emotional tone", "year": "YYYY or YYYY-YYYY or timeline era"}}
+  {{"id": 1, "title": "2-4 words", "narration": "...", "image_prompt": "... (include fantasy/magical elements and {subject_type}-appropriate details)", "emotion": "A single word or short phrase (e.g., 'tense', 'triumphant', 'desperate', 'contemplative'). CRITICAL: Emotions must flow SMOOTHLY between scenes - only change gradually.", "year": "YYYY or YYYY-YYYY or timeline era"}},
+  {{"id": 2, "title": "...", "narration": "...", "image_prompt": "... (include fantasy/magical elements and {subject_type}-appropriate details)", "emotion": "A single word or short phrase - must be a GRADUAL progression from scene 1's emotion (e.g., if scene 1 was 'contemplative', this might be 'thoughtful' or 'somber', not 'urgent').", "year": "YYYY or YYYY-YYYY or timeline era"}},
+  {{"id": 3, "title": "...", "narration": "...", "image_prompt": "... (include fantasy/magical elements and {subject_type}-appropriate details)", "emotion": "A single word or short phrase - must be a GRADUAL progression from scene 2's emotion.", "year": "YYYY or YYYY-YYYY or timeline era"}},
+  {{"id": 4, "title": "...", "narration": "...", "image_prompt": "... (include fantasy/magical elements and {subject_type}-appropriate details)", "emotion": "A single word or short phrase - must be a GRADUAL progression from scene 3's emotion.", "year": "YYYY or YYYY-YYYY or timeline era"}},
+  {{"id": 5, "title": "...", "narration": "...", "image_prompt": "... (include fantasy/magical elements and {subject_type}-appropriate details)", "emotion": "A single word or short phrase - must be a GRADUAL progression from scene 4's emotion.", "year": "YYYY or YYYY-YYYY or timeline era"}}
 ]
 
 IMPORTANT: Each scene must include:
 - "year" field indicating when the scene takes place (timeline/era)
-- "emotion" field - a single word or short phrase (e.g., "tense", "triumphant", "desperate", "contemplative") that describes the scene's emotional tone. Base this on what characters/subjects are feeling, the dramatic tension, and the significance of the moment. The narration tone and image mood should match this emotion.
+- "emotion" field - a single word or short phrase (e.g., "tense", "triumphant", "desperate", "contemplative") that describes the scene's emotional tone. Base this on what characters/subjects are feeling, the dramatic tension, and the significance of the moment. The narration tone and image mood should match this emotion. CRITICAL: Emotions must flow SMOOTHLY between scenes - only change gradually from the previous scene's emotion. Build intensity gradually. Avoid dramatic jumps.
 - The image_prompt MUST include fantasy/magical elements, {subject_type}-appropriate visual details, and reflect the scene's emotion in lighting, composition, and mood.
 ]"""
 
     response = client.chat.completions.create(
         model=SCRIPT_MODEL,
         messages=[
-            {"role": "system", "content": "You are a YouTuber creating viral LoL lore content. Write narration from YOUR perspective - this is YOUR script. Simple words, specific facts, deep storytelling with details. No fluff, no made-up transitions. Tell continuous stories with actual lore events. Avoid any meta references to chapters, production elements, or script structure. Respond with valid JSON array only."},
+            {"role": "system", "content": "You are a YouTuber creating viral LoL lore content. Write narration from YOUR perspective - this is YOUR script. Simple words, specific facts, deep storytelling with details. No fluff, no made-up transitions. Tell continuous stories with actual lore events. Avoid any meta references to chapters, production elements, or script structure. CRITICAL: SMOOTH EMOTIONAL TRANSITIONS - The emotion field must flow smoothly between scenes. Emotions should only change GRADUALLY from one scene to the next. Build intensity gradually. Avoid dramatic jumps. The narration should not sound completely different from one scene to the next. Respond with valid JSON array only."},
             {"role": "user", "content": scene_prompt}
         ],
         temperature=0.85,
