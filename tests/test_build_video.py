@@ -7,6 +7,7 @@ import sys
 import json
 import tempfile
 import os
+import shutil
 import warnings
 from pathlib import Path
 from unittest.mock import patch, MagicMock
@@ -32,7 +33,14 @@ from build_video import (
     generate_drone_with_scene_transitions,
     generate_detail_sounds,
     apply_volume_to_audioclip,
-    mix_horror_background_audio
+    mix_horror_background_audio,
+    get_horror_disclaimer_image_path,
+    HORROR_DISCLAIMER_DURATION,
+    FIXED_IMAGES_DIR,
+    HORROR_DISCLAIMER_TALL,
+    HORROR_DISCLAIMER_WIDE,
+    END_SCENE_PAUSE_LENGTH,
+    _build_video_impl,
 )
 from moviepy import AudioClip, CompositeAudioClip, VideoClip, AudioFileClip
 import numpy as np
@@ -1373,6 +1381,161 @@ class TestHorrorBackgroundAudio(unittest.TestCase):
         except Exception as e:
             # If it fails due to MoviePy internals, that's acceptable for this test
             pass
+
+
+class TestHorrorDisclaimer(unittest.TestCase):
+    """Test cases for horror disclaimer (first scene: fixed image + env/room noise, no narration)."""
+
+    def test_disclaimer_constants(self):
+        """Test horror disclaimer constants and path names."""
+        self.assertEqual(HORROR_DISCLAIMER_DURATION, 3.0)
+        self.assertEqual(FIXED_IMAGES_DIR, Path("fixed_images"))
+        self.assertEqual(HORROR_DISCLAIMER_TALL.name, "tall_horror_disclaimer.jpg")
+        self.assertEqual(HORROR_DISCLAIMER_WIDE.name, "wide_horror_disclaimer.jpg")
+        self.assertEqual(HORROR_DISCLAIMER_TALL.parent, FIXED_IMAGES_DIR)
+        self.assertEqual(HORROR_DISCLAIMER_WIDE.parent, FIXED_IMAGES_DIR)
+
+    def test_get_horror_disclaimer_image_path_returns_tall_when_vertical_and_exists(self):
+        """When is_vertical=True and tall file exists, return tall path."""
+        tmp = Path(__file__).parent / "tmp_horror_disclaimer_tall"
+        tmp.mkdir(parents=True, exist_ok=True)
+        try:
+            tall_path = tmp / "tall_horror_disclaimer.jpg"
+            tall_path.write_bytes(b"\xff\xd8\xff")  # minimal JPEG-like bytes so file exists
+            with patch("build_video.HORROR_DISCLAIMER_TALL", tall_path), \
+                 patch("build_video.HORROR_DISCLAIMER_WIDE", tmp / "wide_horror_disclaimer.jpg"):
+                result = get_horror_disclaimer_image_path(is_vertical=True)
+                self.assertEqual(result, tall_path)
+        finally:
+            if tall_path.exists():
+                tall_path.unlink()
+            if tmp.exists():
+                tmp.rmdir()
+
+    def test_get_horror_disclaimer_image_path_returns_wide_when_landscape_and_exists(self):
+        """When is_vertical=False and wide file exists, return wide path."""
+        tmp = Path(__file__).parent / "tmp_horror_disclaimer_wide"
+        tmp.mkdir(parents=True, exist_ok=True)
+        try:
+            wide_path = tmp / "wide_horror_disclaimer.jpg"
+            wide_path.write_bytes(b"\xff\xd8\xff")
+            with patch("build_video.HORROR_DISCLAIMER_TALL", tmp / "tall_horror_disclaimer.jpg"), \
+                 patch("build_video.HORROR_DISCLAIMER_WIDE", wide_path):
+                result = get_horror_disclaimer_image_path(is_vertical=False)
+                self.assertEqual(result, wide_path)
+        finally:
+            if wide_path.exists():
+                wide_path.unlink()
+            if tmp.exists():
+                tmp.rmdir()
+
+    def test_get_horror_disclaimer_image_path_returns_none_when_file_missing(self):
+        """When the chosen file does not exist, return None."""
+        tmp = Path(__file__).parent / "tmp_horror_disclaimer_missing"
+        tmp.mkdir(parents=True, exist_ok=True)
+        try:
+            missing_tall = tmp / "tall_horror_disclaimer.jpg"
+            missing_wide = tmp / "wide_horror_disclaimer.jpg"
+            with patch("build_video.HORROR_DISCLAIMER_TALL", missing_tall), \
+                 patch("build_video.HORROR_DISCLAIMER_WIDE", missing_wide):
+                self.assertIsNone(get_horror_disclaimer_image_path(is_vertical=True))
+                self.assertIsNone(get_horror_disclaimer_image_path(is_vertical=False))
+        finally:
+            if tmp.exists():
+                shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_disclaimer_audio_duration(self):
+        """mix_horror_background_audio with 3s silence returns ~3s duration (disclaimer = env/room only)."""
+        def make_silence(t):
+            if np.isscalar(t):
+                return np.array([0.0, 0.0])
+            return np.zeros((len(t), 2))
+        silence_3s = AudioClip(make_silence, duration=HORROR_DISCLAIMER_DURATION, fps=44100)
+        with patch("build_video.generate_room_tone") as mock_room, \
+             patch("build_video.generate_low_frequency_drone") as mock_drone, \
+             patch("build_video.generate_detail_sounds", return_value=None), \
+             patch("build_video.apply_volume_to_audioclip", side_effect=lambda x, v: x if x is not None else None):
+            mock_room.return_value = AudioClip(make_silence, duration=3.0, fps=44100)
+            mock_drone.return_value = AudioClip(make_silence, duration=3.0, fps=44100)
+            result = mix_horror_background_audio(
+                silence_3s,
+                HORROR_DISCLAIMER_DURATION,
+                room_tone_volume=-35.0,
+                drone_volume=-20.0,
+            )
+            self.assertIsInstance(result, CompositeAudioClip)
+            self.assertAlmostEqual(result.duration, HORROR_DISCLAIMER_DURATION, places=2)
+
+    def test_horror_disclaimer_prepended_when_is_horror_and_file_exists(self):
+        """When is_horror=True and disclaimer image exists, first clip is disclaimer (~3.15s)."""
+        import build_video as bv
+        tmp = Path(__file__).parent / "tmp_horror_disclaimer_prepended"
+        tmp.mkdir(parents=True, exist_ok=True)
+        try:
+            scenes_path = tmp / "scenes.json"
+            scenes_data = {
+                "scenes": [
+                    {"id": 1, "title": "Scene 1", "narration": "One.", "image_prompt": "A room."}
+                ]
+            }
+            with open(scenes_path, "w", encoding="utf-8") as f:
+                json.dump(scenes_data, f, indent=2)
+
+            try:
+                from PIL import Image
+            except ImportError:
+                self.skipTest("PIL not available")
+            fixed_dir = tmp / "fixed_images"
+            fixed_dir.mkdir(parents=True, exist_ok=True)
+            wide_path = fixed_dir / "wide_horror_disclaimer.jpg"
+            Image.new("RGB", (10, 10), color="black").save(str(wide_path))
+            scene_image_path = tmp / "scene1.png"
+            Image.new("RGB", (10, 10), color="white").save(str(scene_image_path))
+
+            # Create a valid 2-second silent WAV (MoviePy AudioClip.write_audiofile can produce 0-duration)
+            scene_audio_path = tmp / "scene1.wav"
+            import wave
+            with wave.open(str(scene_audio_path), "wb") as wav:
+                wav.setnchannels(2)
+                wav.setsampwidth(2)
+                wav.setframerate(44100)
+                num_frames = 44100 * 2  # 2 seconds
+                wav.writeframes(b"\x00\x00" * (num_frames * 2))  # stereo silence
+
+            out_path = tmp / "out.mp4"
+            captured_clips = []
+
+            real_concat = bv.concatenate_videoclips
+            def capture_concat(clips, method="chain"):
+                captured_clips[:] = list(clips)
+                return real_concat(clips, method=method)
+
+            with patch("build_video.HORROR_DISCLAIMER_WIDE", wide_path), \
+                 patch("build_video.HORROR_DISCLAIMER_TALL", fixed_dir / "tall_horror_disclaimer.jpg"), \
+                 patch("build_video.generate_image_for_scene_with_retry", return_value=scene_image_path), \
+                 patch("build_video.generate_audio_for_scene_with_retry", return_value=scene_audio_path), \
+                 patch("build_video.concatenate_videoclips", side_effect=capture_concat), \
+                 patch.object(bv.config, "save_assets", False), \
+                 patch.object(bv.config, "is_vertical", False), \
+                 patch.object(bv.config, "temp_dir", str(tmp)):
+                _build_video_impl(
+                    str(scenes_path),
+                    out_video_path=str(out_path),
+                    is_horror=True,
+                    horror_bg_enabled=True,
+                )
+
+            self.assertGreaterEqual(len(captured_clips), 2, "Should have disclaimer + at least one scene clip")
+            expected_disclaimer_duration = HORROR_DISCLAIMER_DURATION + END_SCENE_PAUSE_LENGTH
+            self.assertAlmostEqual(
+                captured_clips[0].duration,
+                expected_disclaimer_duration,
+                places=1,
+                msg="First clip should be disclaimer (~3.15s)",
+            )
+        finally:
+            if tmp.exists():
+                shutil.rmtree(tmp, ignore_errors=True)
 
 
 if __name__ == "__main__":

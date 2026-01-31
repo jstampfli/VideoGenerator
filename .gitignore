@@ -13,7 +13,7 @@
 .vscode
 .idea
 .pytest_cache
-.pytest_cache
+/tests/tmp_*
 /__pycache__
 /thumbnails
 /shorts
@@ -31,3 +31,4 @@
 *.pyc
 *.png
 /environment_audio
+/fixed_images

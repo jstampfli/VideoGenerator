@@ -73,6 +73,22 @@ USE_FEMALE_VOICE = False
 # Scene pause settings
 END_SCENE_PAUSE_LENGTH = float(os.getenv("END_SCENE_PAUSE_LENGTH", "0.15"))  # Pause length in seconds at end of each scene (default: 150ms)
 
+# Horror disclaimer: first scene for horror videos (fixed image + env/room noise, no narration)
+HORROR_DISCLAIMER_DURATION = 3.0  # seconds
+FIXED_IMAGES_DIR = Path("fixed_images")
+HORROR_DISCLAIMER_TALL = FIXED_IMAGES_DIR / "tall_horror_disclaimer.jpg"   # 9:16 shorts
+HORROR_DISCLAIMER_WIDE = FIXED_IMAGES_DIR / "wide_horror_disclaimer.jpg"   # 16:9 main
+
+
+def get_horror_disclaimer_image_path(is_vertical: bool) -> Path | None:
+    """
+    Return the path to the horror disclaimer image for the given format, or None if not found.
+    - is_vertical True (shorts): tall_horror_disclaimer.jpg
+    - is_vertical False (main): wide_horror_disclaimer.jpg
+    """
+    path = HORROR_DISCLAIMER_TALL if is_vertical else HORROR_DISCLAIMER_WIDE
+    return path if path.exists() else None
+
 
 def get_emotion_prosody(emotion: str | None) -> dict:
     """
@@ -1605,11 +1621,12 @@ def mix_horror_background_audio(narration_audio: AudioFileClip, duration: float,
                             temp_audio_path = temp_audio_file.name
                             temp_audio_file.close()
                             
-                            # Use FFmpeg to trim the audio file directly
+                            # Use FFmpeg to trim the audio file (decode to PCM for .wav; -acodec copy fails for OGG/MP3 etc.)
                             result = subprocess.run([
                                 'ffmpeg', '-y', '-i', str(env_audio_path),
                                 '-t', str(duration),
-                                '-acodec', 'copy',
+                                '-acodec', 'pcm_s16le',
+                                '-ar', '44100', '-ac', '2',
                                 temp_audio_path
                             ], check=True, capture_output=True, text=True)
                             
@@ -1865,7 +1882,8 @@ def mix_horror_background_audio(narration_audio: AudioFileClip, duration: float,
                         result = subprocess.run([
                             'ffmpeg', '-y', '-i', str(env_audio_original_path),
                             '-t', str(duration),
-                            '-acodec', 'copy',
+                            '-acodec', 'pcm_s16le',
+                            '-ar', '44100', '-ac', '2',
                             temp_audio_path
                         ], check=True, capture_output=True, text=True)
                         
@@ -2179,6 +2197,14 @@ def _build_video_impl(scenes_path: str, out_video_path: str | None = None, scene
     if is_horror:
         print("[HORROR] Horror video mode enabled")
     
+    # Horror disclaimer: first scene (fixed image + env/room noise, no narration)
+    disclaimer_image_path = None
+    disclaimer_duration = None
+    if is_horror:
+        disclaimer_image_path = get_horror_disclaimer_image_path(config.is_vertical)
+        if disclaimer_image_path is not None:
+            print(f"[HORROR] Disclaimer: using {disclaimer_image_path.name} as first scene ({HORROR_DISCLAIMER_DURATION}s)")
+    
     # If scene_id is specified, filter to only that scene
     test_mode_prev_scene = None
     if scene_id is not None:
@@ -2216,7 +2242,7 @@ def _build_video_impl(scenes_path: str, out_video_path: str | None = None, scene
 
     # In audio-only mode, use stock image for all scenes
     if audio_only:
-        stock_image_path = Path("stock_image.png")
+        stock_image_path = Path(FIXED_IMAGES_DIR, "stock_image.png")
         if not stock_image_path.exists():
             raise FileNotFoundError(f"Stock image not found: {stock_image_path}")
         print(f"[AUDIO ONLY MODE] Using stock image for all {num_scenes} scenes...")
@@ -2294,6 +2320,31 @@ def _build_video_impl(scenes_path: str, out_video_path: str | None = None, scene
             i, clip = future.result()
             clips[i] = clip
 
+    # Prepend horror disclaimer clip (fixed image + 3s env/room noise, no narration)
+    if disclaimer_image_path is not None:
+        def make_silence(t):
+            if np.isscalar(t):
+                return np.array([0.0, 0.0])
+            return np.zeros((len(t), 2))
+        silence_3s = AudioClip(make_silence, duration=HORROR_DISCLAIMER_DURATION, fps=44100)
+        environment = metadata.get("environment") if metadata else None
+        disclaimer_audio = mix_horror_background_audio(
+            silence_3s,
+            HORROR_DISCLAIMER_DURATION,
+            scenes=None,
+            scene_audio_clips=None,
+            room_tone_volume=room_tone_volume,
+            drone_volume=drone_volume,
+            max_drone_volume=None,
+            detail_volume=detail_volume,
+            environment=environment,
+            env_audio_volume=None,
+        )
+        disclaimer_clip = make_static_clip_with_audio(disclaimer_image_path, disclaimer_audio)
+        disclaimer_duration = disclaimer_clip.duration
+        clips = [disclaimer_clip] + list(clips)
+        print(f"[HORROR] Disclaimer clip added: {disclaimer_duration:.2f}s")
+
     # Concatenate all clips using method="chain" for better performance with static clips
     # "chain" is faster than "compose" when clips have the same size/dimensions
     print("\n[VIDEO] Concatenating clips...")
@@ -2311,27 +2362,47 @@ def _build_video_impl(scenes_path: str, out_video_path: str | None = None, scene
     if is_horror and horror_bg_enabled:
         print(f"\n[HORROR AUDIO] Adding background audio layers...")
         try:
-            # Extract narration audio from final video
-            narration_audio = final.audio
-            
             # Get environment from metadata if available
             environment = None
             if metadata:
                 environment = metadata.get("environment")
             
-            # Mix with horror background layers
-            mixed_audio = mix_horror_background_audio(
-                narration_audio,
-                final.duration,
-                scenes=scenes,
-                scene_audio_clips=scene_audio_clips,
-                room_tone_volume=room_tone_volume,
-                drone_volume=drone_volume,
-                max_drone_volume=None,
-                detail_volume=detail_volume,
-                environment=environment,
-                env_audio_volume=None  # Use default from env var
-            )
+            # If disclaimer was prepended, mix horror only on the story part (disclaimer already has env/room noise)
+            if disclaimer_duration is not None:
+                # MoviePy 2.x uses subclipped(); older versions use subclip()
+                subclip_fn = getattr(final.audio, "subclipped", getattr(final.audio, "subclip", None))
+                if subclip_fn is None:
+                    raise RuntimeError("Audio clip has no subclip/subclipped method")
+                disclaimer_part = subclip_fn(0, disclaimer_duration)
+                story_part = subclip_fn(disclaimer_duration, final.duration)
+                story_duration = final.duration - disclaimer_duration
+                mixed_story = mix_horror_background_audio(
+                    story_part,
+                    story_duration,
+                    scenes=scenes,
+                    scene_audio_clips=scene_audio_clips,
+                    room_tone_volume=room_tone_volume,
+                    drone_volume=drone_volume,
+                    max_drone_volume=None,
+                    detail_volume=detail_volume,
+                    environment=environment,
+                    env_audio_volume=None,
+                )
+                mixed_audio = concatenate_audioclips([disclaimer_part, mixed_story])
+            else:
+                narration_audio = final.audio
+                mixed_audio = mix_horror_background_audio(
+                    narration_audio,
+                    final.duration,
+                    scenes=scenes,
+                    scene_audio_clips=scene_audio_clips,
+                    room_tone_volume=room_tone_volume,
+                    drone_volume=drone_volume,
+                    max_drone_volume=None,
+                    detail_volume=detail_volume,
+                    environment=environment,
+                    env_audio_volume=None,
+                )
             
             # Replace video audio with mixed audio
             final = final.with_audio(mixed_audio)
