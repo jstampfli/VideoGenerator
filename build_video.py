@@ -7,6 +7,7 @@ import random
 import argparse
 import tempfile
 import shutil
+import subprocess
 import numpy as np
 from pathlib import Path
 
@@ -15,14 +16,13 @@ from openai import OpenAI
 from moviepy import ImageClip, AudioFileClip, concatenate_videoclips, AudioClip, CompositeAudioClip, concatenate_audioclips
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+import llm_utils
+
 
 # ------------- CONFIG -------------
 
 load_dotenv()  # Load API keys from .env file
-client = OpenAI()
-
-# OpenAI models
-IMG_MODEL = "gpt-image-1.5"
+client = OpenAI()  # Used for TTS (OpenAI audio) only; images use llm_utils
 
 # TTS Provider: "openai", "elevenlabs", or "google"
 TTS_PROVIDER = os.getenv("TTS_PROVIDER", "google").lower()
@@ -45,9 +45,12 @@ GOOGLE_TTS_PITCH = float(os.getenv("GOOGLE_TTS_PITCH", "-1.0"))  # -20.0 to 20.0
 GOOGLE_VOICE_TYPE = os.getenv("GOOGLE_VOICE_TYPE", "").lower()  # "chirp", "gemini", or empty - chirp voices don't support SSML/prosody, gemini uses new API with prompt parameter
 GOOGLE_GEMINI_MALE_SPEAKER = os.getenv("GOOGLE_GEMINI_MALE_SPEAKER", "Charon")  # Default Gemini male voice
 GOOGLE_GEMINI_FEMALE_SPEAKER = os.getenv("GOOGLE_GEMINI_FEMALE_SPEAKER", "")  # Gemini female voice
+# Trailing padding for Gemini TTS so the last word is fully pronounced (avoids end cut-off)
+GEMINI_TTS_TEXT_PADDING = "   "
 
 # Narration instructions for Gemini/OpenAI TTS (from .env): biopic vs horror mode
-BIOPIC_NARRATION_INSTRUCTIONS = os.getenv("BIOPIC_NARRATION_INSTRUCTIONS", "")
+# BIOPIC_NARRATION_INSTRUCTIONS = os.getenv("BIOPIC_NARRATION_INSTRUCTIONS", "")
+BIOPIC_NARRATION_INSTRUCTIONS = ""
 HORROR_NARRATION_INSTRUCTIONS = os.getenv("HORROR_NARRATION_INSTRUCTIONS", "")
 # Set at start of build_video based on --horror: which instructions to use for this run
 NARRATION_INSTRUCTIONS_FOR_TTS = ""
@@ -328,9 +331,10 @@ OPENAI_TTS_STYLE_PROMPT = (
 )
 
 
-def build_image_prompt(scene: dict, prev_scene: dict | None, global_block_override: str | None = None, exclude_title_narration: bool = False, include_safety_instructions: bool = False) -> str:
+def build_image_prompt(scene: dict, prev_scene: dict | None, global_block_override: str | None = None, exclude_title_narration: bool = False, include_safety_instructions: bool = False, story_context: str | None = None) -> str:
     """
     Build a rich image prompt for the current scene, including:
+    - Optional story context (e.g. creature/threat so footsteps/figures are drawn correctly)
     - Current scene description (title + narration + image_prompt, unless exclude_title_narration is True)
     - Brief memory of the previous scene for continuity
     - Global visual style and constraints (no text, documentary tone)
@@ -339,6 +343,7 @@ def build_image_prompt(scene: dict, prev_scene: dict | None, global_block_overri
     Args:
         exclude_title_narration: If True, only use image_prompt (for attempts 4+ to avoid problematic text)
         include_safety_instructions: If True, include safety constraints block (only after first attempt fails)
+        story_context: Optional context (e.g. "bear attack") so threat/creature is depicted correctly, not as human.
     """
     title = scene.get("title", "").strip()
     narration = scene.get("narration", "").strip()
@@ -424,9 +429,19 @@ def build_image_prompt(scene: dict, prev_scene: dict | None, global_block_overri
         current_block_parts.append("Visual details to emphasize:\n" + scene_img_prompt)
     current_block = "\n".join(current_block_parts)
 
+    # Story context (creature/threat) so footsteps, figures, shadows match the concept (e.g. bear not human)
+    context_block = ""
+    if story_context:
+        context_block = (
+            "STORY CONTEXT (CRITICAL for correct visuals): "
+            + story_context
+            + "\n\n"
+        )
+
     # Final prompt
     prompt = (
-        current_block
+        context_block
+        + current_block
         + "\n\n"
         + prev_block
         + "\n\n"
@@ -651,13 +666,14 @@ def sanitize_prompt_for_safety(prompt: str, violation_type: str = None, sanitize
     return sanitized
 
 
-def generate_image_for_scene(scene: dict, prev_scene: dict | None, global_block_override: str | None = None, sanitize_attempt: int = 0, violation_type: str = None) -> Path:
+def generate_image_for_scene(scene: dict, prev_scene: dict | None, global_block_override: str | None = None, sanitize_attempt: int = 0, violation_type: str = None, story_context: str | None = None) -> Path:
     """
     Generate an image for the given scene using OpenAI Images API.
     If config.save_assets is True, caches to generated_images/. Otherwise uses temp directory.
     
     Args:
         sanitize_attempt: Number of times we've tried to sanitize the prompt (0 = original, 1+ = sanitized)
+        story_context: Optional context (e.g. creature/threat) so footsteps/figures are drawn correctly.
     """
     if config.save_assets:
         IMAGES_DIR.mkdir(parents=True, exist_ok=True)
@@ -677,7 +693,7 @@ def generate_image_for_scene(scene: dict, prev_scene: dict | None, global_block_
     # Only include safety instructions after first attempt fails
     include_safety_instructions = (sanitize_attempt > 0)
     
-    prompt = build_image_prompt(scene, prev_scene, global_block_override, exclude_title_narration=exclude_title_narration, include_safety_instructions=include_safety_instructions)
+    prompt = build_image_prompt(scene, prev_scene, global_block_override, exclude_title_narration=exclude_title_narration, include_safety_instructions=include_safety_instructions, story_context=story_context)
     
     # Sanitize prompt if this is a retry after safety violation
     if sanitize_attempt > 0:
@@ -694,18 +710,13 @@ def generate_image_for_scene(scene: dict, prev_scene: dict | None, global_block_
     print(f"[IMAGE] Scene {scene['id']}: generating image...")
 
     try:
-        resp = client.images.generate(
-            model=IMG_MODEL,
+        llm_utils.generate_image(
             prompt=prompt,
+            output_path=img_path,
             size=config.image_size,  # vertical for shorts, landscape for main
-            n=1,
+            output_format="png",
             moderation="low",
         )
-
-        b64_data = resp.data[0].b64_json
-        img_bytes = base64.b64decode(b64_data)
-        with open(img_path, "wb") as f:
-            f.write(img_bytes)
 
         if config.save_assets:
             print(f"[IMAGE] Scene {scene['id']}: saved {img_path.name}")
@@ -788,9 +799,11 @@ def generate_audio_for_scene(scene: dict) -> Path:
                 emotion_desc = f"with {emotion} emotion" if emotion else ""
                 prompt_text = f"Read this text {emotion_desc}, matching the scene's emotional tone."
             
-            # Gemini uses text input (not SSML) with prompt parameter
-            synthesis_input = texttospeech.SynthesisInput(text=text, prompt=prompt_text)
-            # synthesis_input = texttospeech.SynthesisInput(text=text)
+            # Gemini uses text input (not SSML) with prompt parameter.
+            # Add trailing spaces so Gemini TTS fully pronounces the last word (avoids end cut-off).
+            text_for_gemini = (text or "").rstrip() + GEMINI_TTS_TEXT_PADDING
+            # synthesis_input = texttospeech.SynthesisInput(text=text_for_gemini, prompt=prompt_text)
+            synthesis_input = texttospeech.SynthesisInput(text=text_for_gemini)
             
             # Select Gemini voice based on female flag
             if USE_FEMALE_VOICE:
@@ -924,6 +937,39 @@ def make_static_clip_with_audio(image_path: Path, audio_clip: AudioFileClip):
     extended_audio = concatenate_audioclips([audio_clip, silent_audio])
 
     return clip.with_audio(extended_audio).with_duration(total_duration)
+
+
+def load_audio_with_accurate_duration(audio_path: Path) -> AudioFileClip:
+    """
+    Load scene audio so the clip has accurate duration (avoids tiny cut-off at the end).
+
+    FFmpeg/MoviePy can report MP3 duration slightly short (VBR/probe limits), so we use
+    the reported duration and the last fraction of a second of narration is never played.
+    For MP3 we convert to WAV first (ffmpeg decodes the full file), then load the WAV so
+    the clip's duration matches the actual audio. END_SCENE_PAUSE_LENGTH is added after
+    the full narration, so the pause is not the cause of cut-off.
+    """
+    path = Path(audio_path)
+    suffix = path.suffix.lower()
+    if suffix == ".mp3":
+        temp_dir = config.temp_dir if config.temp_dir else tempfile.gettempdir()
+        wav_path = Path(temp_dir) / f"{path.stem}_acc.wav"
+        try:
+            subprocess.run(
+                [
+                    "ffmpeg", "-y", "-i", str(path),
+                    "-acodec", "pcm_s16le", "-ar", "44100",
+                    "-ac", "2",  # stereo so duration/samples are exact
+                    str(wav_path),
+                ],
+                check=True,
+                capture_output=True,
+            )
+        except (subprocess.CalledProcessError, FileNotFoundError) as e:
+            # Fallback: load MP3 directly (may have slight duration under-report)
+            return AudioFileClip(str(path))
+        return AudioFileClip(str(wav_path))
+    return AudioFileClip(str(path))
 
 
 def generate_room_tone(
@@ -1541,12 +1587,52 @@ def mix_horror_background_audio(narration_audio: AudioFileClip, duration: float,
         if env_audio_path and Path(env_audio_path).exists():
             try:
                 print(f"[HORROR AUDIO] Loading environment audio: {environment} from {env_audio_path}")
-                env_audio = AudioFileClip(str(env_audio_path))
+                # For .wav files, convert to 16-bit first and load only the converted file. This avoids
+                # ever calling AudioFileClip on 24-bit or problematic WAVs, which can leave MoviePy's
+                # FFMPEG_AudioReader in a broken state and trigger AttributeError in __del__ (no 'proc').
+                env_path_str = str(env_audio_path)
+                if env_path_str.lower().endswith(".wav"):
+                    temp_wav = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+                    temp_wav_path = temp_wav.name
+                    temp_wav.close()
+                    subprocess.run(
+                        [
+                            "ffmpeg", "-y", "-i", env_path_str,
+                            "-acodec", "pcm_s16le", "-ar", "44100", "-ac", "2",
+                            temp_wav_path,
+                        ],
+                        check=True,
+                        capture_output=True,
+                    )
+                    env_audio = AudioFileClip(temp_wav_path)
+                else:
+                    try:
+                        env_audio = AudioFileClip(env_path_str)
+                    except Exception as load_err:
+                        err_str = str(load_err).lower()
+                        if "output" in err_str or "ffmpeg" in err_str or "passing" in err_str or "proc" in err_str:
+                            print(f"[HORROR AUDIO] Direct load failed, converting to 16-bit WAV for compatibility...")
+                            temp_wav = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+                            temp_wav_path = temp_wav.name
+                            temp_wav.close()
+                            subprocess.run(
+                                [
+                                    "ffmpeg", "-y", "-i", env_path_str,
+                                    "-acodec", "pcm_s16le", "-ar", "44100", "-ac", "2",
+                                    temp_wav_path,
+                                ],
+                                check=True,
+                                capture_output=True,
+                            )
+                            env_audio = AudioFileClip(temp_wav_path)
+                        else:
+                            raise
                 
                 # Loop the environment audio to match duration
                 # NOTE: This initial loop may not work reliably with MoviePy concatenation
                 # We'll check again after volume/stereo processing and use FFmpeg if needed
                 if env_audio.duration < duration:
+                    single_clip_duration = env_audio.duration  # Store before concatenation (avoid loading original again in fallback)
                     print(f"[HORROR AUDIO] Initial loop attempt: {env_audio.duration:.3f}s < {duration:.3f}s")
                     loops_needed = int(np.ceil(duration / env_audio.duration))
                     print(f"[HORROR AUDIO] Attempting to loop {loops_needed} times using MoviePy concatenation")
@@ -1560,14 +1646,13 @@ def mix_horror_background_audio(narration_audio: AudioFileClip, duration: float,
                         except (AttributeError, TypeError):
                             # If subclip doesn't work on CompositeAudioClip, write to file and trim with FFmpeg
                             try:
-                                import subprocess
                                 temp_audio_file = tempfile.NamedTemporaryFile(suffix='.wav', delete=False)
                                 temp_audio_path = temp_audio_file.name
                                 temp_audio_file.close()
                                 
                                 # Write the concatenated audio to temp file
                                 try:
-                                    env_audio.write_audiofile(temp_audio_path, verbose=False, logger=None)
+                                    env_audio.write_audiofile(temp_audio_path)
                                     # Now trim the written file to exact duration
                                     temp_trimmed_file = tempfile.NamedTemporaryFile(suffix='.wav', delete=False)
                                     temp_trimmed_path = temp_trimmed_file.name
@@ -1586,22 +1671,18 @@ def mix_horror_background_audio(narration_audio: AudioFileClip, duration: float,
                                         pass
                                     env_audio = AudioFileClip(temp_trimmed_path)
                                 except Exception as write_error:
-                                    # If write_audiofile fails, close the concatenated clip and use original file approach
+                                    # If write_audiofile fails, use FFmpeg on original file without loading it (avoids .wav FFMPEG_AudioReader __del__ bug)
                                     try:
                                         env_audio.close()
                                     except:
                                         pass
-                                    # Reload original and use FFmpeg to create properly looped and trimmed version
-                                    env_audio = AudioFileClip(str(env_audio_path))
-                                    # Calculate how many loops we need
-                                    loops_needed = int(np.ceil(duration / env_audio.duration))
-                                    # Use FFmpeg aloop filter to loop and trim in one go (more reliable than -stream_loop)
+                                    loops_needed = int(np.ceil(duration / single_clip_duration))
                                     result = subprocess.run([
                                         'ffmpeg', '-y',
                                         '-i', str(env_audio_path),
                                         '-filter_complex', f'aloop=loop={loops_needed - 1}:size=2e+09',
                                         '-t', str(duration),
-                                        '-acodec', 'pcm_s16le',  # Re-encode needed for aloop filter
+                                        '-acodec', 'pcm_s16le',
                                         temp_audio_path
                                     ], check=True, capture_output=True, text=True)
                                     env_audio = AudioFileClip(temp_audio_path)
@@ -1616,7 +1697,6 @@ def mix_horror_background_audio(narration_audio: AudioFileClip, duration: float,
                         # If subclip doesn't work, use FFmpeg directly to trim the file
                         # This avoids recursion issues with get_frame wrappers
                         try:
-                            import subprocess
                             temp_audio_file = tempfile.NamedTemporaryFile(suffix='.wav', delete=False)
                             temp_audio_path = temp_audio_file.name
                             temp_audio_file.close()
@@ -1779,12 +1859,8 @@ def mix_horror_background_audio(narration_audio: AudioFileClip, duration: float,
             # Use FFmpeg to loop from original file for better reliability
             if env_audio_original_path and Path(env_audio_original_path).exists():
                 try:
-                    import subprocess
-                    # Get original file duration to calculate loops needed
-                    original_clip = AudioFileClip(str(env_audio_original_path))
-                    original_duration = original_clip.duration
-                    original_clip.close()
-                    
+                    # Use current clip duration (do not load original again - for .wav that triggers FFMPEG_AudioReader __del__ bug)
+                    original_duration = env_audio.duration
                     loops_needed = int(np.ceil(duration / original_duration))
                     print(f"[HORROR AUDIO] Looping environment audio: {loops_needed} loops needed (original: {original_duration:.2f}s, target: {duration:.2f}s)")
                     
@@ -1841,7 +1917,7 @@ def mix_horror_background_audio(narration_audio: AudioFileClip, duration: float,
                                 temp_audio_file.close()
                                 
                                 try:
-                                    env_audio.write_audiofile(temp_audio_path, verbose=False, logger=None)
+                                    env_audio.write_audiofile(temp_audio_path)
                                     temp_trimmed_file = tempfile.NamedTemporaryFile(suffix='.wav', delete=False)
                                     temp_trimmed_path = temp_trimmed_file.name
                                     temp_trimmed_file.close()
@@ -1873,7 +1949,6 @@ def mix_horror_background_audio(narration_audio: AudioFileClip, duration: float,
             except (AttributeError, TypeError):
                 # If subclip doesn't work, try FFmpeg using the original file path we stored
                 try:
-                    import subprocess
                     if env_audio_original_path and Path(env_audio_original_path).exists():
                         temp_audio_file = tempfile.NamedTemporaryFile(suffix='.wav', delete=False)
                         temp_audio_path = temp_audio_file.name
@@ -1926,14 +2001,13 @@ def mix_horror_background_audio(narration_audio: AudioFileClip, duration: float,
         except (AttributeError, TypeError):
             # If subclip doesn't work on AudioClip, write to temp file and trim with FFmpeg
             try:
-                import subprocess
                 temp_audio_file = tempfile.NamedTemporaryFile(suffix='.wav', delete=False)
                 temp_audio_path = temp_audio_file.name
                 temp_audio_file.close()
                 
                 # Write the AudioClip to a temporary file
                 try:
-                    drone.write_audiofile(temp_audio_path, verbose=False, logger=None)
+                    drone.write_audiofile(temp_audio_path)
                     # Now trim the written file to exact duration
                     temp_trimmed_file = tempfile.NamedTemporaryFile(suffix='.wav', delete=False)
                     temp_trimmed_path = temp_trimmed_file.name
@@ -2039,7 +2113,7 @@ def retry_call(name: str, func, *args, max_attempts: int = 3, base_delay: float 
             attempt += 1
 
 
-def generate_image_for_scene_with_retry(scene: dict, prev_scene: dict | None, global_block_override: str | None = None) -> Path:
+def generate_image_for_scene_with_retry(scene: dict, prev_scene: dict | None, global_block_override: str | None = None, story_context: str | None = None) -> Path:
     """
     Generate image with retry logic that handles safety violations by sanitizing prompts.
     """
@@ -2051,7 +2125,7 @@ def generate_image_for_scene_with_retry(scene: dict, prev_scene: dict | None, gl
     while True:
         try:
             sanitize_attempt = attempt - 1  # First attempt is 0 (no sanitization), subsequent attempts sanitize
-            return generate_image_for_scene(scene, prev_scene, global_block_override, sanitize_attempt=sanitize_attempt, violation_type=violation_type)
+            return generate_image_for_scene(scene, prev_scene, global_block_override, sanitize_attempt=sanitize_attempt, violation_type=violation_type, story_context=story_context)
         except SafetyViolationError as e:
             if attempt >= max_attempts:
                 print(f"[RETRY][image] Scene {scene['id']}: Failed after {attempt} attempts with safety violations")
@@ -2230,6 +2304,19 @@ def _build_video_impl(scenes_path: str, out_video_path: str | None = None, scene
     else:
         print(f"[METADATA] Using default global_block")
     
+    # Story context (creature/threat) so scene images show correct threat (e.g. bear paws not human feet)
+    story_context = None
+    if metadata:
+        concept = (metadata.get("story_concept") or "").strip()
+        script_type = (metadata.get("script_type") or "").strip()
+        if concept and script_type and "horror" in script_type.lower():
+            story_context = (
+                f"The threat or creature in this story: {concept}. "
+                "When showing the threat (footsteps, figures, shadows, shapes, predator): depict it according to this concept—e.g. for a bear attack show bear paws and bear legs, not human. "
+                "Any movement or presence outside the protagonist's view must be the creature, not human."
+            )
+            print(f"[METADATA] Using story_context for images: {concept}")
+    
     # Previous-scene references for image continuity
     if test_mode_prev_scene is not None:
         # In test mode with a specific scene_id, use the actual previous scene for context
@@ -2254,13 +2341,13 @@ def _build_video_impl(scenes_path: str, out_video_path: str | None = None, scene
         scene = scenes[idx]
         prev_scene = prev_scenes[idx]
         print(f"[IMAGE] Scene {scene['id']}: generating...")
-        img_path = generate_image_for_scene_with_retry(scene, prev_scene, global_block)
+        img_path = generate_image_for_scene_with_retry(scene, prev_scene, global_block, story_context=story_context)
         return idx, img_path
 
     def audio_job(idx: int):
         scene = scenes[idx]
         audio_path = generate_audio_for_scene_with_retry(scene)
-        audio_clip = AudioFileClip(str(audio_path))
+        audio_clip = load_audio_with_accurate_duration(audio_path)
         print(f"[AUDIO] Scene {scene['id']}: duration={audio_clip.duration:.3f}s")
         return idx, audio_clip
 
@@ -2320,27 +2407,14 @@ def _build_video_impl(scenes_path: str, out_video_path: str | None = None, scene
             i, clip = future.result()
             clips[i] = clip
 
-    # Prepend horror disclaimer clip (fixed image + 3s env/room noise, no narration)
+    # Prepend horror disclaimer clip (fixed image + placeholder silence; env/room mixed later for full video so env is continuous)
     if disclaimer_image_path is not None:
         def make_silence(t):
             if np.isscalar(t):
                 return np.array([0.0, 0.0])
             return np.zeros((len(t), 2))
         silence_3s = AudioClip(make_silence, duration=HORROR_DISCLAIMER_DURATION, fps=44100)
-        environment = metadata.get("environment") if metadata else None
-        disclaimer_audio = mix_horror_background_audio(
-            silence_3s,
-            HORROR_DISCLAIMER_DURATION,
-            scenes=None,
-            scene_audio_clips=None,
-            room_tone_volume=room_tone_volume,
-            drone_volume=drone_volume,
-            max_drone_volume=None,
-            detail_volume=detail_volume,
-            environment=environment,
-            env_audio_volume=None,
-        )
-        disclaimer_clip = make_static_clip_with_audio(disclaimer_image_path, disclaimer_audio)
+        disclaimer_clip = make_static_clip_with_audio(disclaimer_image_path, silence_3s)
         disclaimer_duration = disclaimer_clip.duration
         clips = [disclaimer_clip] + list(clips)
         print(f"[HORROR] Disclaimer clip added: {disclaimer_duration:.2f}s")
@@ -2367,18 +2441,21 @@ def _build_video_impl(scenes_path: str, out_video_path: str | None = None, scene
             if metadata:
                 environment = metadata.get("environment")
             
-            # If disclaimer was prepended, mix horror only on the story part (disclaimer already has env/room noise)
+            # If disclaimer was prepended, mix horror once for the full video so environment audio is continuous (disclaimer + story)
             if disclaimer_duration is not None:
-                # MoviePy 2.x uses subclipped(); older versions use subclip()
                 subclip_fn = getattr(final.audio, "subclipped", getattr(final.audio, "subclip", None))
                 if subclip_fn is None:
                     raise RuntimeError("Audio clip has no subclip/subclipped method")
-                disclaimer_part = subclip_fn(0, disclaimer_duration)
                 story_part = subclip_fn(disclaimer_duration, final.duration)
-                story_duration = final.duration - disclaimer_duration
-                mixed_story = mix_horror_background_audio(
-                    story_part,
-                    story_duration,
+                def make_silence(t):
+                    if np.isscalar(t):
+                        return np.array([0.0, 0.0])
+                    return np.zeros((len(t), 2))
+                silence_disclaimer = AudioClip(make_silence, duration=disclaimer_duration, fps=44100)
+                narration_audio = concatenate_audioclips([silence_disclaimer, story_part])
+                mixed_audio = mix_horror_background_audio(
+                    narration_audio,
+                    final.duration,
                     scenes=scenes,
                     scene_audio_clips=scene_audio_clips,
                     room_tone_volume=room_tone_volume,
@@ -2388,7 +2465,6 @@ def _build_video_impl(scenes_path: str, out_video_path: str | None = None, scene
                     environment=environment,
                     env_audio_volume=None,
                 )
-                mixed_audio = concatenate_audioclips([disclaimer_part, mixed_story])
             else:
                 narration_audio = final.audio
                 mixed_audio = mix_horror_background_audio(

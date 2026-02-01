@@ -132,14 +132,16 @@ class TestTrailerStructurePrompt(unittest.TestCase):
     """Test cases for get_trailer_structure_prompt function."""
     
     def test_trailer_structure(self):
-        """Test trailer structure prompt."""
+        """Test trailer structure prompt (4 scenes: 1-3 WHY, 4 WHAT)."""
         result = prompt_builders.get_trailer_structure_prompt()
         self.assertIn("TRAILER STRUCTURE", result)
-        self.assertIn("exactly 3 scenes", result.lower())
+        self.assertIn("exactly 4 scenes", result.lower())
         self.assertIn("SCENE 1", result)
         self.assertIn("SCENE 2", result)
         self.assertIn("SCENE 3", result)
-        self.assertIn("WHY scenes", result)
+        self.assertIn("SCENE 4", result)
+        self.assertIn("WHY", result)
+        self.assertIn("WHAT", result)
 
 
 class TestBuildOutlinePrompt(unittest.TestCase):

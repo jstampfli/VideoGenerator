@@ -11,14 +11,12 @@ import argparse
 from pathlib import Path
 
 from dotenv import load_dotenv
-from openai import OpenAI
+
+import llm_utils
 
 load_dotenv()
-client = OpenAI()
 
-# Model configuration
-SCRIPT_MODEL = os.getenv("KIDS_SCRIPT_MODEL", "gpt-5.2")
-IMG_MODEL = os.getenv("KIDS_IMAGE_MODEL", "gpt-image-1.5")
+# Scene configuration (text/image provider and model from .env via llm_utils)
 DEFAULT_NUM_SCENES = int(os.getenv("KIDS_SCENES_COUNT", "20"))
 SCENE_DURATION = int(os.getenv("KIDS_SCENE_DURATION", "8")) - 2
 
@@ -108,8 +106,7 @@ Respond with JSON:
   "style_prompt": "Detailed Pixar-style visual description for animation"
 }}"""
 
-    response = client.chat.completions.create(
-        model=SCRIPT_MODEL,
+    content = llm_utils.generate_text(
         messages=[
             {"role": "system", "content": "You are a children's story writer who creates engaging, age-appropriate animated stories with positive themes. Respond with valid JSON only."},
             {"role": "user", "content": story_prompt}
@@ -118,7 +115,7 @@ Respond with JSON:
         response_format={"type": "json_object"}
     )
     
-    story = json.loads(clean_json_response(response.choices[0].message.content))
+    story = json.loads(clean_json_response(content))
     
     # Ensure style_prompt exists (fallback if not generated)
     if not story.get('style_prompt'):
@@ -284,8 +281,7 @@ Respond with JSON:
     else:
         system_message = "You are a children's story animator who creates detailed scene descriptions for animated videos. CRITICAL REQUIREMENTS: 1) ALL actions must be extremely simple and large-scale - no intricate movements, small details, or subtle gestures. Everything happens in open space with clear, obvious movements (walking, running, jumping, waving, reaching out). 2) MINIMAL DIALOGUE: Keep dialogue to an absolute minimum - prefer visual storytelling. Most scenes should have NO dialogue. Only include dialogue when absolutely essential. 3) ONE SCENE PER CHARACTER SPEAKING: Each character can only speak in ONE scene throughout the entire story. Once a character has spoken, they should NOT speak in any other scenes. Plan dialogue carefully. 4) When characters do speak, ALWAYS explicitly state which character is speaking using format: '[Character Name] says, \"[dialogue]\"'. 5) At the end of each scene, ALL characters introduced so far must be clearly visible in the frame - describe their positions. 6) video_prompt must be detailed enough to fill the scene duration (~{SCENE_DURATION} seconds) - include 3-5 sentences with simple, large-scale actions. 7) For scenes 2+: Start with new actions only - the video automatically begins from the previous scene's final frame. 8) Keep character appearances consistent across all scenes. 9) image_prompt (scene 1 only) should match the first moment of video_prompt. 10) CRITICAL - NO TEXT OR CREDITS: The video must contain NO text, NO credits, NO logos, NO end screens, NO titles, NO watermarks, NO written words. The final scene should end with story action only - no closing scenes, credits, or text overlays. Use clear, straightforward language. Respond with valid JSON only."
 
-    response = client.chat.completions.create(
-        model=SCRIPT_MODEL,
+    content = llm_utils.generate_text(
         messages=[
             {"role": "system", "content": system_message},
             {"role": "user", "content": scenes_prompt}
@@ -294,7 +290,7 @@ Respond with JSON:
         response_format={"type": "json_object"}
     )
     
-    result = json.loads(clean_json_response(response.choices[0].message.content))
+    result = json.loads(clean_json_response(content))
     scenes = result.get("scenes", [])
     
     if len(scenes) != num_scenes:
@@ -359,8 +355,7 @@ Respond with JSON:
   "tags": "tag1,tag2,tag3,tag4,tag5,..."
 }}"""
 
-    response = client.chat.completions.create(
-        model=SCRIPT_MODEL,
+    content = llm_utils.generate_text(
         messages=[
             {"role": "system", "content": "You are a YouTube content creator who writes engaging, kid-friendly video descriptions and tags for children's animated content. Respond with valid JSON only."},
             {"role": "user", "content": metadata_prompt}
@@ -369,7 +364,7 @@ Respond with JSON:
         response_format={"type": "json_object"}
     )
     
-    metadata = json.loads(clean_json_response(response.choices[0].message.content))
+    metadata = json.loads(clean_json_response(content))
     
     # Ensure tags is a comma-separated string (convert from list if needed)
     tags = metadata.get('tags', '')
@@ -430,6 +425,38 @@ def build_scene_context(scene: dict, prev_scene: dict | None, next_scene: dict |
     return "\n".join(context_parts)
 
 
+def _save_kids_script(
+    output_path: Path,
+    story: dict,
+    scenes: list,
+    *,
+    video_description: str = "",
+    tags: list | None = None,
+) -> None:
+    """Write current script state to JSON so progress is saved if a later step fails."""
+    if tags is None:
+        tags = []
+    output_data = {
+        "metadata": {
+            "title": story.get("title", "Untitled Story"),
+            "summary": story.get("summary", ""),
+            "characters": story.get("characters", []),
+            "setting": story.get("setting", ""),
+            "theme": story.get("theme", ""),
+            "age_range": story.get("age_range", "4-10"),
+            "style_prompt": story.get("style_prompt", ""),
+            "music_description": story.get("music_description", ""),
+            "num_scenes": len(scenes),
+            "total_duration_estimate": len(scenes) * SCENE_DURATION,
+            "video_description": video_description,
+            "tags": tags,
+        },
+        "scenes": scenes,
+    }
+    with open(output_path, "w", encoding="utf-8") as f:
+        json.dump(output_data, f, indent=2, ensure_ascii=False)
+
+
 def generate_kids_script(prompt: str, output_path: str | None = None, num_scenes: int = DEFAULT_NUM_SCENES) -> dict:
     """
     Main orchestrator: Generate complete story and scenes, save to JSON.
@@ -447,11 +474,28 @@ def generate_kids_script(prompt: str, output_path: str | None = None, num_scenes
     print(f"[CONFIG] Scenes: {num_scenes} (~{num_scenes * SCENE_DURATION} seconds / ~{num_scenes * SCENE_DURATION / 60:.1f} minutes)")
     print(f"{'='*60}")
     
+    # Determine output path early so we can save progress if a later step fails
+    if output_path is None:
+        safe_name = "".join(c if c.isalnum() or c in (' ', '-', '_') else '' for c in prompt)
+        safe_name = safe_name.replace(' ', '_').lower()[:50]  # Limit length
+        output_path = SCRIPTS_DIR / f"{safe_name}_story.json"
+    else:
+        output_path = Path(output_path)
+        if not output_path.is_absolute():
+            output_path = SCRIPTS_DIR / output_path
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    
     # Step 1: Generate story structure
     story = generate_kids_story(prompt, num_scenes=num_scenes)
+    # Save progress (story only) in case scene generation or metadata fails
+    _save_kids_script(output_path, story, [], video_description="", tags=[])
+    print(f"[SCRIPT] Saved progress: {output_path} (story only)")
     
     # Step 2: Generate scenes
     scenes = generate_kids_scenes(story, num_scenes=num_scenes)
+    # Save progress (story + scenes) in case metadata generation fails
+    _save_kids_script(output_path, story, scenes, video_description="", tags=[])
+    print(f"[SCRIPT] Saved progress: {output_path} ({len(scenes)} scenes)")
     
     # Step 3: Generate video metadata (description and tags)
     video_metadata = generate_video_metadata(story, scenes)
@@ -475,18 +519,7 @@ def generate_kids_script(prompt: str, output_path: str | None = None, num_scenes
         "scenes": scenes
     }
     
-    # Determine output path
-    if output_path is None:
-        safe_name = "".join(c if c.isalnum() or c in (' ', '-', '_') else '' for c in prompt)
-        safe_name = safe_name.replace(' ', '_').lower()[:50]  # Limit length
-        output_path = SCRIPTS_DIR / f"{safe_name}_story.json"
-    else:
-        output_path = Path(output_path)
-        if not output_path.is_absolute():
-            output_path = SCRIPTS_DIR / output_path
-    
-    # Save
-    output_path.parent.mkdir(parents=True, exist_ok=True)
+    # Save final
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(output_data, f, indent=2, ensure_ascii=False)
     

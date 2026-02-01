@@ -5,20 +5,12 @@ import argparse
 from pathlib import Path
 
 from dotenv import load_dotenv
-from openai import OpenAI
 
-# Import shared utilities
+# Import shared utilities and LLM utils (provider/model from .env)
 import build_scripts_utils
+import llm_utils
 
-# Initialize utils module with client and config
-load_dotenv()  # Load API key from .env file
-build_scripts_utils.client = OpenAI()
-build_scripts_utils.SCRIPT_MODEL = "gpt-5.2"  # Using gpt-5.2 for better quality and longer context
-build_scripts_utils.IMG_MODEL = "gpt-image-1.5"
-build_scripts_utils.NO_TEXT_CONSTRAINT = """
-CRITICAL: Do NOT include any text, words, letters, numbers, titles, labels, watermarks, or any written content in the image. The image must be completely text-free."""
-
-# Use build_scripts_utils.client, SCRIPT_MODEL, etc. directly
+load_dotenv()
 
 THUMBNAILS_DIR = Path("thumbnails")
 SCRIPTS_DIR = Path("scripts")
@@ -48,17 +40,15 @@ def generate_horror_outline(story_concept: str, chapters: int, total_scenes: int
     import prompt_builders
     outline_prompt = prompt_builders.build_horror_outline_prompt(story_concept, chapters, total_scenes)
 
-    response = build_scripts_utils.client.chat.completions.create(
-        model=build_scripts_utils.SCRIPT_MODEL,
+    content = llm_utils.generate_text(
         messages=[
             {"role": "system", "content": "You are a master horror storyteller who creates terrifying, atmospheric stories. Respond with valid JSON only."},
             {"role": "user", "content": outline_prompt}
         ],
         temperature=0.7,
-        response_format={"type": "json_object"}
+        response_format={"type": "json_object"},
     )
-    
-    outline_data = json.loads(clean_json_response(response.choices[0].message.content))
+    outline_data = json.loads(clean_json_response(content))
     chapters_list = outline_data.get("chapters", [])
     
     print(f"[OUTLINE] Generated {len(chapters_list)} chapters")
@@ -377,8 +367,7 @@ Respond with JSON array:
 ]
 """
     
-    response = build_scripts_utils.client.chat.completions.create(
-        model=build_scripts_utils.SCRIPT_MODEL,
+    content = llm_utils.generate_text(
         messages=[
             {"role": "system", "content": "You are a horror storyteller creating a first-person scary story. Write narration in FIRST PERSON (I/me/my), present tense. CRITICAL: Use first person throughout - the protagonist is telling their own story. Create tension, atmosphere, and fear. Use WHY/WHAT paradigm at scene level. Build horror progressively. Focus on atmosphere and unease. CRITICAL: For each scene, provide narration_instructions as ONE SENTENCE focusing on a single emotion from the emotion field. Keep it simple: 'Focus on [emotion].' Examples: 'Focus on tension.' or 'Focus on unease.' The narration_instructions should flow smoothly between scenes - if previous scene was 'Focus on tension', next might be 'Focus on anxiety' (gradual progression). Avoid overly dramatic language. Respond with valid JSON array only."},
             {"role": "user", "content": scene_prompt}
@@ -386,7 +375,7 @@ Respond with JSON array:
         temperature=0.85,
     )
     
-    scenes = json.loads(clean_json_response(response.choices[0].message.content))
+    scenes = json.loads(clean_json_response(content))
     
     if not isinstance(scenes, list):
         raise ValueError(f"Expected array, got {type(scenes)}")
@@ -421,6 +410,8 @@ def generate_horror_short_outline(story_concept: str) -> dict:
 
 STORY CONCEPT: {story_concept}
 
+CRITICAL: STAY FAITHFUL TO THE CONCEPT - The story must honor the user's concept. If the concept is a bear attack, the horror is a bear attack (survival, nature, threat)—do NOT turn it into a mimic, doppelganger, or "thing that looks like X but is really human-like." If the concept is a haunted house, the horror is the haunted house. Only use mimicry/copy/uncanny-human themes when the concept itself clearly asks for them (e.g. "something that imitates people").
+
 This is a SHORT horror story (3 scenes) that should:
 - Be a quick, scary story that can stand alone
 - Feel like a trailer but doesn't need to be a trailer for anything specific
@@ -443,7 +434,7 @@ CRITICAL: ENVIRONMENT SELECTION - You must select ONE environment for the entire
 
 Generate JSON:
 {{
-  "short_title": "MYSTERIOUS HORROR TITLE - MAXIMIZE CTR (max 40 chars): Inspired by famous horror book titles like 'The Shining', 'It', 'The Exorcist', 'Pet Sematary', 'The Thing'. Keep it SHORT, MYSTERIOUS, and AMBIGUOUS. Use simple, evocative words that create curiosity through ambiguity, not explicit questions. Avoid verbose explanations or parentheticals. The title should hint at horror without revealing it. Examples: 'The Mimic', 'Blizzard Whistle', 'Something in the Snow', 'The Echo', 'The Shadow', 'The Voice', 'The Presence', 'The Watcher', 'The Copy', 'The Reflection'. Use power words SPARINGLY - only when they add mystery (e.g., 'The Cursed', 'The Haunted'). The title should make viewers think: 'What is this about?' through mystery, not explicit questions. Must create a curiosity gap that makes viewers NEED to click to discover the horror, while staying appropriate.",
+  "short_title": "MYSTERIOUS HORROR TITLE - MAXIMIZE CTR (max 40 chars): Stay true to the story concept. Use simple, evocative words that create curiosity. Examples (vary by concept): creature/nature—'Something in the Woods', 'The Clearing', 'The Hollow'; supernatural—'The Shining', 'The Echo', 'The Shadow'; ambiguous—'Blizzard Whistle', 'Something in the Snow', 'The Voice', 'The Presence'. Do NOT default to mimic/copy/reflection themes unless the concept is about imitation. The title should hint at horror without revealing it. Max 40 chars. Must create a curiosity gap while staying appropriate.",
   "short_description": "Brief description of what this short horror story is about (1-2 sentences)",
   "environment": "ONE of: {VALID_ENVIRONMENTS} - the ambient environment for the entire short story",
   "hook_expansion": "The core hook/idea that will be expanded into 3 scenes. This should be a compelling, scary premise that can build tension quickly.",
@@ -453,8 +444,7 @@ Generate JSON:
   "tags": "horror,scary,creepy,thriller,suspense,terrifying,horror story,scary story,horror narration,first person horror,short horror story,quick horror,scary short"
 }}"""
 
-    response = build_scripts_utils.client.chat.completions.create(
-        model=build_scripts_utils.SCRIPT_MODEL,
+    content = llm_utils.generate_text(
         messages=[
             {"role": "system", "content": "You are a master horror storyteller creating quick, scary short stories for YouTube Shorts. These shorts are designed to drive traffic and attention to the channel. Create compelling, open-ended horror that leaves viewers wanting more. Respond with valid JSON only."},
             {"role": "user", "content": short_outline_prompt}
@@ -463,7 +453,7 @@ Generate JSON:
         response_format={"type": "json_object"}
     )
     
-    return json.loads(clean_json_response(response.choices[0].message.content))
+    return json.loads(clean_json_response(content))
 
 
 def generate_horror_short_scenes(story_concept: str, short_outline: dict) -> list[dict]:
@@ -571,8 +561,7 @@ IMPORTANT:
 - "year" field indicating time setting
 ]"""
 
-    response = build_scripts_utils.client.chat.completions.create(
-        model=build_scripts_utils.SCRIPT_MODEL,
+    content = llm_utils.generate_text(
         messages=[
             {"role": "system", "content": "You are a horror storyteller creating a quick, scary first-person horror story for YouTube Shorts. Write narration in FIRST PERSON (I/me/my), present tense. CRITICAL: Use first person throughout - the protagonist is telling their own story. Create tension, atmosphere, and fear quickly. This is a short horror story designed to drive traffic - make it compelling and open-ended. All scenes should be WHY scenes that build fear. CRITICAL: For each scene, provide narration_instructions as ONE SENTENCE focusing on a single emotion from the emotion field. Keep it simple: 'Focus on [emotion].' Examples: 'Focus on tension.' or 'Focus on unease.' The narration_instructions should flow smoothly between scenes - if previous scene was 'Focus on tension', next might be 'Focus on anxiety' (gradual progression). Avoid overly dramatic language. Respond with valid JSON array only."},
             {"role": "user", "content": scene_prompt}
@@ -580,7 +569,7 @@ IMPORTANT:
         temperature=0.85,
     )
     
-    scenes = json.loads(clean_json_response(response.choices[0].message.content))
+    scenes = json.loads(clean_json_response(content))
     
     if not isinstance(scenes, list):
         raise ValueError(f"Expected array, got {type(scenes)}")
@@ -607,6 +596,48 @@ IMPORTANT:
     return scenes
 
 
+def _save_horror_script(
+    output_path: str,
+    *,
+    title: str,
+    tag_line: str,
+    video_description: str,
+    tags: str,
+    pinned_comment: str,
+    thumbnail_description: str,
+    generated_thumb: Path | None,
+    global_block: str,
+    story_concept: str,
+    environment: str,
+    outline: dict,
+    all_scenes: list,
+) -> None:
+    """Write current script state to JSON so progress is saved if a later step fails."""
+    output_data = {
+        "metadata": {
+            "title": title,
+            "tag_line": tag_line,
+            "video_description": video_description,
+            "tags": tags,
+            "pinned_comment": pinned_comment,
+            "thumbnail_description": thumbnail_description,
+            "thumbnail_path": str(generated_thumb) if generated_thumb else None,
+            "global_block": global_block,
+            "story_concept": story_concept,
+            "script_type": "horror",
+            "num_scenes": len(all_scenes),
+            "environment": environment,
+            "outline": outline,
+            "shorts": [],
+        },
+        "scenes": all_scenes,
+    }
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+    with open(output_path, "w", encoding="utf-8") as f:
+        json.dump(output_data, f, indent=2, ensure_ascii=False)
+    print(f"[SCRIPT] Saved progress: {output_path} ({len(all_scenes)} scenes)")
+
+
 def generate_script(story_concept: str, output_path: str, is_short: bool = False):
     """Generate a complete horror story script using outline-guided generation.
     
@@ -621,7 +652,7 @@ def generate_script(story_concept: str, output_path: str, is_short: bool = False
         print(f"{'='*60}")
         print(f"[CONFIG] Short: 3 scenes (quick scary story)")
         print(f"[CONFIG] Thumbnails: {'Yes' if config.generate_thumbnails else 'No'}")
-        print(f"[CONFIG] Model: {build_scripts_utils.SCRIPT_MODEL}")
+        print(f"[CONFIG] Model: {llm_utils.get_text_model_display()}")
         
         # Step 1: Generate short outline
         print("\n[STEP 1] Creating horror short outline...")
@@ -703,7 +734,7 @@ def generate_script(story_concept: str, output_path: str, is_short: bool = False
     else:
         print(f"[CONFIG] Main video: SKIPPED")
     print(f"[CONFIG] Thumbnails: {'Yes' if config.generate_thumbnails else 'No'}")
-    print(f"[CONFIG] Model: {build_scripts_utils.SCRIPT_MODEL}")
+    print(f"[CONFIG] Model: {llm_utils.get_text_model_display()}")
     
     # Step 1: Generate detailed outline
     print("\n[STEP 1] Creating horror story outline...")
@@ -719,8 +750,7 @@ def generate_script(story_concept: str, output_path: str, is_short: bool = False
     import prompt_builders
     initial_metadata_prompt = script_type_instance.get_metadata_prompt(story_concept, outline.get('tagline', ''), total_scenes)
 
-    response = build_scripts_utils.client.chat.completions.create(
-        model=build_scripts_utils.SCRIPT_MODEL,
+    content = llm_utils.generate_text(
         messages=[
             {"role": "system", "content": "Horror story producer. Respond with valid JSON only."},
             {"role": "user", "content": initial_metadata_prompt}
@@ -729,7 +759,7 @@ def generate_script(story_concept: str, output_path: str, is_short: bool = False
         response_format={"type": "json_object"}
     )
     
-    initial_metadata = json.loads(clean_json_response(response.choices[0].message.content))
+    initial_metadata = json.loads(clean_json_response(content))
     
     title = initial_metadata["title"]
     tag_line = initial_metadata.get("tag_line", f"a story that will haunt you")
@@ -814,6 +844,25 @@ def generate_script(story_concept: str, output_path: str, is_short: bool = False
                 all_scenes.extend(scenes)
                 print(f"  ✓ {len(scenes)} scenes (total: {len(all_scenes)})")
                 
+                # Fix scene IDs so partial save is valid; save progress in case a later step fails
+                for idx, scene in enumerate(all_scenes):
+                    scene["id"] = idx + 1
+                _save_horror_script(
+                    output_path,
+                    title=title,
+                    tag_line=tag_line,
+                    video_description="",
+                    tags="",
+                    pinned_comment="",
+                    thumbnail_description=thumbnail_description,
+                    generated_thumb=generated_thumb,
+                    global_block=global_block,
+                    story_concept=story_concept,
+                    environment=environment,
+                    outline=outline,
+                    all_scenes=all_scenes,
+                )
+                
                 # Extract "planted seeds" from early chapters (first 3 chapters) for callback mechanism
                 if i < 3:  # First 3 chapters plant seeds
                     for scene in scenes:
@@ -846,6 +895,23 @@ def generate_script(story_concept: str, output_path: str, is_short: bool = False
         diff_path = Path(output_path).parent / f"{Path(output_path).stem}_refinement_diff.json" if config.generate_refinement_diffs else None
         all_scenes, refinement_diff = build_scripts_utils.refine_scenes(all_scenes, story_concept, is_short=False, chapter_context=chapter_summaries, diff_output_path=diff_path, subject_type="character", skip_significance_scenes=False, scenes_per_chapter=config.scenes_per_chapter, script_type="horror")
         
+        # Save progress after refinement (metadata not yet generated)
+        _save_horror_script(
+            output_path,
+            title=title,
+            tag_line=tag_line,
+            video_description="",
+            tags="",
+            pinned_comment="",
+            thumbnail_description=thumbnail_description,
+            generated_thumb=generated_thumb,
+            global_block=global_block,
+            story_concept=story_concept,
+            environment=environment,
+            outline=outline,
+            all_scenes=all_scenes,
+        )
+        
         # Step 3.5: Generate final metadata (description and tags) AFTER scenes are generated
         print("\n[STEP 3.5] Generating final metadata from actual scenes...")
         
@@ -868,8 +934,7 @@ Generate JSON:
   "pinned_comment": "An engaging horror question or comment to pin below the video (1-2 sentences max). Should: spark discussion about the horror, ask a thought-provoking question about what viewers think happened, create curiosity, encourage viewers to share their theories. Examples: 'What do you think was really happening? Drop your theory below!', 'Which moment scared you the most? Share in the comments!', 'Do you think the ending means what I think it means? Let me know!'. Should feel authentic and engaging."
 }}"""
 
-        response = build_scripts_utils.client.chat.completions.create(
-            model=build_scripts_utils.SCRIPT_MODEL,
+        content = llm_utils.generate_text(
             messages=[
                 {"role": "system", "content": "Horror story producer. Create compelling metadata that accurately reflects the actual horror content. Respond with valid JSON only."},
                 {"role": "user", "content": final_metadata_prompt}
@@ -878,7 +943,7 @@ Generate JSON:
             response_format={"type": "json_object"}
         )
         
-        final_metadata = json.loads(clean_json_response(response.choices[0].message.content))
+        final_metadata = json.loads(clean_json_response(content))
         video_description = final_metadata.get("video_description", "")
         tags = final_metadata.get("tags", "")
         pinned_comment = final_metadata.get("pinned_comment", "")
@@ -887,6 +952,22 @@ Generate JSON:
         print(f"[METADATA] Tags: {tags[:80]}..." if len(tags) > 80 else f"[METADATA] Tags: {tags}")
         if pinned_comment:
             print(f"[METADATA] Pinned comment: {pinned_comment}")
+        # Save progress with full metadata (in case a later step fails)
+        _save_horror_script(
+            output_path,
+            title=title,
+            tag_line=tag_line,
+            video_description=video_description,
+            tags=tags,
+            pinned_comment=pinned_comment,
+            thumbnail_description=thumbnail_description,
+            generated_thumb=generated_thumb,
+            global_block=global_block,
+            story_concept=story_concept,
+            environment=environment,
+            outline=outline,
+            all_scenes=all_scenes,
+        )
     else:
         print("\n[STEP 3] Skipping main video scene generation...")
         video_description = ""

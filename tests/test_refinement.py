@@ -19,23 +19,11 @@ from build_scripts_utils import (
 )
 
 
+@patch('build_scripts_utils.llm_utils.generate_text')
 class TestSignificanceSceneGeneration(unittest.TestCase):
     """Test cases for generate_significance_scene function."""
     
-    def setUp(self):
-        """Set up test fixtures."""
-        # Mock the client
-        import build_scripts_utils
-        self.original_client = build_scripts_utils.client
-        build_scripts_utils.client = MagicMock()
-        self.mock_client = build_scripts_utils.client
-    
-    def tearDown(self):
-        """Clean up test fixtures."""
-        import build_scripts_utils
-        build_scripts_utils.client = self.original_client
-    
-    def test_generate_significance_scene_with_age_phrase_extraction(self):
+    def test_generate_significance_scene_with_age_phrase_extraction(self, mock_generate_text):
         """Test that age_phrase is extracted correctly and doesn't cause UnboundLocalError."""
         pivotal_scene = {
             "id": 7,
@@ -53,10 +41,8 @@ class TestSignificanceSceneGeneration(unittest.TestCase):
             "narration": "The world took notice."
         }
         
-        # Mock the LLM response
-        mock_response = MagicMock()
-        mock_response.choices = [MagicMock()]
-        mock_response.choices[0].message.content = json.dumps({
+        # Mock llm_utils.generate_text to return JSON string
+        mock_generate_text.return_value = json.dumps({
             "title": "Why This Matters",
             "narration": "This moment changed everything.",
             "scene_type": "WHAT",
@@ -65,8 +51,6 @@ class TestSignificanceSceneGeneration(unittest.TestCase):
             "narration_instructions": "Focus on contemplation.",
             "year": "1905"
         })
-        
-        self.mock_client.chat.completions.create.return_value = mock_response
         
         try:
             result = generate_significance_scene(
@@ -89,7 +73,7 @@ class TestSignificanceSceneGeneration(unittest.TestCase):
                 self.fail(f"UnboundLocalError for age_phrase should not occur. Error: {e}")
             raise
     
-    def test_generate_significance_scene_without_age_in_pivotal_scene(self):
+    def test_generate_significance_scene_without_age_in_pivotal_scene(self, mock_generate_text):
         """Test that age_phrase handling works when pivotal scene has no age information."""
         pivotal_scene = {
             "id": 7,
@@ -101,10 +85,7 @@ class TestSignificanceSceneGeneration(unittest.TestCase):
             "scene_type": "WHAT"
         }
         
-        # Mock the LLM response
-        mock_response = MagicMock()
-        mock_response.choices = [MagicMock()]
-        mock_response.choices[0].message.content = json.dumps({
+        mock_generate_text.return_value = json.dumps({
             "title": "Why This Matters",
             "narration": "This moment changed everything.",
             "scene_type": "WHAT",
@@ -113,8 +94,6 @@ class TestSignificanceSceneGeneration(unittest.TestCase):
             "narration_instructions": "Focus on contemplation.",
             "year": "1905"
         })
-        
-        self.mock_client.chat.completions.create.return_value = mock_response
         
         try:
             result = generate_significance_scene(
@@ -136,7 +115,7 @@ class TestSignificanceSceneGeneration(unittest.TestCase):
                 self.fail(f"UnboundLocalError for age_phrase should not occur even without age info. Error: {e}")
             raise
     
-    def test_generate_significance_scene_missing_image_prompt_from_llm(self):
+    def test_generate_significance_scene_missing_image_prompt_from_llm(self, mock_generate_text):
         """Test that missing image_prompt from LLM is handled correctly with age_phrase."""
         pivotal_scene = {
             "id": 7,
@@ -148,20 +127,14 @@ class TestSignificanceSceneGeneration(unittest.TestCase):
             "scene_type": "WHAT"
         }
         
-        # Mock the LLM response WITHOUT image_prompt
-        mock_response = MagicMock()
-        mock_response.choices = [MagicMock()]
-        mock_response.choices[0].message.content = json.dumps({
+        mock_generate_text.return_value = json.dumps({
             "title": "Why This Matters",
             "narration": "This moment changed everything.",
             "scene_type": "WHAT",
             "emotion": "contemplative",
             "narration_instructions": "Focus on contemplation.",
             "year": "1890"
-            # Missing image_prompt
         })
-        
-        self.mock_client.chat.completions.create.return_value = mock_response
         
         try:
             result = generate_significance_scene(
@@ -184,7 +157,7 @@ class TestSignificanceSceneGeneration(unittest.TestCase):
                 self.fail(f"UnboundLocalError for age_phrase should not occur when LLM doesn't provide image_prompt. Error: {e}")
             raise
     
-    def test_generate_significance_scene_horror_with_drone_change(self):
+    def test_generate_significance_scene_horror_with_drone_change(self, mock_generate_text):
         """Test that horror significance scenes include drone_change."""
         pivotal_scene = {
             "id": 5,
@@ -197,10 +170,7 @@ class TestSignificanceSceneGeneration(unittest.TestCase):
             "drone_change": "swell"
         }
         
-        # Mock the LLM response
-        mock_response = MagicMock()
-        mock_response.choices = [MagicMock()]
-        mock_response.choices[0].message.content = json.dumps({
+        mock_generate_text.return_value = json.dumps({
             "title": "Why This Matters",
             "narration": "This moment changed everything.",
             "scene_type": "WHAT",
@@ -210,8 +180,6 @@ class TestSignificanceSceneGeneration(unittest.TestCase):
             "year": "present",
             "drone_change": "hold"
         })
-        
-        self.mock_client.chat.completions.create.return_value = mock_response
         
         try:
             result = generate_significance_scene(
@@ -231,23 +199,11 @@ class TestSignificanceSceneGeneration(unittest.TestCase):
             self.fail(f"generate_significance_scene should not raise errors. Error: {e}")
 
 
+@patch('build_scripts_utils.llm_utils.generate_text')
 class TestRefineScenes(unittest.TestCase):
     """Test cases for refine_scenes function."""
     
-    def setUp(self):
-        """Set up test fixtures."""
-        # Mock the client
-        import build_scripts_utils
-        self.original_client = build_scripts_utils.client
-        build_scripts_utils.client = MagicMock()
-        self.mock_client = build_scripts_utils.client
-    
-    def tearDown(self):
-        """Clean up test fixtures."""
-        import build_scripts_utils
-        build_scripts_utils.client = self.original_client
-    
-    def test_refine_scenes_basic(self):
+    def test_refine_scenes_basic(self, mock_generate_text):
         """Test that refine_scenes works with basic scene data."""
         scenes = [
             {
@@ -272,12 +228,7 @@ class TestRefineScenes(unittest.TestCase):
             }
         ]
         
-        # Mock the LLM response
-        mock_response = MagicMock()
-        mock_response.choices = [MagicMock()]
-        mock_response.choices[0].message.content = json.dumps(scenes)
-        
-        self.mock_client.chat.completions.create.return_value = mock_response
+        mock_generate_text.return_value = json.dumps(scenes)
         
         try:
             refined, changes = refine_scenes(
@@ -303,7 +254,7 @@ class TestRefineScenes(unittest.TestCase):
         except Exception as e:
             self.fail(f"refine_scenes should not raise errors. Error: {e}")
     
-    def test_refine_scenes_missing_narration_instructions(self):
+    def test_refine_scenes_missing_narration_instructions(self, mock_generate_text):
         """Test that refine_scenes handles missing narration_instructions."""
         scenes = [
             {
@@ -313,15 +264,11 @@ class TestRefineScenes(unittest.TestCase):
                 "scene_type": "WHY",
                 "image_prompt": "Visual description",
                 "emotion": "contemplative",
-                # Missing narration_instructions
                 "year": "1900"
             }
         ]
         
-        # Mock the LLM response (also missing narration_instructions)
-        mock_response = MagicMock()
-        mock_response.choices = [MagicMock()]
-        mock_response.choices[0].message.content = json.dumps([{
+        mock_generate_text.return_value = json.dumps([{
             "id": 1,
             "title": "The Beginning",
             "narration": "It all started here.",
@@ -329,10 +276,7 @@ class TestRefineScenes(unittest.TestCase):
             "image_prompt": "Visual description",
             "emotion": "contemplative",
             "year": "1900"
-            # Still missing narration_instructions
         }])
-        
-        self.mock_client.chat.completions.create.return_value = mock_response
         
         try:
             refined, changes = refine_scenes(
@@ -349,7 +293,7 @@ class TestRefineScenes(unittest.TestCase):
         except Exception as e:
             self.fail(f"refine_scenes should handle missing narration_instructions. Error: {e}")
     
-    def test_refine_scenes_horror_with_drone_change(self):
+    def test_refine_scenes_horror_with_drone_change(self, mock_generate_text):
         """Test that refine_scenes preserves drone_change for horror scripts."""
         scenes = [
             {
@@ -376,12 +320,7 @@ class TestRefineScenes(unittest.TestCase):
             }
         ]
         
-        # Mock the LLM response
-        mock_response = MagicMock()
-        mock_response.choices = [MagicMock()]
-        mock_response.choices[0].message.content = json.dumps(scenes)
-        
-        self.mock_client.chat.completions.create.return_value = mock_response
+        mock_generate_text.return_value = json.dumps(scenes)
         
         try:
             refined, changes = refine_scenes(
@@ -399,7 +338,7 @@ class TestRefineScenes(unittest.TestCase):
         except Exception as e:
             self.fail(f"refine_scenes should preserve drone_change for horror. Error: {e}")
     
-    def test_refine_scenes_smooth_emotion_transitions(self):
+    def test_refine_scenes_smooth_emotion_transitions(self, mock_generate_text):
         """Test that refine_scenes maintains smooth emotion transitions."""
         scenes = [
             {
@@ -418,16 +357,13 @@ class TestRefineScenes(unittest.TestCase):
                 "narration": "Second scene.",
                 "scene_type": "WHAT",
                 "image_prompt": "Visual",
-                "emotion": "urgent",  # Dramatic jump from contemplative
+                "emotion": "urgent",
                 "narration_instructions": "Focus on urgency.",
                 "year": "1905"
             }
         ]
         
-        # Mock the LLM response (should refine to smoother transition)
-        mock_response = MagicMock()
-        mock_response.choices = [MagicMock()]
-        mock_response.choices[0].message.content = json.dumps([
+        mock_generate_text.return_value = json.dumps([
             {
                 "id": 1,
                 "title": "Scene 1",
@@ -444,13 +380,11 @@ class TestRefineScenes(unittest.TestCase):
                 "narration": "Second scene.",
                 "scene_type": "WHAT",
                 "image_prompt": "Visual",
-                "emotion": "thoughtful",  # Smoother transition
+                "emotion": "thoughtful",
                 "narration_instructions": "Focus on thoughtfulness.",
                 "year": "1905"
             }
         ])
-        
-        self.mock_client.chat.completions.create.return_value = mock_response
         
         try:
             refined, changes = refine_scenes(
@@ -469,7 +403,7 @@ class TestRefineScenes(unittest.TestCase):
         except Exception as e:
             self.fail(f"refine_scenes should handle emotion transitions. Error: {e}")
     
-    def test_refine_scenes_error_handling(self):
+    def test_refine_scenes_error_handling(self, mock_generate_text):
         """Test that refine_scenes handles errors gracefully."""
         scenes = [
             {
@@ -484,8 +418,7 @@ class TestRefineScenes(unittest.TestCase):
             }
         ]
         
-        # Mock the LLM to raise an error
-        self.mock_client.chat.completions.create.side_effect = Exception("API Error")
+        mock_generate_text.side_effect = Exception("API Error")
         
         try:
             refined, changes = refine_scenes(

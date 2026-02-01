@@ -7,20 +7,12 @@ from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from dotenv import load_dotenv
-from openai import OpenAI
 
-# Import shared utilities
+# Import shared utilities and LLM utils (provider/model from .env)
 import build_scripts_utils
+import llm_utils
 
-# Initialize utils module with client and config
-load_dotenv()  # Load API key from .env file
-build_scripts_utils.client = OpenAI()
-build_scripts_utils.SCRIPT_MODEL = "gpt-5.2"  # Using gpt-5.2 for better quality and longer context
-build_scripts_utils.IMG_MODEL = "gpt-image-1.5"
-build_scripts_utils.NO_TEXT_CONSTRAINT = """
-CRITICAL: Do NOT include any text, words, letters, numbers, titles, labels, watermarks, or any written content in the image. The image must be completely text-free."""
-
-# Use build_scripts_utils.client, SCRIPT_MODEL, etc. directly
+load_dotenv()
 
 THUMBNAILS_DIR = Path("thumbnails")
 SHORTS_DIR = Path("shorts_scripts")
@@ -54,17 +46,15 @@ def generate_outline(person_of_interest: str) -> dict:
     import prompt_builders
     outline_prompt = prompt_builders.build_outline_prompt(person_of_interest, config.chapters, config.total_scenes)
 
-    response = build_scripts_utils.client.chat.completions.create(
-        model=build_scripts_utils.SCRIPT_MODEL,
+    content = llm_utils.generate_text(
         messages=[
             {"role": "system", "content": "You are a historian who finds the drama and humanity in every life story. Respond with valid JSON only."},
             {"role": "user", "content": outline_prompt}
         ],
         temperature=0.7,
-        response_format={"type": "json_object"}
+        response_format={"type": "json_object"},
     )
-    
-    outline_data = json.loads(clean_json_response(response.choices[0].message.content))
+    outline_data = json.loads(clean_json_response(content))
     chapters = outline_data.get("chapters", [])
     
     print(f"[OUTLINE] Generated {len(chapters)} chapters")
@@ -101,9 +91,9 @@ def generate_scenes_for_chapter(person: str, chapter: dict, scenes_per_chapter: 
     if any(word in emotional_tone for word in ['propulsive', 'energetic', 'intense', 'thrilling', 'action']):
         pacing_instruction = "FAST PACING: Scenes should be punchy and energetic. Use 1-2 sentences per scene (~8-12 seconds). Quick cuts, high energy."
     elif any(word in emotional_tone for word in ['contemplative', 'somber', 'reflective', 'melancholic', 'weighty']):
-        pacing_instruction = "SLOWER PACING: Scenes should have emotional weight. Use 3-4 sentences per scene (~18-24 seconds). Allow moments to breathe."
+        pacing_instruction = "SLOWER PACING: Scenes should have emotional weight and sufficient context. Use 3-4 sentences per scene (~18-24 seconds). Establish the situation, who's involved, and why it matters before the event. Allow moments to breathe."
     else:
-        pacing_instruction = "MODERATE PACING: Use 2-3 sentences per scene (~12-18 seconds). Match pacing to the emotional beats of the story."
+        pacing_instruction = "MODERATE PACING: Use 2-4 sentences per scene (~12-24 seconds). When a scene needs more context—new location, new characters, a pivotal moment—use 3-4 sentences to establish the situation before the event. Prioritize depth and clarity over brevity."
     
     if prev_chapter:
         prev_context = f"""PREVIOUS CHAPTER (for continuity):
@@ -300,8 +290,19 @@ NARRATION STYLE FOR INTRO:
 - Speak directly to the viewer about what they'll discover
 - Use phrases like "You'll discover...", "This is the story of...", "Wait until you learn...", "Here's why this matters..."
 - Present facts as previews, not as events happening in real-time
-- Make it clear this is a preview/introduction, not the actual story''' if is_hook_chapter else '''CRITICAL STORYTELLING REQUIREMENTS:
+- Make it clear this is a preview/introduction, not the actual story''' if is_hook_chapter else '''THREE PRINCIPLES (CRITICAL - every scene must satisfy all three):
+1. The viewer must know WHAT IS HAPPENING - establish the situation, who is involved, where we are. Never leave viewers confused.
+2. The viewer must know WHY IT IS IMPORTANT - why this moment matters, its significance, impact. Make the stakes clear.
+3. The viewer must know WHAT COULD GO WRONG - what's at risk, what failure would mean. Show what can go wrong (or right) so the moment has weight.
+
+CRITICAL STORYTELLING REQUIREMENTS:
 - This MUST feel like a STORY being told, not a chronological list of events
+- CONTEXT AND DEPTH (CRITICAL): Viewers must never be lost. Every scene should give enough context that someone who didn't see the previous scene still understands what's happening. For each scene:
+  * ESTABLISH THE SITUATION first: Who is involved? Where are we? What's the moment (e.g. "By 1754, the French and British are fighting over the Ohio Valley—and a young colonial officer is about to make a fatal mistake.")?
+  * GROUND EVENTS in cause and consequence: What led to this? What's at stake? What does this change?
+  * WHEN INTRODUCING a place, person, or term (Fort Necessity, General Braddock, the Newburgh Conspiracy, Valley Forge, etc.), add one phrase of context so a general audience gets it—e.g. "at the muddy outpost where the French had him surrounded" or "his officers, unpaid and furious with Congress, are now plotting to make him King."
+  * AVOID name-dropping without context. If you mention a battle, a document, or a person, briefly establish why they matter.
+  * CONSEQUENCES: After major events, briefly note what this changes or what would have happened otherwise—give the moment weight.
 - Each scene should ADVANCE a plot thread - show how overarching plots and sub-plots are developing
 - Connect scenes through PLOT PROGRESSION, not just "this happened, then that happened"
 - Show CAUSE AND EFFECT - why this event matters, what it leads to, how it changes things
@@ -356,8 +357,8 @@ Respond with JSON array:
   {{
     "id": {start_id},
     "title": "Evocative 2-5 word title",
-    "narration": "Vivid, dramatic narration...",
-    "scene_type": "WHY" or "WHAT" - MUST be one of these two values. WHY sections frame mysteries, problems, questions, obstacles, counterintuitive information, secrets, or suggest there's something we haven't considered or don't understand the significance of. CRITICAL FOR RETENTION: WHY sections MUST ensure the viewer knows WHAT IS HAPPENING in the story - provide clear context, establish the situation, and make sure viewers understand the basic facts before introducing mysteries or questions. WHY sections should set up what will happen next, why it matters, and what the stakes are for upcoming WHAT sections. WHAT sections deliver core content/solutions/information and must clearly communicate what is happening, why it's important, and what the stakes are (what can go wrong, what can go right, what's at risk).",
+    "narration": "Vivid, dramatic narration. MUST satisfy the three principles: (1) viewer knows WHAT IS HAPPENING, (2) viewer knows WHY IT IS IMPORTANT, (3) viewer knows WHAT COULD GO WRONG.",
+    "scene_type": "WHY" or "WHAT" - MUST be one of these two values. WHY sections frame mysteries, problems, questions, obstacles, counterintuitive information, secrets, or suggest there's something we haven't considered or don't understand the significance of. CRITICAL: Every scene (WHY or WHAT) must satisfy the three principles: what is happening, why it's important, what could go wrong. WHY sections should set up what will happen next, why it matters, and what the stakes are for upcoming WHAT sections. WHAT sections deliver core content/solutions/information and must clearly communicate what is happening, why it's important, and what the stakes are (what can go wrong, what can go right, what's at risk).",
     "image_prompt": "Detailed visual description including {person}'s age and age-relevant appearance details, 16:9 cinematic",
     "emotion": "A single word or short phrase describing the scene's emotional tone (e.g., 'tense', 'triumphant', 'desperate', 'contemplative', 'exhilarating', 'somber', 'urgent', 'defiant'). Should match the chapter's emotional tone but be scene-specific based on what the character is feeling and the dramatic tension. CRITICAL: Emotions must flow SMOOTHLY between scenes - only change gradually from the previous scene's emotion. Build intensity gradually: 'contemplative' → 'thoughtful' → 'somber' → 'serious' → 'tense'. Avoid dramatic jumps like 'calm' → 'urgent' or 'contemplative' → 'exhilarating'.",
     "narration_instructions": "ONE SENTENCE: Focus on a single emotion from the emotion field. Example: 'Focus on tension.' or 'Focus on contemplation.' Keep it simple - just the emotion to emphasize.",
@@ -366,16 +367,14 @@ Respond with JSON array:
   ...
 ]"""
 
-    response = build_scripts_utils.client.chat.completions.create(
-        model=build_scripts_utils.SCRIPT_MODEL,
+    content = llm_utils.generate_text(
         messages=[
-            {"role": "system", "content": "You are a YouTuber creating documentary content. Write narration from YOUR perspective - this is YOUR script that YOU wrote. Tell the story naturally, directly to the viewer. CRITICAL: Use third person narration - you are speaking ABOUT the main character (he/she/they), not AS the main character. The narrator tells the story of the person, not in their voice. CRITICAL FOR RETENTION - AVOID VIEWER CONFUSION: The biggest issue for retention is viewer confusion. WHY sections MUST ensure the viewer knows WHAT IS HAPPENING in the story - provide clear context, establish the situation, and make sure viewers understand the basic facts before introducing mysteries or questions. Don't create confusion by being vague about what's happening. CRITICAL: Create a SEAMLESS JOURNEY through the video - scenes should feel CONNECTED, not like consecutive pieces of disjoint information (A and B and C). Each scene should build on the previous scene, reference what came before naturally, and show how events connect. CRITICAL: Every scene must be classified as WHY or WHAT. WHY sections frame mysteries, problems, questions, obstacles, counterintuitive information, secrets, or suggest there's something we haven't considered or don't understand the significance of. WHY sections MUST clearly establish what is happening (MOST IMPORTANT for retention) before introducing questions or mysteries. WHY sections should set up what will happen next, why it matters, and what the stakes are for upcoming WHAT sections. WHAT sections deliver core content, solutions, and information. Every WHAT scene must clearly communicate: what is happening, why it's important, and what the stakes are (what can go wrong, what can go right, what's at risk). Interleave WHY and WHAT sections strategically - WHY sections should create anticipation for upcoming WHAT sections by establishing what/why/stakes, but NEVER at the expense of clarity about what's happening. Use WHY/WHAT interleaving to create natural connections. For hook chapters, use mostly WHY sections. CRITICAL: For each scene, provide narration_instructions as ONE SENTENCE focusing on a single emotion from the emotion field. Keep it simple: 'Focus on [emotion].' Examples: 'Focus on tension.' or 'Focus on contemplation.' The narration_instructions should flow smoothly between scenes - if previous scene was 'Focus on tension', next might be 'Focus on concern' (gradual progression). Avoid overly dramatic language. Avoid any meta references to chapters, production elements, or the script structure. Focus on what actually happened, why it mattered, and how it felt. Respond with valid JSON array only."},
+            {"role": "system", "content": "You are a YouTuber creating documentary content. Write narration from YOUR perspective - this is YOUR script that YOU wrote. Tell the story naturally, directly to the viewer. CRITICAL: Use third person narration - you are speaking ABOUT the main character (he/she/they), not AS the main character. The narrator tells the story of the person, not in their voice. THREE PRINCIPLES (every scene must satisfy all three): (1) The viewer must know WHAT IS HAPPENING - establish the situation, who is involved, where we are. (2) The viewer must know WHY IT IS IMPORTANT - why this moment matters, its significance. (3) The viewer must know WHAT COULD GO WRONG - what's at risk, what failure would mean. Check every scene against these three. CRITICAL - DEPTH AND CONTEXT: Viewers need enough context to understand every scene. Establish the situation before the event: who is involved, where we are, why this moment is happening. When you introduce a place, person, or concept (e.g. a battle, a document, a political crisis), give one phrase of context so a general viewer isn't lost. Avoid name-dropping without explanation. After major events, briefly note what it changes or what would have happened otherwise. Use 2-4 sentences per scene when context demands it—prioritize clarity and depth over brevity. CRITICAL FOR RETENTION - AVOID VIEWER CONFUSION: The biggest issue for retention is viewer confusion. WHY sections MUST ensure the viewer knows WHAT IS HAPPENING in the story - provide clear context, establish the situation, and make sure viewers understand the basic facts before introducing mysteries or questions. Don't create confusion by being vague about what's happening. CRITICAL: Create a SEAMLESS JOURNEY through the video - scenes should feel CONNECTED, not like consecutive pieces of disjoint information (A and B and C). Each scene should build on the previous scene, reference what came before naturally, and show how events connect. CRITICAL: Every scene must be classified as WHY or WHAT. WHY sections frame mysteries, problems, questions, obstacles, counterintuitive information, secrets, or suggest there's something we haven't considered or don't understand the significance of. WHY sections MUST clearly establish what is happening (MOST IMPORTANT for retention) before introducing questions or mysteries. WHY sections should set up what will happen next, why it matters, and what the stakes are for upcoming WHAT sections. WHAT sections deliver core content, solutions, and information. Every WHAT scene must clearly communicate: what is happening, why it's important, and what the stakes are (what can go wrong, what can go right, what's at risk). Interleave WHY and WHAT sections strategically - WHY sections should create anticipation for upcoming WHAT sections by establishing what/why/stakes, but NEVER at the expense of clarity about what's happening. Use WHY/WHAT interleaving to create natural connections. For hook chapters, use mostly WHY sections. CRITICAL: For each scene, provide narration_instructions as ONE SENTENCE focusing on a single emotion from the emotion field. Keep it simple: 'Focus on [emotion].' Examples: 'Focus on tension.' or 'Focus on contemplation.' The narration_instructions should flow smoothly between scenes - if previous scene was 'Focus on tension', next might be 'Focus on concern' (gradual progression). Avoid overly dramatic language. Avoid any meta references to chapters, production elements, or the script structure. Focus on what actually happened, why it mattered, and how it felt. Respond with valid JSON array only."},
             {"role": "user", "content": scene_prompt}
         ],
         temperature=0.85,
     )
-    
-    scenes = json.loads(clean_json_response(response.choices[0].message.content))
+    scenes = json.loads(clean_json_response(content))
     
     if not isinstance(scenes, list):
         raise ValueError(f"Expected array, got {type(scenes)}")
@@ -409,24 +408,28 @@ def generate_short_outline(person: str, selected_hook: dict = None, short_num: i
     
     outline_prompt = prompt_builders.build_short_outline_prompt(person, selected_hook, short_num, total_shorts)
 
-    response = build_scripts_utils.client.chat.completions.create(
-        model=build_scripts_utils.SCRIPT_MODEL,
+    content = llm_utils.generate_text(
         messages=[
-            {"role": "system", "content": "You create high-energy viral trailers. Every word must grab attention and create curiosity. Focus on making viewers NEED to watch the full video. CRITICAL: For each scene, provide narration_instructions as ONE SENTENCE focusing on a single emotion from the emotion field. Keep it simple: 'Focus on [emotion].' Examples: 'Focus on tension.' or 'Focus on urgency.' The narration_instructions should flow smoothly between scenes - if previous scene was 'Focus on tension', next might be 'Focus on intensity' (gradual progression). Avoid overly dramatic language. Respond with valid JSON only."},
+            {"role": "system", "content": "You create high-energy viral trailers. Every word must grab attention and create curiosity. Focus on making viewers NEED to watch the full video. CRITICAL: For each scene, provide narration_instructions as ONE SENTENCE focusing on a single emotion from the emotion field. Keep it simple: 'Focus on [emotion].' Examples: 'Focus on tension.' or 'Focus on urgency.' The narration_instructions should flow smoothly between scenes - if previous scene was 'Focus on tension', next might be 'Focus on intensity' (gradual progression). Avoid overly dramatic language. Respond with valid JSON only. You MUST respond with a single JSON object (not an array) containing short_title, short_description, tags, thumbnail_prompt, hook_expansion, key_facts."},
             {"role": "user", "content": outline_prompt}
         ],
         temperature=0.9,
-        response_format={"type": "json_object"}
+        response_format={"type": "json_object"},
     )
-    
-    return json.loads(clean_json_response(response.choices[0].message.content))
+    data = json.loads(clean_json_response(content))
+    # LLM sometimes returns a list instead of an object; normalize to dict
+    if isinstance(data, list) and len(data) > 0 and isinstance(data[0], dict):
+        data = data[0]
+    elif not isinstance(data, dict):
+        raise ValueError(f"Short outline must be a JSON object, got {type(data).__name__}")
+    return data
 
 
 def generate_short_scenes(person: str, short_outline: dict, birth_year: int | None = None, death_year: int | None = None) -> list[dict]:
-    """Generate 3 scenes for a YouTube Short trailer based on an intro hook.
+    """Generate 4 scenes for a YouTube Short: scenes 1-3 build the hook and end with a question; scene 4 answers that question.
     
     Each scene must include a "year" field indicating when it takes place.
-    Scenes should be mostly WHY scenes (trailer format) that create curiosity.
+    Scenes 1-3 are WHY scenes (trailer format); scene 4 is a WHAT scene (payoff/answer).
     """
     import prompt_builders
     
@@ -434,7 +437,7 @@ def generate_short_scenes(person: str, short_outline: dict, birth_year: int | No
     facts_str = "\n".join(f"• {fact}" for fact in key_facts) if key_facts else "Use the hook expansion to create curiosity"
     hook_expansion = short_outline.get('hook_expansion', '')
     
-    scene_prompt = f"""Write 3 HIGH-ENERGY TRAILER scenes for a YouTube Short about {person}.
+    scene_prompt = f"""Write 4 scenes for a YouTube Short about {person}.
 
 TITLE: "{short_outline.get('short_title', '')}"
 HOOK EXPANSION: {hook_expansion}
@@ -442,7 +445,7 @@ HOOK EXPANSION: {hook_expansion}
 KEY FACTS TO USE:
 {facts_str}
 
-CRITICAL: This is a TRAILER, not a complete story. The short should be HIGH ENERGY and create CURIOSITY that makes viewers NEED to watch the full documentary.
+CRITICAL: Scenes 1-3 are HIGH-ENERGY TRAILER (WHY) that build the hook and end with a clear QUESTION. Scene 4 ANSWERS that question (WHAT scene - payoff), then invites viewers to the full documentary.
 
 {prompt_builders.get_why_what_paradigm_prompt(is_trailer=True)}
 
@@ -454,31 +457,30 @@ CRITICAL: This is a TRAILER, not a complete story. The short should be HIGH ENER
 
 {prompt_builders.get_image_prompt_guidelines(person, birth_year, death_year, "9:16 vertical", is_trailer=True)}
 
-Respond with JSON array of exactly 3 scenes (ALL should be WHY scenes for trailer format):
+Respond with JSON array of exactly 4 scenes (scenes 1-3 WHY, scene 4 WHAT - answers the question from scene 3):
 [
   {{"id": 1, "title": "2-4 words", "narration": "HIGH ENERGY - expand the hook, create curiosity, make viewers NEED to know more", "scene_type": "WHY", "image_prompt": "Dramatic, attention-grabbing visual including {person}'s age at this time ({birth_year if birth_year else 'unknown'}), 9:16 vertical", "emotion": "High energy emotion (e.g., 'urgent', 'shocking', 'tense', 'intense'). CRITICAL: Emotions must flow SMOOTHLY between scenes - only change gradually.", "narration_instructions": "ONE SENTENCE: Focus on a single emotion from the emotion field. Example: 'Focus on tension.' or 'Focus on urgency.'", "year": "YYYY or YYYY-YYYY"}},
   {{"id": 2, "title": "...", "narration": "HIGH ENERGY - build the hook, escalate curiosity, deepen the mystery", "scene_type": "WHY", "image_prompt": "Dramatic, attention-grabbing visual including {person}'s age at this time, 9:16 vertical", "emotion": "High energy emotion - must be a GRADUAL progression from scene 1's emotion (e.g., if scene 1 was 'tense', this might be 'intense' or 'urgent', not 'calm').", "narration_instructions": "ONE SENTENCE: Focus on a single emotion from the emotion field, flowing smoothly from scene 1. Example: if scene 1 was 'Focus on tension.', this might be 'Focus on intensity.'", "year": "YYYY or YYYY-YYYY"}},
-  {{"id": 3, "title": "...", "narration": "HIGH ENERGY - create anticipation, end with compelling question or 'wait, what happens next?' moment that makes viewers NEED to watch the full documentary", "scene_type": "WHY", "image_prompt": "Dramatic, attention-grabbing visual including {person}'s age at this time, 9:16 vertical", "emotion": "High energy emotion - must be a GRADUAL progression from scene 2's emotion (e.g., if scene 2 was 'intense', this might be 'urgent' or 'excited', building naturally).", "narration_instructions": "ONE SENTENCE: Focus on a single emotion from the emotion field, flowing smoothly from scene 2. Example: if scene 2 was 'Focus on intensity.', this might be 'Focus on urgency.'", "year": "YYYY or YYYY-YYYY"}}
+  {{"id": 3, "title": "...", "narration": "HIGH ENERGY - build to a climax and END WITH A CLEAR QUESTION that scene 4 will answer (e.g. 'How did he do it?' 'What happened next?' 'Why did this work?'). Do not answer it here.", "scene_type": "WHY", "image_prompt": "Dramatic, attention-grabbing visual including {person}'s age at this time, 9:16 vertical", "emotion": "High energy emotion - must be a GRADUAL progression from scene 2's emotion.", "narration_instructions": "ONE SENTENCE: Focus on a single emotion from the emotion field, flowing smoothly from scene 2. End narration with the question.", "year": "YYYY or YYYY-YYYY"}},
+  {{"id": 4, "title": "...", "narration": "ANSWER the question from scene 3. WHAT scene - deliver the payoff with clear, punchy facts. End with a soft CTA to watch the full documentary (e.g. 'Watch the full documentary for the complete story.').", "scene_type": "WHAT", "image_prompt": "Dramatic visual showing the resolution/moment of answer including {person}'s age at this time, 9:16 vertical", "emotion": "Satisfying resolution - can be 'triumphant', 'revelatory', 'relieved', or 'impactful' - must flow from scene 3.", "narration_instructions": "ONE SENTENCE: Focus on a single emotion from the emotion field (e.g. 'Focus on the payoff.' or 'Focus on revelation.').", "year": "YYYY or YYYY-YYYY"}}
 ]
 
 IMPORTANT: 
-- ALL scenes should be WHY scenes (this is a trailer, not a complete story)
-- "scene_type" MUST be "WHY" for all 3 scenes
-- "emotion" should be high-energy (urgent, shocking, tense, intense, etc.)
-- "image_prompt" MUST include {person}'s age at that time and be dramatic/attention-grabbing
-- "year" field indicating when the scene takes place
+- Scenes 1-3: scene_type MUST be "WHY"; scene 3 MUST end with a clear question.
+- Scene 4: scene_type MUST be "WHAT"; it MUST answer the question from scene 3.
+- "emotion" should flow smoothly across all 4 scenes.
+- "image_prompt" MUST include {person}'s age at that time and be dramatic/attention-grabbing.
+- "year" field indicating when the scene takes place.
 ]"""
 
-    response = build_scripts_utils.client.chat.completions.create(
-        model=build_scripts_utils.SCRIPT_MODEL,
+    content = llm_utils.generate_text(
         messages=[
-            {"role": "system", "content": "You create high-energy viral trailers. Write narration from YOUR perspective - this is YOUR script. Use third person narration - you are speaking ABOUT the main character (he/she/they), not AS the main character. CRITICAL: This is a TRAILER - create curiosity, don't fully resolve. All scenes should be WHY scenes that make viewers NEED to watch the full documentary. WHY scenes MUST ensure the viewer knows WHAT IS HAPPENING - provide clear context before introducing mysteries. High energy throughout. Simple, clear, punchy language. CRITICAL: For each scene, provide narration_instructions as ONE SENTENCE focusing on a single emotion from the emotion field. Keep it simple: 'Focus on [emotion].' Examples: 'Focus on tension.' or 'Focus on urgency.' The narration_instructions should flow smoothly between scenes - if previous scene was 'Focus on tension', next might be 'Focus on intensity' (gradual progression). Avoid overly dramatic language. Respond with valid JSON array only."},
+            {"role": "system", "content": "You create high-energy viral shorts. Write narration from YOUR perspective - this is YOUR script. Use third person narration - you are speaking ABOUT the main character (he/she/they), not AS the main character. CRITICAL: Scenes 1-3 are WHY scenes (build the hook, end scene 3 with a clear QUESTION). Scene 4 is a WHAT scene that ANSWERS that question (payoff), then invites viewers to the full documentary. WHY scenes MUST ensure the viewer knows WHAT IS HAPPENING - provide clear context before introducing mysteries. High energy in 1-3; scene 4 delivers satisfying resolution. Simple, clear, punchy language. CRITICAL: For each scene, provide narration_instructions as ONE SENTENCE focusing on a single emotion from the emotion field. Keep it simple: 'Focus on [emotion].' The narration_instructions should flow smoothly between scenes. Avoid overly dramatic language. Respond with valid JSON array only."},
             {"role": "user", "content": scene_prompt}
         ],
         temperature=0.9,
     )
-    
-    scenes = json.loads(clean_json_response(response.choices[0].message.content))
+    scenes = json.loads(clean_json_response(content))
     
     if not isinstance(scenes, list):
         raise ValueError(f"Expected array, got {type(scenes)}")
@@ -498,7 +500,7 @@ IMPORTANT:
 
 
 def generate_shorts(person_of_interest: str, main_title: str, global_block: str, outline: dict, base_output_path: str, hook_chapter_scenes: list = None):
-    """Generate YouTube Shorts (3 scenes each: high-energy trailers based on intro chapter hooks)."""
+    """Generate YouTube Shorts (4 scenes each: scenes 1-3 build hook and end with a question, scene 4 answers it)."""
     if hook_chapter_scenes is None:
         hook_chapter_scenes = []
     if config.num_shorts == 0:
@@ -666,6 +668,47 @@ def generate_shorts(person_of_interest: str, main_title: str, global_block: str,
     return generated_shorts
 
 
+def _save_biopic_script(
+    output_path: str,
+    *,
+    title: str,
+    tag_line: str,
+    video_description: str,
+    tags: str,
+    pinned_comment: str,
+    thumbnail_description: str,
+    generated_thumb: Path | None,
+    global_block: str,
+    person_of_interest: str,
+    outline: dict,
+    all_scenes: list,
+    shorts_info: list,
+) -> None:
+    """Write current script state to JSON so progress is saved if a later step fails."""
+    output_data = {
+        "metadata": {
+            "title": title,
+            "tag_line": tag_line,
+            "video_description": video_description,
+            "tags": tags,
+            "pinned_comment": pinned_comment,
+            "thumbnail_description": thumbnail_description,
+            "thumbnail_path": str(generated_thumb) if generated_thumb else None,
+            "global_block": global_block,
+            "person_of_interest": person_of_interest,
+            "script_type": "biopic",
+            "num_scenes": len(all_scenes),
+            "outline": outline,
+            "shorts": shorts_info,
+        },
+        "scenes": all_scenes,
+    }
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+    with open(output_path, "w", encoding="utf-8") as f:
+        json.dump(output_data, f, indent=2, ensure_ascii=False)
+    print(f"[SCRIPT] Saved progress: {output_path} ({len(all_scenes)} scenes)")
+
+
 def generate_script(person_of_interest: str, output_path: str):
     """Generate a complete documentary script using outline-guided generation."""
     import script_types
@@ -685,7 +728,7 @@ def generate_script(person_of_interest: str, output_path: str):
     else:
         print(f"[CONFIG] Shorts: SKIPPED")
     print(f"[CONFIG] Thumbnails: {'Yes' if config.generate_thumbnails else 'No'}")
-    print(f"[CONFIG] Model: {build_scripts_utils.SCRIPT_MODEL}")
+    print(f"[CONFIG] Model: {llm_utils.get_text_model_display()}")
     
     # Step 1: Generate detailed outline (needed for both main and shorts)
     print("\n[STEP 1] Creating life outline...")
@@ -701,17 +744,15 @@ def generate_script(person_of_interest: str, output_path: str):
     import prompt_builders
     initial_metadata_prompt = script_type_instance.get_metadata_prompt(person_of_interest, outline.get('tagline', ''), config.total_scenes)
 
-    response = build_scripts_utils.client.chat.completions.create(
-        model=build_scripts_utils.SCRIPT_MODEL,
+    content = llm_utils.generate_text(
         messages=[
             {"role": "system", "content": "Documentary producer. Respond with valid JSON only."},
             {"role": "user", "content": initial_metadata_prompt}
         ],
         temperature=0.7,
-        response_format={"type": "json_object"}
+        response_format={"type": "json_object"},
     )
-    
-    initial_metadata = json.loads(clean_json_response(response.choices[0].message.content))
+    initial_metadata = json.loads(clean_json_response(content))
     
     title = initial_metadata["title"]
     tag_line = initial_metadata.get("tag_line", f"the story of {person_of_interest}")
@@ -792,6 +833,25 @@ def generate_script(person_of_interest: str, output_path: str):
                 all_scenes.extend(scenes)
                 print(f"  ✓ {len(scenes)} scenes (total: {len(all_scenes)})")
                 
+                # Fix scene IDs so partial save is valid; save progress in case a later step fails
+                for idx, scene in enumerate(all_scenes):
+                    scene["id"] = idx + 1
+                _save_biopic_script(
+                    output_path,
+                    title=title,
+                    tag_line=tag_line,
+                    video_description="",
+                    tags="",
+                    pinned_comment="",
+                    thumbnail_description=thumbnail_description,
+                    generated_thumb=generated_thumb,
+                    global_block=global_block,
+                    person_of_interest=person_of_interest,
+                    outline=outline,
+                    all_scenes=all_scenes,
+                    shorts_info=[],
+                )
+                
                 # CTA scene generation removed
                 
                 # Extract "planted seeds" from early chapters (first 3 chapters) for callback mechanism
@@ -833,6 +893,23 @@ def generate_script(person_of_interest: str, output_path: str):
         diff_path = Path(output_path).parent / f"{Path(output_path).stem}_refinement_diff.json" if config.generate_refinement_diffs else None
         all_scenes, refinement_diff = build_scripts_utils.refine_scenes(all_scenes, person_of_interest, is_short=False, chapter_context=chapter_summaries, diff_output_path=diff_path, subject_type="person", skip_significance_scenes=False, scenes_per_chapter=config.scenes_per_chapter, script_type="biopic")
         
+        # Save progress after refinement (metadata and shorts not yet generated)
+        _save_biopic_script(
+            output_path,
+            title=title,
+            tag_line=tag_line,
+            video_description="",
+            tags="",
+            pinned_comment="",
+            thumbnail_description=thumbnail_description,
+            generated_thumb=generated_thumb,
+            global_block=global_block,
+            person_of_interest=person_of_interest,
+            outline=outline,
+            all_scenes=all_scenes,
+            shorts_info=[],
+        )
+        
         # Step 3.5: Generate final metadata (description and tags) AFTER scenes are generated
         print("\n[STEP 3.5] Generating final metadata from actual scenes...")
         
@@ -856,17 +933,15 @@ Generate JSON:
 }}"""
 
         system_role = "Documentary producer. Create compelling metadata that accurately reflects the actual content."
-        response = build_scripts_utils.client.chat.completions.create(
-            model=build_scripts_utils.SCRIPT_MODEL,
+        content = llm_utils.generate_text(
             messages=[
                 {"role": "system", "content": f"{system_role} Respond with valid JSON only."},
                 {"role": "user", "content": final_metadata_prompt}
             ],
             temperature=0.7,
-            response_format={"type": "json_object"}
+            response_format={"type": "json_object"},
         )
-        
-        final_metadata = json.loads(clean_json_response(response.choices[0].message.content))
+        final_metadata = json.loads(clean_json_response(content))
         video_description = final_metadata.get("video_description", "")
         tags = final_metadata.get("tags", "")
         pinned_comment = final_metadata.get("pinned_comment", "")
@@ -875,6 +950,22 @@ Generate JSON:
         print(f"[METADATA] Tags: {tags[:80]}..." if len(tags) > 80 else f"[METADATA] Tags: {tags}")
         if pinned_comment:
             print(f"[METADATA] Pinned comment: {pinned_comment}")
+        # Save progress with full metadata before shorts (in case shorts step fails)
+        _save_biopic_script(
+            output_path,
+            title=title,
+            tag_line=tag_line,
+            video_description=video_description,
+            tags=tags,
+            pinned_comment=pinned_comment,
+            thumbnail_description=thumbnail_description,
+            generated_thumb=generated_thumb,
+            global_block=global_block,
+            person_of_interest=person_of_interest,
+            outline=outline,
+            all_scenes=all_scenes,
+            shorts_info=[],
+        )
     else:
         print("\n[STEP 3] Skipping main video scene generation...")
         # Generate basic metadata if not generating main video
@@ -1011,7 +1102,7 @@ if __name__ == "__main__":
         config.scenes_per_chapter = 2
         config.num_shorts = 1
         config.short_chapters = 1
-        config.short_scenes_per_chapter = 3
+        config.short_scenes_per_chapter = 4
         config.generate_thumbnails = False
         config.generate_short_thumbnails = False
         config.generate_refinement_diffs = False

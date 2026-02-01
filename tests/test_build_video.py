@@ -311,6 +311,36 @@ class TestBuildImagePrompt(unittest.TestCase):
         # Should mention it's the opening scene
         self.assertIn("opening scene", prompt.lower())
 
+    def test_prompt_without_story_context_has_no_story_context_section(self):
+        """Without story_context, prompt must not contain STORY CONTEXT section (default behavior unchanged)."""
+        scene = {
+            "id": 1,
+            "title": "A room",
+            "narration": "Someone enters.",
+            "image_prompt": "Interior shot."
+        }
+        prompt = build_image_prompt(scene, None, None)
+        self.assertNotIn("STORY CONTEXT", prompt)
+
+    def test_prompt_includes_story_context_when_provided(self):
+        """Regression: story_context (creature/threat) must be prepended so images show correct threat (e.g. bear not human)."""
+        scene = {
+            "id": 1,
+            "title": "Footsteps outside",
+            "narration": "Heavy footsteps circle the hollow log.",
+            "image_prompt": "POV from inside log, forest floor visible."
+        }
+        story_context = (
+            "The threat or creature in this story: attacked by a bear in the woods. "
+            "When showing the threat (footsteps, figures, shadows): depict bear paws and bear legs, not human."
+        )
+        prompt = build_image_prompt(scene, None, None, story_context=story_context)
+        self.assertIn("STORY CONTEXT", prompt)
+        self.assertIn("bear", prompt.lower())
+        self.assertIn("attacked by a bear", prompt.lower())
+        # Context must appear before scene description so model sees it first
+        self.assertLess(prompt.index("STORY CONTEXT"), prompt.index("Footsteps outside"))
+
 
 class TestFindShortsForScript(unittest.TestCase):
     """Test cases for find_shorts_for_script function."""
@@ -1005,6 +1035,127 @@ class TestHorrorBackgroundAudio(unittest.TestCase):
             except Exception as e:
                 # If it fails due to MoviePy internals, that's acceptable
                 pass
+
+    @patch('build_video.tempfile.NamedTemporaryFile')
+    @patch('subprocess.run')
+    @patch('build_video.AudioFileClip')
+    @patch('build_video.Path')
+    def test_mix_horror_background_audio_wav_env_never_loaded_directly(
+        self, mock_path, mock_audio_file, mock_subprocess_run, mock_tempfile
+    ):
+        """Regression: .wav env files must be converted first; AudioFileClip must never be called with the original path (avoids FFMPEG_AudioReader __del__ AttributeError: no 'proc')."""
+        duration = 5.0
+        mock_path_instance = mock_path.return_value
+        mock_path_instance.exists.return_value = True
+
+        def make_audio(t):
+            if np.isscalar(t):
+                return np.array([0.1, 0.1])
+            return np.column_stack([np.full(len(t), 0.1), np.full(len(t), 0.1)])
+        env_clip = AudioClip(make_audio, duration=3.0, fps=44100)
+        mock_audio_file.return_value = env_clip
+        mock_subprocess_run.return_value = None
+        temp_wav = MagicMock()
+        temp_wav.name = "/tmp/env_converted.wav"
+        temp_wav.__enter__ = MagicMock(return_value=temp_wav)
+        temp_wav.__exit__ = MagicMock(return_value=None)
+        mock_tempfile.return_value = temp_wav
+
+        def make_silence(t):
+            return 0.0
+        narration_audio = AudioClip(make_silence, duration=duration, fps=44100)
+
+        original_wav_path = "environment_audio/forest_night.wav"
+        with patch('build_video.ENV_FOREST_AUDIO', original_wav_path):
+            result = mix_horror_background_audio(
+                narration_audio,
+                duration,
+                room_tone_volume=-35.0,
+                drone_volume=-20.0,
+                environment="forest"
+            )
+        self.assertIsInstance(result, CompositeAudioClip)
+        # Must never call AudioFileClip with the original .wav path (that triggers the __del__ bug)
+        def norm(p):
+            return str(p).replace("\\", "/").lower()
+        original_norm = norm(original_wav_path)
+        for call in mock_audio_file.call_args_list:
+            args = call[0]
+            if args:
+                path_arg_norm = norm(args[0])
+                self.assertNotEqual(
+                    path_arg_norm, original_norm,
+                    msg="AudioFileClip must not be called with original .wav path (causes FFMPEG_AudioReader __del__ error)",
+                )
+        # Conversion must run for .wav (convert-first path)
+        conversion_calls = [
+            c for c in mock_subprocess_run.call_args_list
+            if len(c[0][0]) >= 6 and "pcm_s16le" in c[0][0] and "-ar" in c[0][0] and "-t" not in c[0][0]
+        ]
+        self.assertGreaterEqual(len(conversion_calls), 1, "For .wav env, ffmpeg must convert to 16-bit before load")
+
+    @patch('build_video.tempfile.NamedTemporaryFile')
+    @patch('subprocess.run')
+    @patch('build_video.AudioFileClip')
+    @patch('build_video.Path')
+    def test_mix_horror_background_audio_env_fallback_when_direct_load_fails(
+        self, mock_path, mock_audio_file, mock_subprocess_run, mock_tempfile
+    ):
+        """When env file is NOT .wav and AudioFileClip(env_path) fails, fallback converts via ffmpeg and loads; no UnboundLocalError."""
+        duration = 5.0
+        mock_path_instance = mock_path.return_value
+        mock_path_instance.exists.return_value = True
+
+        def make_audio(t):
+            if np.isscalar(t):
+                return np.array([0.1, 0.1])
+            return np.column_stack([np.full(len(t), 0.1), np.full(len(t), 0.1)])
+        fallback_clip = AudioClip(make_audio, duration=3.0, fps=44100)
+        mock_audio_file.side_effect = [
+            Exception("Error passing `ffmpeg -i` command output: At least one output file must be specified"),
+            fallback_clip,
+        ]
+        mock_subprocess_run.return_value = None
+        temp_wav = MagicMock()
+        temp_wav.name = "/tmp/env_fallback.wav"
+        temp_wav.__enter__ = MagicMock(return_value=temp_wav)
+        temp_wav.__exit__ = MagicMock(return_value=None)
+        mock_tempfile.return_value = temp_wav
+
+        def make_silence(t):
+            return 0.0
+        narration_audio = AudioClip(make_silence, duration=duration, fps=44100)
+
+        # Use a non-.wav path so we hit the try/except fallback path
+        with patch('build_video.ENV_FOREST_AUDIO', 'environment_audio/forest_night.ogg'):
+            result = mix_horror_background_audio(
+                narration_audio,
+                duration,
+                room_tone_volume=-35.0,
+                drone_volume=-20.0,
+                environment="forest"
+            )
+        self.assertIsInstance(result, CompositeAudioClip)
+        self.assertGreaterEqual(mock_audio_file.call_count, 2, "AudioFileClip called at least twice (direct fail + load converted WAV)")
+        conversion_calls = [c for c in mock_subprocess_run.call_args_list if len(c[0][0]) >= 6 and "pcm_s16le" in c[0][0] and "-ar" in c[0][0] and "-t" not in c[0][0]]
+        self.assertGreaterEqual(len(conversion_calls), 1, "Fallback must run ffmpeg to convert env file to 16-bit WAV")
+
+
+class TestWriteAudiofileNoVerboseOrLogger(unittest.TestCase):
+    """Regression: write_audiofile must not be called with verbose= or logger= (MoviePy 2.x removed them)."""
+
+    def test_build_video_never_calls_write_audiofile_with_verbose_or_logger(self):
+        """Ensure build_video.py does not pass verbose or logger to write_audiofile."""
+        build_video_path = Path(__file__).parent.parent / "build_video.py"
+        source = build_video_path.read_text(encoding="utf-8")
+        # Find all write_audiofile call sites
+        import re
+        # Match .write_audiofile(...) with possible args
+        for m in re.finditer(r"\.write_audiofile\s*\(([^)]+)\)", source):
+            call_args = m.group(1)
+            self.assertNotIn("verbose", call_args, msg=f"write_audiofile must not be called with verbose= (MoviePy 2.x): {m.group(0)}")
+            self.assertNotIn("logger", call_args, msg=f"write_audiofile must not be called with logger= (MoviePy 2.x): {m.group(0)}")
+    
     
     def test_mix_horror_background_audio_environment_volume(self):
         """Test that environment audio volume is applied correctly."""

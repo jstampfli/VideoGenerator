@@ -5,6 +5,14 @@ Extracts shared prompt components to avoid duplication and enable easy customiza
 from typing import Optional
 
 
+def get_three_principles_prompt() -> str:
+    """The three retention principles every scene must satisfy. Use in all script generation."""
+    return """THREE PRINCIPLES (CRITICAL - every scene must satisfy all three):
+1. The viewer must know WHAT IS HAPPENING - establish the situation, who is involved, where we are, what is going on. Never leave viewers confused about what's happening.
+2. The viewer must know WHY IT IS IMPORTANT - why this moment matters, its significance, impact, or meaning. Make the stakes of the story clear.
+3. The viewer must know WHAT COULD GO WRONG - what's at risk, what failure would mean, what the consequences are. Show what can go wrong (or right) so the moment has weight."""
+
+
 def get_why_what_paradigm_prompt(is_trailer: bool = False, is_hook_chapter: bool = False) -> str:
     """
     Get WHY/WHAT paradigm instructions.
@@ -13,7 +21,12 @@ def get_why_what_paradigm_prompt(is_trailer: bool = False, is_hook_chapter: bool
         is_trailer: If True, emphasizes WHY scenes for trailers
         is_hook_chapter: If True, emphasizes WHY scenes for hook chapters
     """
-    base_prompt = """WHY/WHAT PARADIGM (CRITICAL):
+    base_prompt = f"""WHY/WHAT PARADIGM (CRITICAL):
+
+{get_three_principles_prompt()}
+
+Apply these three principles to EVERY scene. WHY and WHAT sections below are how you deliver them.
+
 - Every scene must be classified as either "WHY" or "WHAT"
 - WHY sections: Pull audience in by framing mysteries, problems, questions, obstacles, counterintuitive information, secrets, or suggesting there's something we haven't considered or don't understand the significance of. CRITICAL FOR RETENTION - AVOID VIEWER CONFUSION: The biggest issue for retention is viewer confusion. WHY sections MUST ensure the viewer knows WHAT IS HAPPENING in the story - provide clear context, establish the situation, and make sure viewers understand the basic facts before introducing mysteries or questions. Don't create confusion by being vague about what's happening. CRITICAL: WHY sections should set up the upcoming WHAT section by establishing:
   * WHAT IS HAPPENING: Clearly establish what's happening in the story/situation so viewers aren't confused (this is the MOST IMPORTANT for retention)
@@ -202,17 +215,17 @@ def get_trailer_narration_style() -> str:
 
 
 def get_trailer_structure_prompt() -> str:
-    """Get trailer structure instructions for 3-scene shorts."""
-    return """TRAILER STRUCTURE (exactly 3 scenes - ALL should be WHY scenes):
+    """Get trailer structure instructions for 4-scene biopic shorts (scene 4 answers the question from scene 3)."""
+    return """TRAILER STRUCTURE (exactly 4 scenes - scenes 1-3 WHY, scene 4 WHAT):
 1. SCENE 1: Expand the hook with HIGH ENERGY. Grab attention immediately. Set up the mystery, problem, or question from the hook. Make viewers curious: "What is this about?" "Why does this matter?" "What happens next?"
 2. SCENE 2: Build the hook - escalate curiosity, deepen the mystery, add more intrigue. Create more questions. Make viewers NEED to know: "But wait, there's more..." "What makes this shocking is..." "The twist nobody expected..."
-3. SCENE 3: Create anticipation - end with a compelling question, unresolved tension, or "wait, what happens next?" moment. Make viewers NEED to watch the full documentary to get answers. Examples:
-   - "But what happened next would change everything..."
-   - "The consequences of this decision would reshape history..."
-   - "What nobody realized was that this was just the beginning..."
-   - "To find out how this story unfolds, watch the full documentary..."
-   
-   This is a TRAILER - it should END with curiosity, not resolution. Make viewers NEED to watch the main video."""
+3. SCENE 3: Create anticipation - end with a compelling QUESTION that demands an answer. Pose the central mystery explicitly so scene 4 can answer it. Examples:
+   - "But how did this one moment change everything?"
+   - "So how did he actually stop them?"
+   - "What did he do next that saved the day?"
+   - "How did something so simple resolve the crisis?"
+   Scene 3 must END with a clear question that scene 4 will answer.
+4. SCENE 4: ANSWER the question posed at the end of scene 3. This is a WHAT scene - deliver the payoff. Give the viewer the resolution so they feel satisfied: what actually happened, how it worked, or why it mattered. Use clear, punchy facts. End with a soft CTA to watch the full documentary for the complete story (e.g. "Watch the full documentary for the full story.")."""
 
 
 def build_outline_prompt(person_of_interest: str, chapters: int, total_scenes: int) -> str:
@@ -350,7 +363,7 @@ Title: "{hook_title}"
 Narration: "{hook_narration}"
 Year: {hook_year}
 
-This hook was shown in the main video's intro chapter. Your task is to expand this hook into a high-energy, attention-grabbing 3-scene trailer that makes viewers want to watch the full documentary to see how this story unfolds.
+This hook was shown in the main video's intro chapter. Your task is to expand this hook into a high-energy, attention-grabbing 4-scene short: scenes 1-3 build the hook and end with a clear question; scene 4 answers that question (payoff), then invites viewers to watch the full documentary for the complete story.
 """
     else:
         hook_context = f"""
@@ -365,24 +378,25 @@ Short #{short_num} of {total_shorts}
 CRITICAL: This is a TRAILER, not a complete story. The short should:
 - Be HIGH ENERGY and attention-grabbing
 - Create CURIOSITY and make viewers NEED to watch the full documentary
-- Expand the hook into 3 scenes that tease the story without fully resolving it
-- Leave viewers wanting more - this is a preview, not a conclusion
+- Expand the hook into 4 scenes: scenes 1-3 build the hook and end with a clear question; scene 4 answers that question (payoff)
+- Scene 4 gives viewers a satisfying answer so they feel the short is complete, then drives them to the full documentary for more
 - Drive viewers to watch the main video to see the full story
 
-This Short has EXACTLY 3 scenes that function as a TRAILER (ALL WHY SCENES):
+This Short has EXACTLY 4 scenes (scenes 1-3 WHY, scene 4 WHAT):
 1. SCENE 1: Expand the hook - create high energy, grab attention immediately. Set up the mystery, problem, or question from the hook.
 2. SCENE 2: Build the hook - escalate the curiosity, add more intrigue, deepen the mystery or stakes.
-3. SCENE 3: Create anticipation - end with a compelling question, unresolved tension, or "wait, what happens next?" moment that makes viewers NEED to watch the full documentary.
+3. SCENE 3: Create anticipation - end with a compelling QUESTION that scene 4 will answer (e.g. "How did he do it?" "What happened next?" "Why did this work?").
+4. SCENE 4: ANSWER the question from scene 3. This is a WHAT scene - deliver the payoff with clear facts. End with a soft CTA to watch the full documentary.
 
 CRITICAL RULES:
 - HIGH ENERGY throughout - every scene should be attention-grabbing
 - Create CURIOSITY GAPS - tease information but don't fully reveal
 - Make viewers NEED to watch the main video to get answers
-- NO complete resolutions - this is a trailer, not a full story
+- Scene 4 is the only resolution - it answers the question from scene 3; the full story remains in the main video
 - Simple, clear, punchy sentences
 - Every scene must contain SPECIFIC, INTERESTING FACTS
 - NO vague statements or filler
-- ALL scenes must be WHY scenes (trailer format)
+- Scenes 1-3 must be WHY scenes (trailer format); scene 4 must be a WHAT scene (payoff/answer)
 
 CRITICAL: TITLE AND THUMBNAIL MUST BE COHESIVE AND SYNCED - They must create the SAME curiosity gap and work together to maximize CTR. The thumbnail should visually represent the same mystery/question/secret that the title frames.
 
@@ -392,8 +406,8 @@ Provide JSON:
   "short_description": "YouTube description (100 words) with hashtags. Should drive viewers to watch the full documentary.",
   "tags": "10-15 SEO tags comma-separated",
   "thumbnail_prompt": "WHY SCENE THUMBNAIL - MAXIMIZE CTR (MUST BE COHESIVE WITH TITLE): The thumbnail must function as a WHY scene that creates the SAME curiosity gap as the title. Visually frame the SAME MYSTERY, PROBLEM, QUESTION, or SECRET that the title frames. If the title asks 'What secret?', the thumbnail should visually hint at that secret. If the title asks 'How did this happen?', the thumbnail should show the moment of discovery or the problem. If the title mentions 'The Dark Truth', the thumbnail should show visual elements suggesting hidden truth or revelation. Show counterintuitive elements, hidden truths, or something unexpected that matches the title's curiosity gap. Use visual storytelling to ask the SAME questions the title asks. Composition: intense close-ups, dramatic expressions showing realization/shock/conflict, extreme lighting (chiaroscuro), bold colors (red/yellow for urgency/danger), symbolic elements that suggest hidden meaning or secrets matching the title's theme. Subject in MOMENT OF DISCOVERY or CONFRONTATION - not passive. Show visual hints of the mystery/problem/secret without revealing the answer. Think: 'What question does this image make me ask?' It should be the SAME question the title asks. The viewer should look at this and think 'I NEED to know what this is about' - create visual curiosity gaps that sync with the title. NO TEXT in image, but visually SCREAM mystery, urgency, and the promise of revelation that matches the title's promise. Optimized for mobile scrolling - must instantly create curiosity when tiny in feed.",
-  "hook_expansion": "How to expand the selected hook into a 3-scene trailer - what story/mystery to tease",
-  "key_facts": ["3-5 specific facts to include across the 3 scenes that create curiosity and drive viewers to the main video"]
+  "hook_expansion": "How to expand the selected hook into a 4-scene short - what story/mystery to tease, and what question scene 3 should pose for scene 4 to answer",
+  "key_facts": ["3-5 specific facts to include across the 4 scenes: use in scenes 1-3 for curiosity, and in scene 4 for the payoff answer"]
 }}"""
 
 

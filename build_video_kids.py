@@ -27,12 +27,13 @@ from PIL import Image
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import imageio_ffmpeg
 
+import llm_utils
+
 load_dotenv()
-client = OpenAI()
+client = OpenAI()  # Used for video (Sora) API; images use llm_utils
 
 # Configuration
 VIDEO_MODEL = os.getenv("KIDS_VIDEO_MODEL", "sora-2-pro")  # Sora model name
-IMG_MODEL = os.getenv("KIDS_IMAGE_MODEL", "dall-e-3")
 SCENE_DURATION = int(os.getenv("KIDS_SCENE_DURATION", "12"))
 
 # Directories
@@ -171,30 +172,12 @@ Story: {story_title}{character_section}{style_section}"""
     print(f"[IMAGE] Scene {scene_id}: generating image...")
     
     try:
-        resp = client.images.generate(
-            model=IMG_MODEL,
+        llm_utils.generate_image(
             prompt=image_prompt,
+            output_path=img_path,
             size=IMAGE_RESOLUTION,  # Vertical format for Shorts
-            n=1
+            output_format="png",
         )
-        
-        image_data = resp.data[0]
-        
-        # Handle both base64 and URL responses
-        if hasattr(image_data, 'b64_json') and image_data.b64_json:
-            # Model returns base64 data (e.g., gpt-image-1.5)
-            img_bytes = base64.b64decode(image_data.b64_json)
-            with open(img_path, "wb") as f:
-                f.write(img_bytes)
-        elif hasattr(image_data, 'url') and image_data.url:
-            # Model returns URL (e.g., DALL-E 3)
-            print(f"[IMAGE] Scene {scene_id}: downloading from URL...")
-            img_response = requests.get(image_data.url)
-            img_response.raise_for_status()
-            with open(img_path, "wb") as f:
-                f.write(img_response.content)
-        else:
-            raise ValueError(f"Image response has neither b64_json nor url. Response: {image_data}")
         
         if save_assets:
             print(f"[IMAGE] Scene {scene_id}: saved {img_path.name}")

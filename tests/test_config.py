@@ -58,7 +58,7 @@ class TestConfig(unittest.TestCase):
         # Check shorts defaults
         self.assertEqual(cfg.num_shorts, 3)
         self.assertEqual(cfg.short_chapters, 1)
-        self.assertEqual(cfg.short_scenes_per_chapter, 3)
+        self.assertEqual(cfg.short_scenes_per_chapter, 4)
         
         # Check generation flags defaults
         self.assertTrue(cfg.generate_thumbnails)

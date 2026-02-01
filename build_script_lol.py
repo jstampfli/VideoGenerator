@@ -12,24 +12,12 @@ from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from dotenv import load_dotenv
-from openai import OpenAI
 
-# Import shared utilities
+# Import shared utilities and LLM utils (provider/model from .env)
 import build_scripts_utils
+import llm_utils
 
-# Initialize utils module with client and config
-load_dotenv()  # Load API key from .env file
-build_scripts_utils.client = OpenAI()
-build_scripts_utils.SCRIPT_MODEL = "gpt-5.2"
-build_scripts_utils.IMG_MODEL = "gpt-image-1.5"
-build_scripts_utils.NO_TEXT_CONSTRAINT = """
-CRITICAL: Do NOT include any text, words, letters, numbers, titles, labels, watermarks, or any written content in the image. The image must be completely text-free."""
-
-# Export for backward compatibility
-client = build_scripts_utils.client
-SCRIPT_MODEL = build_scripts_utils.SCRIPT_MODEL
-IMG_MODEL = build_scripts_utils.IMG_MODEL
-NO_TEXT_CONSTRAINT = build_scripts_utils.NO_TEXT_CONSTRAINT
+load_dotenv()
 
 THUMBNAILS_DIR = Path("thumbnails")
 SHORTS_DIR = Path("shorts_scripts")
@@ -241,8 +229,7 @@ Respond with JSON:
   ]
 }}"""
 
-    response = client.chat.completions.create(
-        model=SCRIPT_MODEL,
+    content = llm_utils.generate_text(
         messages=[
             {"role": "system", "content": "You are a League of Legends lore expert who finds the drama and epic scope in every story. You understand Runeterra's history, magic systems, and conflicts. Respond with valid JSON only."},
             {"role": "user", "content": outline_prompt}
@@ -251,7 +238,7 @@ Respond with JSON:
         response_format={"type": "json_object"}
     )
     
-    outline_data = json.loads(clean_json_response(response.choices[0].message.content))
+    outline_data = json.loads(clean_json_response(content))
     chapters = outline_data.get("chapters", [])
     
     print(f"[OUTLINE] Generated {len(chapters)} chapters")
@@ -311,8 +298,7 @@ Respond with JSON:
   "year": "introduction"
 }}"""
 
-    response = client.chat.completions.create(
-        model=SCRIPT_MODEL,
+    content = llm_utils.generate_text(
         messages=[
             {"role": "system", "content": "You are a YouTuber creating ranking list content. Write naturally from YOUR perspective. Keep the CTA simple and direct - no story references. Respond with valid JSON only."},
             {"role": "user", "content": cta_prompt}
@@ -320,7 +306,7 @@ Respond with JSON:
         temperature=0.85,
     )
     
-    scene = json.loads(clean_json_response(response.choices[0].message.content))
+    scene = json.loads(clean_json_response(content))
     
     if not isinstance(scene, dict):
         raise ValueError(f"Expected dict, got {type(scene)}")
@@ -405,8 +391,7 @@ Respond with JSON:
   "year": "transition" or a relevant timeline from early in the story
 }}"""
 
-    response = client.chat.completions.create(
-        model=SCRIPT_MODEL,
+    content = llm_utils.generate_text(
         messages=[
             {"role": "system", "content": "You are a YouTuber creating engaging lore content. Write naturally from YOUR perspective. Make the transition smooth and the CTA feel authentic, not forced. Respond with valid JSON only."},
             {"role": "user", "content": cta_prompt}
@@ -414,7 +399,7 @@ Respond with JSON:
         temperature=0.85,
     )
     
-    scene = json.loads(clean_json_response(response.choices[0].message.content))
+    scene = json.loads(clean_json_response(content))
     
     if not isinstance(scene, dict):
         raise ValueError(f"Expected dict, got {type(scene)}")
@@ -501,8 +486,7 @@ Respond with JSON:
   ]
 }}"""
 
-    response = client.chat.completions.create(
-        model=SCRIPT_MODEL,
+    content = llm_utils.generate_text(
         messages=[
             {"role": "system", "content": "You are a League of Legends lore expert who understands power scaling, cosmic hierarchies, and demonstrated feats. You can accurately rank beings based on actual lore events and achievements. Respond with valid JSON only."},
             {"role": "user", "content": outline_prompt}
@@ -511,7 +495,7 @@ Respond with JSON:
         response_format={"type": "json_object"}
     )
     
-    outline_data = json.loads(clean_json_response(response.choices[0].message.content))
+    outline_data = json.loads(clean_json_response(content))
     entries = outline_data.get("entries", [])
     
     # Sort entries by rank (descending, so 10 comes first, 1 comes last)
@@ -574,8 +558,7 @@ Respond with JSON array:
   {{"id": 2, "title": "...", "narration": "...", "image_prompt": "...", "emotion": "...", "year": "introduction"}}
 ]"""
 
-    response = client.chat.completions.create(
-        model=SCRIPT_MODEL,
+    content = llm_utils.generate_text(
         messages=[
             {"role": "system", "content": "You are a YouTuber creating engaging top 10 list content. Write naturally from YOUR perspective. Create anticipation and excitement. Respond with valid JSON array only."},
             {"role": "user", "content": intro_prompt}
@@ -583,7 +566,7 @@ Respond with JSON array:
         temperature=0.85,
     )
     
-    scenes = json.loads(clean_json_response(response.choices[0].message.content))
+    scenes = json.loads(clean_json_response(content))
     
     if not isinstance(scenes, list):
         raise ValueError(f"Expected array, got {type(scenes)}")
@@ -690,8 +673,7 @@ Respond with JSON array of exactly {num_scenes} scenes:
   ...
 ]"""
 
-    response = client.chat.completions.create(
-        model=SCRIPT_MODEL,
+    content = llm_utils.generate_text(
         messages=[
             {"role": "system", "content": "You are a YouTuber creating high-energy top N ranking content. Write narration from YOUR perspective. Focus on interesting League of Legends lore facts about power and feats. Keep it fast-paced, fact-dense, and high-energy. NO story structure - just rank and present facts. Respond with valid JSON array only."},
             {"role": "user", "content": scene_prompt}
@@ -699,7 +681,7 @@ Respond with JSON array of exactly {num_scenes} scenes:
         temperature=0.85,
     )
     
-    scenes = json.loads(clean_json_response(response.choices[0].message.content))
+    scenes = json.loads(clean_json_response(content))
     
     if not isinstance(scenes, list):
         raise ValueError(f"Expected array, got {type(scenes)}")
@@ -1031,8 +1013,7 @@ Respond with JSON array:
   ...
 ]"""
 
-    response = client.chat.completions.create(
-        model=SCRIPT_MODEL,
+    content = llm_utils.generate_text(
         messages=[
             {"role": "system", "content": "You are a YouTuber creating lore documentary content. Write narration from YOUR perspective - this is YOUR script that YOU wrote. Tell the story naturally, directly to the viewer. Avoid any meta references to chapters, production elements, or the script structure. Focus on what actually happened in the lore, why it mattered, and how it felt. CRITICAL: SMOOTH EMOTIONAL TRANSITIONS - The emotion field must flow smoothly between scenes. Emotions should only change GRADUALLY from one scene to the next. Build intensity gradually: 'contemplative' → 'thoughtful' → 'somber' → 'serious' → 'tense'. Avoid dramatic jumps. The narration should not sound completely different from one scene to the next. Respond with valid JSON array only."},
             {"role": "user", "content": scene_prompt}
@@ -1040,7 +1021,7 @@ Respond with JSON array:
         temperature=0.85,
     )
     
-    scenes = json.loads(clean_json_response(response.choices[0].message.content))
+    scenes = json.loads(clean_json_response(content))
     
     if not isinstance(scenes, list):
         raise ValueError(f"Expected array, got {type(scenes)}")
@@ -1141,8 +1122,7 @@ Provide JSON:
   "key_facts": ["5-8 specific facts to include across the 5 scenes that tell ONE complete story with depth"]
 }}"""
 
-    response = client.chat.completions.create(
-        model=SCRIPT_MODEL,
+    content = llm_utils.generate_text(
         messages=[
             {"role": "system", "content": "You create viral LoL lore content. Every word must deliver value. No fluff. When generating multiple shorts about the same subject, ensure each tells a COMPLETELY DIFFERENT story from the lore - different events, different moments, different incidents. Respond with valid JSON only."},
             {"role": "user", "content": outline_prompt}
@@ -1151,7 +1131,7 @@ Provide JSON:
         response_format={"type": "json_object"}
     )
     
-    return json.loads(clean_json_response(response.choices[0].message.content))
+    return json.loads(clean_json_response(content))
 
 
 def generate_lol_short_scenes(subject: str, short_outline: dict, subject_type: str = "character", timeline_start: str | None = None, timeline_end: str | None = None) -> list[dict]:
@@ -1247,8 +1227,7 @@ IMPORTANT: Each scene must include:
 - The image_prompt MUST include fantasy/magical elements, {subject_type}-appropriate visual details, and reflect the scene's emotion in lighting, composition, and mood.
 ]"""
 
-    response = client.chat.completions.create(
-        model=SCRIPT_MODEL,
+    content = llm_utils.generate_text(
         messages=[
             {"role": "system", "content": "You are a YouTuber creating viral LoL lore content. Write narration from YOUR perspective - this is YOUR script. Simple words, specific facts, deep storytelling with details. No fluff, no made-up transitions. Tell continuous stories with actual lore events. Avoid any meta references to chapters, production elements, or script structure. CRITICAL: SMOOTH EMOTIONAL TRANSITIONS - The emotion field must flow smoothly between scenes. Emotions should only change GRADUALLY from one scene to the next. Build intensity gradually. Avoid dramatic jumps. The narration should not sound completely different from one scene to the next. Respond with valid JSON array only."},
             {"role": "user", "content": scene_prompt}
@@ -1256,7 +1235,7 @@ IMPORTANT: Each scene must include:
         temperature=0.85,
     )
     
-    scenes = json.loads(clean_json_response(response.choices[0].message.content))
+    scenes = json.loads(clean_json_response(content))
     
     if not isinstance(scenes, list):
         raise ValueError(f"Expected array, got {type(scenes)}")
@@ -1412,6 +1391,46 @@ def generate_lol_shorts(subject_of_interest: str, main_title: str, global_block:
     return generated_shorts
 
 
+def _save_lol_script(
+    output_path: str,
+    *,
+    title: str,
+    tag_line: str,
+    video_description: str,
+    tags: str,
+    pinned_comment: str,
+    thumbnail_description: str,
+    generated_thumb: Path | None,
+    global_block: str,
+    subject_of_interest: str,
+    outline: dict,
+    all_scenes: list,
+    shorts_info: list,
+) -> None:
+    """Write current script state to JSON so progress is saved if a later step fails."""
+    output_data = {
+        "metadata": {
+            "title": title,
+            "tag_line": tag_line,
+            "video_description": video_description,
+            "tags": tags,
+            "pinned_comment": pinned_comment,
+            "thumbnail_description": thumbnail_description,
+            "thumbnail_path": str(generated_thumb) if generated_thumb else None,
+            "global_block": global_block,
+            "subject_of_interest": subject_of_interest,
+            "num_scenes": len(all_scenes),
+            "outline": outline,
+            "shorts": shorts_info,
+        },
+        "scenes": all_scenes,
+    }
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+    with open(output_path, "w", encoding="utf-8") as f:
+        json.dump(output_data, f, indent=2, ensure_ascii=False)
+    print(f"[SCRIPT] Saved progress: {output_path} ({len(all_scenes)} scenes)")
+
+
 def generate_lol_script(subject_of_interest: str, output_path: str):
     """Generate a complete LoL lore documentary script using outline-guided generation."""
     
@@ -1433,7 +1452,7 @@ def generate_lol_script(subject_of_interest: str, output_path: str):
     else:
         print(f"[CONFIG] Shorts: SKIPPED")
     print(f"[CONFIG] Thumbnails: {'Yes' if config.generate_thumbnails else 'No'}")
-    print(f"[CONFIG] Model: {SCRIPT_MODEL}")
+    print(f"[CONFIG] Model: {llm_utils.get_text_model_display()}")
     
     # Handle Top N mode
     if config.top_n_mode:
@@ -1469,8 +1488,7 @@ Generate JSON:
   "global_block": "Visual style guide (300-400 words): semi-realistic digital painting style with fantasy elements, color palette, dramatic lighting, how {subject_of_interest} should appear consistently across {config.total_scenes} scenes. Emphasize magical/mystical elements, regional characteristics, and League of Legends lore aesthetics."
 }}"""
 
-    response = client.chat.completions.create(
-        model=SCRIPT_MODEL,
+    content = llm_utils.generate_text(
         messages=[
             {"role": "system", "content": "League of Legends lore documentary producer. Respond with valid JSON only."},
             {"role": "user", "content": initial_metadata_prompt}
@@ -1479,7 +1497,7 @@ Generate JSON:
         response_format={"type": "json_object"}
     )
     
-    initial_metadata = json.loads(clean_json_response(response.choices[0].message.content))
+    initial_metadata = json.loads(clean_json_response(content))
     
     title = initial_metadata["title"]
     tag_line = initial_metadata.get("tag_line", f"the lore of {subject_of_interest}")  # Fallback if not generated
@@ -1571,6 +1589,25 @@ YouTube CLICKBAIT thumbnail - MUST MAXIMIZE CLICKS:
                 all_scenes.extend(scenes)
                 print(f"  ✓ {len(scenes)} scenes (total: {len(all_scenes)})")
                 
+                # Fix scene IDs so partial save is valid; save progress in case a later step fails
+                for idx, scene in enumerate(all_scenes):
+                    scene["id"] = idx + 1
+                _save_lol_script(
+                    output_path,
+                    title=title,
+                    tag_line=tag_line,
+                    video_description="",
+                    tags="",
+                    pinned_comment="",
+                    thumbnail_description=thumbnail_description,
+                    generated_thumb=generated_thumb,
+                    global_block=global_block,
+                    subject_of_interest=subject_of_interest,
+                    outline=outline,
+                    all_scenes=all_scenes,
+                    shorts_info=[],
+                )
+                
                 # Insert CTA transition scene after chapter 1 (hook chapter) and before chapter 2 (story begins)
                 if i == 0:  # After chapter 1
                     print(f"\n[CTA] Generating transition/CTA scene between chapters 1 and 2...")
@@ -1617,6 +1654,23 @@ YouTube CLICKBAIT thumbnail - MUST MAXIMIZE CLICKS:
         diff_path = Path(output_path).parent / f"{Path(output_path).stem}_refinement_diff.json" if config.generate_refinement_diffs else None
         all_scenes, refinement_diff = refine_scenes_lol(all_scenes, subject_of_interest, is_short=False, chapter_context=chapter_summaries, diff_output_path=diff_path)
         
+        # Save progress after refinement (metadata and shorts not yet generated)
+        _save_lol_script(
+            output_path,
+            title=title,
+            tag_line=tag_line,
+            video_description="",
+            tags="",
+            pinned_comment="",
+            thumbnail_description=thumbnail_description,
+            generated_thumb=generated_thumb,
+            global_block=global_block,
+            subject_of_interest=subject_of_interest,
+            outline=outline,
+            all_scenes=all_scenes,
+            shorts_info=[],
+        )
+        
         # Step 3.5: Generate final metadata (description and tags) AFTER scenes are generated
         print("\n[STEP 3.5] Generating final metadata from actual scenes...")
         
@@ -1639,8 +1693,7 @@ Generate JSON:
   "pinned_comment": "An engaging question or comment to pin below the video (1-2 sentences max). Should: spark discussion, ask a thought-provoking question about the lore/subject, create curiosity, encourage viewers to share their thoughts/opinions, be conversational and inviting. Examples: 'Which moment from this lore story surprised you most? Drop a comment below!', 'What do you think was the most significant event in this story? Share your thoughts!', 'This lore shows how epic the world of Runeterra is. What other lore stories would you like to see?'. Should feel authentic, not clickbaity - genuine curiosity about viewer perspectives."
 }}"""
 
-        response = client.chat.completions.create(
-            model=SCRIPT_MODEL,
+        content = llm_utils.generate_text(
             messages=[
                 {"role": "system", "content": "League of Legends lore documentary producer. Create compelling metadata that accurately reflects the actual content. Respond with valid JSON only."},
                 {"role": "user", "content": final_metadata_prompt}
@@ -1649,7 +1702,7 @@ Generate JSON:
             response_format={"type": "json_object"}
         )
         
-        final_metadata = json.loads(clean_json_response(response.choices[0].message.content))
+        final_metadata = json.loads(clean_json_response(content))
         video_description = final_metadata.get("video_description", "")
         tags = final_metadata.get("tags", "")
         pinned_comment = final_metadata.get("pinned_comment", "")
@@ -1658,6 +1711,22 @@ Generate JSON:
         print(f"[METADATA] Tags: {tags[:80]}..." if len(tags) > 80 else f"[METADATA] Tags: {tags}")
         if pinned_comment:
             print(f"[METADATA] Pinned comment: {pinned_comment}")
+        # Save progress with full metadata before shorts (in case shorts step fails)
+        _save_lol_script(
+            output_path,
+            title=title,
+            tag_line=tag_line,
+            video_description=video_description,
+            tags=tags,
+            pinned_comment=pinned_comment,
+            thumbnail_description=thumbnail_description,
+            generated_thumb=generated_thumb,
+            global_block=global_block,
+            subject_of_interest=subject_of_interest,
+            outline=outline,
+            all_scenes=all_scenes,
+            shorts_info=[],
+        )
     else:
         print("\n[STEP 3] Skipping main video scene generation...")
         # Generate basic metadata if not generating main video
@@ -1748,8 +1817,7 @@ Generate JSON:
   "global_block": "Visual style guide (300-400 words): semi-realistic digital painting style with fantasy elements, color palette, dramatic lighting, how beings should appear consistently across all scenes. Emphasize magical/mystical elements, cosmic scale, power hierarchies, and League of Legends lore aesthetics."
 }}"""
 
-    response = client.chat.completions.create(
-        model=SCRIPT_MODEL,
+    content = llm_utils.generate_text(
         messages=[
             {"role": "system", "content": "League of Legends lore documentary producer. Create compelling top 10 list metadata. Respond with valid JSON only."},
             {"role": "user", "content": initial_metadata_prompt}
@@ -1758,7 +1826,7 @@ Generate JSON:
         response_format={"type": "json_object"}
     )
     
-    initial_metadata = json.loads(clean_json_response(response.choices[0].message.content))
+    initial_metadata = json.loads(clean_json_response(content))
     
     title = initial_metadata["title"]
     tag_line = initial_metadata.get("tag_line", "the definitive power ranking")
@@ -1878,8 +1946,7 @@ Generate JSON:
   "pinned_comment": "An engaging question or comment to pin below the video (1-2 sentences max). Should: spark discussion, ask viewers about the rankings, create curiosity, encourage viewers to share their thoughts/opinions. Examples: 'Do you agree with this ranking? Who would you put at #1? Drop a comment below!', 'Which entry surprised you most? Share your thoughts!'. Should feel authentic, not clickbaity - genuine curiosity about viewer perspectives."
 }}"""
 
-        response = client.chat.completions.create(
-            model=SCRIPT_MODEL,
+        content = llm_utils.generate_text(
             messages=[
                 {"role": "system", "content": "League of Legends lore documentary producer. Create compelling metadata that accurately reflects the actual content. Respond with valid JSON only."},
                 {"role": "user", "content": final_metadata_prompt}
@@ -1888,7 +1955,7 @@ Generate JSON:
             response_format={"type": "json_object"}
         )
         
-        final_metadata = json.loads(clean_json_response(response.choices[0].message.content))
+        final_metadata = json.loads(clean_json_response(content))
         video_description = final_metadata.get("video_description", "")
         tags = final_metadata.get("tags", "")
         pinned_comment = final_metadata.get("pinned_comment", "")
