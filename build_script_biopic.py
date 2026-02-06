@@ -11,6 +11,15 @@ from dotenv import load_dotenv
 # Import shared utilities and LLM utils (provider/model from .env)
 import build_scripts_utils
 import llm_utils
+from biopic_schemas import (
+    LANDMARK_EVENTS_SCHEMA,
+    OUTLINE_SCHEMA,
+    SCENE_OUTLINE_SCHEMA,
+    SCENES_ARRAY_SCHEMA,
+    INITIAL_METADATA_SCHEMA,
+    SHORT_OUTLINE_SCHEMA,
+    FINAL_METADATA_SCHEMA,
+)
 
 load_dotenv()
 
@@ -38,46 +47,164 @@ generate_significance_scene = build_scripts_utils.generate_significance_scene
 # Use build_scripts_utils.generate_thumbnail(prompt, output_path, size, config.generate_thumbnails) directly
 
 
-def generate_outline(person_of_interest: str) -> dict:
-    """Generate a detailed chronological outline of the person's life."""
-    print(f"\n[OUTLINE] Generating {config.chapters}-chapter outline...")
-    
-    # Use prompt builder for outline
-    import prompt_builders
-    outline_prompt = prompt_builders.build_outline_prompt(person_of_interest, config.chapters, config.total_scenes)
+def generate_landmark_events(person_of_interest: str) -> list[dict]:
+    """
+    Generate the most important landmark events in the person's life.
+    These will become their own chapters with deep, in-depth coverage.
+    Returns list of dicts with event_name, year_or_period, significance, key_details_to_cover.
+    """
+    num_landmarks = min(4, max(1, config.chapters - 2))  # Room for hook + legacy
+    print(f"\n[LANDMARKS] Identifying {num_landmarks} pivotal moments...")
 
+    import prompt_builders
+    prompt = prompt_builders.build_landmark_events_prompt(person_of_interest, num_landmarks=num_landmarks)
     content = llm_utils.generate_text(
         messages=[
-            {"role": "system", "content": "You are a historian who finds the drama and humanity in every life story. Respond with valid JSON only."},
+            {"role": "system", "content": f"You are an expert biographer who identifies the defining moments in a person's life. Focus on works, breakthroughs, and decisions that deserve deep documentary treatment with technical and historical detail. {prompt_builders.get_biopic_audience_profile()}"},
+            {"role": "user", "content": prompt}
+        ],
+        temperature=0.6,
+        response_json_schema=LANDMARK_EVENTS_SCHEMA,
+    )
+    data = json.loads(clean_json_response(content))
+    landmarks = data.get("landmark_events", [])
+    if not isinstance(landmarks, list):
+        landmarks = []
+    for lm in landmarks:
+        print(f"  • {lm.get('event_name', '?')} ({lm.get('year_or_period', '?')})")
+    return landmarks
+
+
+def generate_outline(person_of_interest: str, landmark_events: list[dict] | None = None) -> dict:
+    """Generate a detailed chronological outline of the person's life."""
+    print(f"\n[OUTLINE] Generating {config.chapters}-chapter outline...")
+
+    # Discover available music moods from biopic_music/ for LLM to pick per chapter
+    try:
+        from biopic_music_config import get_available_moods
+        available_moods = get_available_moods()
+        print(f"[OUTLINE] Music moods available: {available_moods}")
+    except ImportError:
+        available_moods = ["relaxing", "passionate", "happy"]
+
+    # Use prompt builder for outline
+    import prompt_builders
+    outline_prompt = prompt_builders.build_outline_prompt(
+        person_of_interest, config.chapters, config.target_total_scenes,
+        config.min_scenes_per_chapter, config.max_scenes_per_chapter,
+        available_moods=available_moods,
+        landmark_events=landmark_events,
+    )
+
+    import prompt_builders
+    system_msg = f"You are a historian who finds the drama and humanity in every life story. {prompt_builders.get_biopic_audience_profile()}"
+    content = llm_utils.generate_text(
+        messages=[
+            {"role": "system", "content": system_msg},
             {"role": "user", "content": outline_prompt}
         ],
         temperature=0.7,
-        response_format={"type": "json_object"},
+        response_json_schema=OUTLINE_SCHEMA,
     )
     outline_data = json.loads(clean_json_response(content))
     chapters = outline_data.get("chapters", [])
     
+    # Ensure each chapter has num_scenes (fallback for legacy or incomplete LLM output)
+    fallback_per_chapter = max(config.min_scenes_per_chapter, config.target_total_scenes // max(1, len(chapters)))
+    for ch in chapters:
+        if "num_scenes" not in ch or not isinstance(ch.get("num_scenes"), (int, float)):
+            ch["num_scenes"] = fallback_per_chapter
+            print(f"[OUTLINE] Added num_scenes={fallback_per_chapter} to Ch {ch.get('chapter_num')} (missing from outline)")
+        ch["num_scenes"] = max(config.min_scenes_per_chapter, min(config.max_scenes_per_chapter, int(ch["num_scenes"])))
+        # Fallback music_mood for legacy scripts or incomplete LLM output
+        if not ch.get("music_mood") or not isinstance(ch.get("music_mood"), str):
+            ch["music_mood"] = available_moods[0] if available_moods else "relaxing"
+            print(f"[OUTLINE] Added music_mood={ch['music_mood']} to Ch {ch.get('chapter_num')} (missing from outline)")
+    
     print(f"[OUTLINE] Generated {len(chapters)} chapters")
     for ch in chapters:
-        print(f"  Ch {ch['chapter_num']}: {ch['title']} ({ch['year_range']})")
+        year_range = ch.get('year_range', ch.get('time_setting', 'Unknown'))
+        num_scenes = ch.get('num_scenes', '?')
+        ch_type = ch.get('chapter_type', '')
+        type_str = f" [{ch_type}]" if ch_type else ""
+        print(f"  Ch {ch['chapter_num']}: {ch['title']} ({year_range}) - {num_scenes} scenes{type_str}")
     
     return outline_data
 
 
 # CTA scene generation removed - no longer needed
 
-def generate_scenes_for_chapter(person: str, chapter: dict, scenes_per_chapter: int, start_id: int, 
+
+def generate_scene_outline(chapter: dict, person: str, scene_budget: int, landmarks: list[dict] | None = None) -> list[dict]:
+    """
+    Generate scene blocks for a chapter - allocates scene_budget across events with variable depth.
+    
+    For hook chapter (ch 1), may return a single block or simple allocation.
+    For story chapters, pivotal moments get 2-4 scenes; minor events get 1.
+    
+    Returns list of dicts: [{"event": str, "num_scenes": int, "rationale": str}, ...]
+    Sum of num_scenes must equal scene_budget.
+    """
+    import prompt_builders
+    
+    scene_outline_prompt = prompt_builders.build_scene_outline_prompt(chapter, person, scene_budget, landmarks=landmarks)
+    
+    content = llm_utils.generate_text(
+        messages=[
+            {"role": "system", "content": f"You allocate documentary scenes across events. Pivotal moments get 2-4 scenes; minor events get 1. Sum of num_scenes must equal the budget exactly. {prompt_builders.get_biopic_audience_profile()}"},
+            {"role": "user", "content": scene_outline_prompt}
+        ],
+        temperature=0.5,
+        response_json_schema=SCENE_OUTLINE_SCHEMA,
+    )
+    blocks = json.loads(clean_json_response(content))
+    
+    if not isinstance(blocks, list):
+        raise ValueError(f"Scene outline expected array, got {type(blocks)}")
+    
+    total = sum(b.get("num_scenes", 0) for b in blocks)
+    if total != scene_budget:
+        # Normalize: scale or pad to match budget
+        if total == 0:
+            blocks = [{"event": chapter.get("summary", "Chapter content"), "num_scenes": scene_budget, "rationale": "Fallback"}]
+        else:
+            # Adjust the largest block to hit the target
+            blocks = sorted(blocks, key=lambda b: b.get("num_scenes", 0), reverse=True)
+            diff = scene_budget - total
+            blocks[0]["num_scenes"] = blocks[0].get("num_scenes", 1) + diff
+    
+    return blocks
+
+
+def generate_scenes_for_chapter(person: str, chapter: dict, scene_blocks: list[dict], chapter_scene_budget: int, start_id: int, 
                                  global_style: str, prev_chapter: dict = None, prev_scenes: list = None,
                                  central_theme: str = None, narrative_arc: str = None, 
                                  planted_seeds: list[str] = None, is_retention_hook_point: bool = False,
                                  birth_year: int | None = None, death_year: int | None = None,
                                  tag_line: str | None = None, overarching_plots: list[dict] = None,
-                                 sub_plots: list[dict] = None) -> list[dict]:
-    """Generate scenes for a single chapter of the outline with continuity context."""
+                                 sub_plots: list[dict] = None, landmarks: list[dict] | None = None) -> list[dict]:
+    """Generate scenes for a single chapter. Uses scene_blocks for variable depth per event."""
     import prompt_builders
     
     if planted_seeds is None:
         planted_seeds = []
+    
+    # Build scene block context for multi-scene events
+    blocks_instruction = ""
+    if any(b.get("num_scenes", 1) > 1 for b in scene_blocks):
+        blocks_instruction = """
+SCENE BLOCKS - VARIABLE DEPTH (CRITICAL for blocks with multiple scenes):
+""" + "\n".join(
+            f"- Block: \"{b.get('event', '')}\" → {b.get('num_scenes', 1)} scene(s). {b.get('rationale', '')}"
+            for b in scene_blocks
+        ) + """
+
+For events with multiple scenes, create a SEQUENCE that explores the moment in depth:
+- Scene 1: Setup/context - who, where, why this moment is approaching
+- Scene 2: The event itself - what happens, step by step
+- Scene 3+: Reactions, consequences, or significance - how the world responds, what changes
+Do NOT repeat the same information across scenes; each scene adds NEW detail.
+"""
     
     # Build context from previous chapter for smooth transitions
     chapter_num = chapter.get('chapter_num', 1)
@@ -225,6 +352,12 @@ STORYTELLING REQUIREMENTS:
 - Each scene should advance at least one plot thread, even if subtly
 - Show how different plots intersect and influence each other"""
     
+    # First story chapter (Ch 2): must start from birth/early life - seamless transition from hook
+    first_story_chapter_instruction = ""
+    if not is_hook_chapter and prev_chapter and prev_chapter.get("chapter_num") == 1:
+        first_story_chapter_instruction = """
+CRITICAL - FIRST STORY CHAPTER (transition from hook): The hook's final scene promised "Let's start from the beginning" or "It all started when...". You MUST deliver on that. The FIRST scene of this chapter MUST establish birth and early life—where they came from, their childhood, upbringing. Do NOT jump to adulthood. Viewers need to see the beginning of the chronological story. Brief is fine (1-2 scenes for sparse childhood) but never skip entirely."""
+
     # Build retention hook instruction
     retention_hook_instruction = ""
     if is_retention_hook_point:
@@ -236,13 +369,30 @@ The FINAL scene in this chapter MUST end with a compelling hook:
 - A moment of high tension or conflict
 - A "wait, what?" moment that creates curiosity
 This hook is essential for YouTube algorithm performance - viewers must stay past this point."""
-    
-    # Calculate total scenes for prompt
-    total_scenes_for_prompt = config.chapters * scenes_per_chapter
-    scene_prompt = f"""You are writing scenes {start_id}-{start_id + scenes_per_chapter - 1} of a {total_scenes_for_prompt}-scene documentary about {person}.
+
+    # Build landmark context - LLM infers when this chapter covers a landmark
+    landmark_instruction = ""
+    if landmarks and not is_hook_chapter:
+        lines = []
+        for lm in landmarks:
+            details = lm.get("key_details_to_cover", [])
+            details_str = "\n    ".join(f"• {d}" for d in details)
+            lines.append(f"- \"{lm.get('event_name', '')}\" ({lm.get('year_or_period', '')}): {lm.get('significance', '')}\n  Key details to cover:\n    {details_str}")
+        landmark_list = "\n".join(lines)
+        landmark_instruction = f"""
+
+LANDMARK EVENTS - If this chapter covers one of these, you MUST include its key_details_to_cover across your scenes:
+{landmark_list}
+
+Decide based on chapter title, summary, key_events, and time period. Structure: setup → event with key details → reactions/significance. Weave details naturally into the narration."""
+
+    # Calculate total scenes for prompt (approximate - actual is sum of chapter num_scenes)
+    total_scenes_for_prompt = config.target_total_scenes
+    scene_prompt = f"""You are writing scenes {start_id}-{start_id + chapter_scene_budget - 1} of a ~{total_scenes_for_prompt}-scene documentary about {person}.
 
 {prev_context}
 {scenes_context}
+{blocks_instruction}
 NOW WRITING CHAPTER {chapter['chapter_num']} of {config.chapters}: "{chapter['title']}"
 Time Period: {chapter.get('year_range') or chapter.get('time_setting', 'Unknown')}
 Emotional Tone: {chapter['emotional_tone']}
@@ -257,14 +407,16 @@ Sets Up What Comes Next: {connects_to_next}
 {plot_context}
 {callback_context}
 {pacing_instruction}
+{first_story_chapter_instruction}
 {retention_hook_instruction}
+{landmark_instruction}
 
 Chapter Summary: {chapter['summary']}
 
 Key Events to Dramatize:
 {chr(10).join(f"• {event}" for event in chapter.get('key_events', []))}
 
-Generate EXACTLY {scenes_per_chapter} scenes that FLOW CONTINUOUSLY.
+Generate EXACTLY {chapter_scene_budget} scenes that FLOW CONTINUOUSLY.
 
 {"HOOK CHAPTER - INTRODUCTION/PREVIEW (NOT A STORY):" if is_hook_chapter else "STORYTELLING - this is a STORY, not a timeline:"}
 {f'''CRITICAL: This is an INTRODUCTION/PREVIEW, not a story. It should quickly answer "Why should I watch this?"
@@ -339,7 +491,7 @@ TRANSITIONS AND FLOW - SEAMLESS JOURNEY (CRITICAL):
 
 9. PLANT SEEDS (Early in the story): If this is early in the documentary, include specific details, objects, relationships, or concepts that could pay off later. Examples: a specific notebook mentioned, a relationship that will matter later, a fear or promise that will be relevant, a small detail that seems unimportant now but will become significant. These create satisfying "aha moments" when referenced later.
 
-{build_scripts_utils.get_shared_narration_style(is_short=False)}
+{build_scripts_utils.get_shared_narration_style(is_short=False, script_type="biopic")}
 {("- HOOK/INTRO: Speak directly to the viewer about what they'll discover. Use preview language: \"You'll discover...\", \"This is the story of...\", \"Wait until you learn...\", \"Here's why this matters...\" Present facts as teasers, not as events happening in real-time.\n" +
 "- TRANSITION TO STORY: The final scene should naturally bridge to the chronological narrative without saying \"rewind\" or \"go back\". Simply start with the beginning context: \"[Early life context]. This is where our story begins.\" or \"It all started when...\"") if is_hook_chapter else ""}
 
@@ -352,7 +504,6 @@ TRANSITIONS AND FLOW - SEAMLESS JOURNEY (CRITICAL):
 
 {prompt_builders.get_image_prompt_guidelines(person, birth_year, death_year, "16:9 cinematic", is_trailer=False, recurring_themes=threads_str)}
 
-Respond with JSON array:
 [
   {{
     "id": {start_id},
@@ -367,19 +518,25 @@ Respond with JSON array:
   ...
 ]"""
 
+    scene_system = f"""You are a YouTuber creating documentary content. Write narration from YOUR perspective - this is YOUR script that YOU wrote. Tell the story naturally, directly to the viewer. CRITICAL: Use third person narration - you are speaking ABOUT the main character (he/she/they), not AS the main character. The narrator tells the story of the person, not in their voice.
+
+{prompt_builders.get_biopic_audience_profile()}
+
+THREE PRINCIPLES (every scene must satisfy all three): (1) The viewer must know WHAT IS HAPPENING - establish the situation, who is involved, where we are. (2) The viewer must know WHY IT IS IMPORTANT - why this moment matters, its significance. (3) The viewer must know WHAT COULD GO WRONG - what's at risk, what failure would mean. Check every scene against these three. CRITICAL - SIMPLE, STRAIGHTFORWARD NARRATION: Let facts speak for themselves. Avoid sensationalist language, gimmicky rhetorical hooks, or repeated dramatic phrases (no 'shocking', 'incredible', 'what nobody expected', 'the secret that would change everything'). Prefer direct, clear statements. The significance of events is in the facts—don't oversell with hype. CRITICAL - DEPTH AND CONTEXT: Viewers need enough context to understand every scene. Establish the situation before the event: who is involved, where we are, why this moment is happening. When you introduce a place, person, or concept (e.g. a battle, a document, a political crisis), give one phrase of context so a general viewer isn't lost. Avoid name-dropping without explanation. After major events, briefly note what it changes or what would have happened otherwise. Use 2-4 sentences per scene when context demands it—prioritize clarity and depth over brevity. CRITICAL FOR RETENTION - AVOID VIEWER CONFUSION: The biggest issue for retention is viewer confusion. WHY sections MUST ensure the viewer knows WHAT IS HAPPENING in the story - provide clear context, establish the situation, and make sure viewers understand the basic facts before introducing mysteries or questions. Don't create confusion by being vague about what's happening. CRITICAL: Create a SEAMLESS JOURNEY through the video - scenes should feel CONNECTED, not like consecutive pieces of disjoint information (A and B and C). Each scene should build on the previous scene, reference what came before naturally, and show how events connect. CRITICAL: Every scene must be classified as WHY or WHAT. WHY sections frame mysteries, problems, questions, obstacles, counterintuitive information, secrets, or suggest there's something we haven't considered or don't understand the significance of. WHY sections MUST clearly establish what is happening (MOST IMPORTANT for retention) before introducing questions or mysteries. WHY sections should set up what will happen next, why it matters, and what the stakes are for upcoming WHAT sections. WHAT sections deliver core content, solutions, and information. Every WHAT scene must clearly communicate: what is happening, why it's important, and what the stakes are (what can go wrong, what can go right, what's at risk). Interleave WHY and WHAT sections strategically - WHY sections should create anticipation for upcoming WHAT sections by establishing what/why/stakes, but NEVER at the expense of clarity about what's happening. Use WHY/WHAT interleaving to create natural connections. For hook chapters, use mostly WHY sections. CRITICAL: For each scene, provide narration_instructions as ONE SENTENCE focusing on a single emotion from the emotion field. Keep it simple: 'Focus on [emotion].' Examples: 'Focus on tension.' or 'Focus on contemplation.' The narration_instructions should flow smoothly between scenes - if previous scene was 'Focus on tension', next might be 'Focus on concern' (gradual progression). Avoid overly dramatic language. Avoid any meta references to chapters, production elements, or the script structure. Focus on what actually happened, why it mattered, and how it felt."""
     content = llm_utils.generate_text(
         messages=[
-            {"role": "system", "content": "You are a YouTuber creating documentary content. Write narration from YOUR perspective - this is YOUR script that YOU wrote. Tell the story naturally, directly to the viewer. CRITICAL: Use third person narration - you are speaking ABOUT the main character (he/she/they), not AS the main character. The narrator tells the story of the person, not in their voice. THREE PRINCIPLES (every scene must satisfy all three): (1) The viewer must know WHAT IS HAPPENING - establish the situation, who is involved, where we are. (2) The viewer must know WHY IT IS IMPORTANT - why this moment matters, its significance. (3) The viewer must know WHAT COULD GO WRONG - what's at risk, what failure would mean. Check every scene against these three. CRITICAL - DEPTH AND CONTEXT: Viewers need enough context to understand every scene. Establish the situation before the event: who is involved, where we are, why this moment is happening. When you introduce a place, person, or concept (e.g. a battle, a document, a political crisis), give one phrase of context so a general viewer isn't lost. Avoid name-dropping without explanation. After major events, briefly note what it changes or what would have happened otherwise. Use 2-4 sentences per scene when context demands it—prioritize clarity and depth over brevity. CRITICAL FOR RETENTION - AVOID VIEWER CONFUSION: The biggest issue for retention is viewer confusion. WHY sections MUST ensure the viewer knows WHAT IS HAPPENING in the story - provide clear context, establish the situation, and make sure viewers understand the basic facts before introducing mysteries or questions. Don't create confusion by being vague about what's happening. CRITICAL: Create a SEAMLESS JOURNEY through the video - scenes should feel CONNECTED, not like consecutive pieces of disjoint information (A and B and C). Each scene should build on the previous scene, reference what came before naturally, and show how events connect. CRITICAL: Every scene must be classified as WHY or WHAT. WHY sections frame mysteries, problems, questions, obstacles, counterintuitive information, secrets, or suggest there's something we haven't considered or don't understand the significance of. WHY sections MUST clearly establish what is happening (MOST IMPORTANT for retention) before introducing questions or mysteries. WHY sections should set up what will happen next, why it matters, and what the stakes are for upcoming WHAT sections. WHAT sections deliver core content, solutions, and information. Every WHAT scene must clearly communicate: what is happening, why it's important, and what the stakes are (what can go wrong, what can go right, what's at risk). Interleave WHY and WHAT sections strategically - WHY sections should create anticipation for upcoming WHAT sections by establishing what/why/stakes, but NEVER at the expense of clarity about what's happening. Use WHY/WHAT interleaving to create natural connections. For hook chapters, use mostly WHY sections. CRITICAL: For each scene, provide narration_instructions as ONE SENTENCE focusing on a single emotion from the emotion field. Keep it simple: 'Focus on [emotion].' Examples: 'Focus on tension.' or 'Focus on contemplation.' The narration_instructions should flow smoothly between scenes - if previous scene was 'Focus on tension', next might be 'Focus on concern' (gradual progression). Avoid overly dramatic language. Avoid any meta references to chapters, production elements, or the script structure. Focus on what actually happened, why it mattered, and how it felt. Respond with valid JSON array only."},
+            {"role": "system", "content": scene_system},
             {"role": "user", "content": scene_prompt}
         ],
         temperature=0.85,
+        response_json_schema=SCENES_ARRAY_SCHEMA,
     )
     scenes = json.loads(clean_json_response(content))
     
     if not isinstance(scenes, list):
         raise ValueError(f"Expected array, got {type(scenes)}")
     
-    # Validate that each scene has required fields
+    # Validate that each scene has required fields and add chapter_num for music track alignment
     for i, scene in enumerate(scenes):
         if 'year' not in scene:
             raise ValueError(f"Scene {i+1} missing required 'year' field")
@@ -389,7 +546,7 @@ Respond with JSON array:
             raise ValueError(f"Scene {i+1} missing required 'scene_type' field")
         if scene.get('scene_type') not in ['WHY', 'WHAT']:
             raise ValueError(f"Scene {i+1} has invalid 'scene_type' value: {scene.get('scene_type')}. Must be 'WHY' or 'WHAT'")
-    
+        scene['chapter_num'] = chapter_num
     return scenes
 
 
@@ -400,21 +557,31 @@ Respond with JSON array:
 # are now imported from build_scripts_utils above (see imports section at the top)
 
 
-def generate_short_outline(person: str, selected_hook: dict = None, short_num: int = 1, total_shorts: int = 3, birth_year: int = None, death_year: int = None) -> dict:
-    """Generate a trailer outline for a YouTube Short based on a hook from the intro chapter.
-    All shorts use the same shared trailer-style prompt.
-    """
+def generate_short_outline(person: str, outline: dict, short_num: int = 1, total_shorts: int = 3, birth_year: int = None, death_year: int = None, previously_used_topics: list[str] | None = None) -> dict:
+    """Generate a trailer outline for a YouTube Short. LLM picks the best topic from the full documentary outline."""
     import prompt_builders
-    
-    outline_prompt = prompt_builders.build_short_outline_prompt(person, selected_hook, short_num, total_shorts)
 
+    # Discover available music moods for LLM to pick (shorts get 1 song, LLM picks mood)
+    try:
+        from biopic_music_config import get_available_moods
+        available_moods = get_available_moods()
+    except ImportError:
+        available_moods = ["relaxing", "passionate", "happy"]
+
+    outline_prompt = prompt_builders.build_short_outline_prompt(
+        person, outline, short_num, total_shorts,
+        available_moods=available_moods,
+        previously_used_topics=previously_used_topics,
+    )
+
+    short_system = f"You create high-energy viral trailers. Every word must grab attention and create curiosity. Focus on making viewers NEED to watch the full video. {prompt_builders.get_biopic_audience_profile()} CRITICAL: For each scene, provide narration_instructions as ONE SENTENCE focusing on a single emotion from the emotion field. Keep it simple: 'Focus on [emotion].' Examples: 'Focus on tension.' or 'Focus on urgency.' The narration_instructions should flow smoothly between scenes - if previous scene was 'Focus on tension', next might be 'Focus on intensity' (gradual progression). Avoid overly dramatic language."
     content = llm_utils.generate_text(
         messages=[
-            {"role": "system", "content": "You create high-energy viral trailers. Every word must grab attention and create curiosity. Focus on making viewers NEED to watch the full video. CRITICAL: For each scene, provide narration_instructions as ONE SENTENCE focusing on a single emotion from the emotion field. Keep it simple: 'Focus on [emotion].' Examples: 'Focus on tension.' or 'Focus on urgency.' The narration_instructions should flow smoothly between scenes - if previous scene was 'Focus on tension', next might be 'Focus on intensity' (gradual progression). Avoid overly dramatic language. Respond with valid JSON only. You MUST respond with a single JSON object (not an array) containing short_title, short_description, tags, thumbnail_prompt, hook_expansion, key_facts."},
+            {"role": "system", "content": short_system},
             {"role": "user", "content": outline_prompt}
         ],
         temperature=0.9,
-        response_format={"type": "json_object"},
+        response_json_schema=SHORT_OUTLINE_SCHEMA,
     )
     data = json.loads(clean_json_response(content))
     # LLM sometimes returns a list instead of an object; normalize to dict
@@ -422,6 +589,9 @@ def generate_short_outline(person: str, selected_hook: dict = None, short_num: i
         data = data[0]
     elif not isinstance(data, dict):
         raise ValueError(f"Short outline must be a JSON object, got {type(data).__name__}")
+    # Fallback music_mood for legacy or incomplete LLM output
+    if not data.get("music_mood") or not isinstance(data.get("music_mood"), str):
+        data["music_mood"] = available_moods[0] if available_moods else "passionate"
     return data
 
 
@@ -445,6 +615,8 @@ HOOK EXPANSION: {hook_expansion}
 KEY FACTS TO USE:
 {facts_str}
 
+{prompt_builders.get_biopic_audience_profile()}
+
 CRITICAL: Scenes 1-3 are HIGH-ENERGY TRAILER (WHY) that build the hook and end with a clear QUESTION. Scene 4 ANSWERS that question (WHAT scene - payoff), then invites viewers to the full documentary.
 
 {prompt_builders.get_why_what_paradigm_prompt(is_trailer=True)}
@@ -457,7 +629,6 @@ CRITICAL: Scenes 1-3 are HIGH-ENERGY TRAILER (WHY) that build the hook and end w
 
 {prompt_builders.get_image_prompt_guidelines(person, birth_year, death_year, "9:16 vertical", is_trailer=True)}
 
-Respond with JSON array of exactly 4 scenes (scenes 1-3 WHY, scene 4 WHAT - answers the question from scene 3):
 [
   {{"id": 1, "title": "2-4 words", "narration": "HIGH ENERGY - expand the hook, create curiosity, make viewers NEED to know more", "scene_type": "WHY", "image_prompt": "Dramatic, attention-grabbing visual including {person}'s age at this time ({birth_year if birth_year else 'unknown'}), 9:16 vertical", "emotion": "High energy emotion (e.g., 'urgent', 'shocking', 'tense', 'intense'). CRITICAL: Emotions must flow SMOOTHLY between scenes - only change gradually.", "narration_instructions": "ONE SENTENCE: Focus on a single emotion from the emotion field. Example: 'Focus on tension.' or 'Focus on urgency.'", "year": "YYYY or YYYY-YYYY"}},
   {{"id": 2, "title": "...", "narration": "HIGH ENERGY - build the hook, escalate curiosity, deepen the mystery", "scene_type": "WHY", "image_prompt": "Dramatic, attention-grabbing visual including {person}'s age at this time, 9:16 vertical", "emotion": "High energy emotion - must be a GRADUAL progression from scene 1's emotion (e.g., if scene 1 was 'tense', this might be 'intense' or 'urgent', not 'calm').", "narration_instructions": "ONE SENTENCE: Focus on a single emotion from the emotion field, flowing smoothly from scene 1. Example: if scene 1 was 'Focus on tension.', this might be 'Focus on intensity.'", "year": "YYYY or YYYY-YYYY"}},
@@ -475,10 +646,11 @@ IMPORTANT:
 
     content = llm_utils.generate_text(
         messages=[
-            {"role": "system", "content": "You create high-energy viral shorts. Write narration from YOUR perspective - this is YOUR script. Use third person narration - you are speaking ABOUT the main character (he/she/they), not AS the main character. CRITICAL: Scenes 1-3 are WHY scenes (build the hook, end scene 3 with a clear QUESTION). Scene 4 is a WHAT scene that ANSWERS that question (payoff), then invites viewers to the full documentary. WHY scenes MUST ensure the viewer knows WHAT IS HAPPENING - provide clear context before introducing mysteries. High energy in 1-3; scene 4 delivers satisfying resolution. Simple, clear, punchy language. CRITICAL: For each scene, provide narration_instructions as ONE SENTENCE focusing on a single emotion from the emotion field. Keep it simple: 'Focus on [emotion].' The narration_instructions should flow smoothly between scenes. Avoid overly dramatic language. Respond with valid JSON array only."},
+            {"role": "system", "content": f"You create high-energy viral shorts. Write narration from YOUR perspective - this is YOUR script. Use third person narration - you are speaking ABOUT the main character (he/she/they), not AS the main character. {prompt_builders.get_biopic_audience_profile()} CRITICAL: Scenes 1-3 are WHY scenes (build the hook, end scene 3 with a clear QUESTION). Scene 4 is a WHAT scene that ANSWERS that question (payoff), then invites viewers to the full documentary. WHY scenes MUST ensure the viewer knows WHAT IS HAPPENING - provide clear context before introducing mysteries. High energy in 1-3; scene 4 delivers satisfying resolution. Simple, clear, punchy language. CRITICAL: For each scene, provide narration_instructions as ONE SENTENCE focusing on a single emotion from the emotion field. Keep it simple: 'Focus on [emotion].' The narration_instructions should flow smoothly between scenes. Avoid overly dramatic language."},
             {"role": "user", "content": scene_prompt}
         ],
         temperature=0.9,
+        response_json_schema=SCENES_ARRAY_SCHEMA,
     )
     scenes = json.loads(clean_json_response(content))
     
@@ -499,17 +671,15 @@ IMPORTANT:
     return scenes
 
 
-def generate_shorts(person_of_interest: str, main_title: str, global_block: str, outline: dict, base_output_path: str, hook_chapter_scenes: list = None):
-    """Generate YouTube Shorts (4 scenes each: scenes 1-3 build hook and end with a question, scene 4 answers it)."""
-    if hook_chapter_scenes is None:
-        hook_chapter_scenes = []
+def generate_shorts(person_of_interest: str, main_title: str, global_block: str, outline: dict, base_output_path: str):
+    """Generate YouTube Shorts (4 scenes each). LLM picks the best topic from the full documentary outline."""
     if config.num_shorts == 0:
         print("\n[SHORTS] Skipped (--shorts 0)")
         return []
     
     print(f"\n{'='*60}")
     print(f"[SHORTS] Generating {config.num_shorts} YouTube Short(s)")
-    print(f"[SHORTS] Structure: {config.total_short_scenes} scenes each (high-energy trailers from intro hooks)")
+    print(f"[SHORTS] Structure: {config.total_short_scenes} scenes each (LLM picks best topic from full outline)")
     print(f"{'='*60}")
     
     SHORTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -517,62 +687,37 @@ def generate_shorts(person_of_interest: str, main_title: str, global_block: str,
     
     generated_shorts = []
     base_name = Path(base_output_path).stem.replace("_script", "")
-    previously_used_hooks = []  # Track which hooks have been used
     
-    # Extract hooks from intro chapter scenes
-    # Hook chapter scenes are scenes 1 to scenes_per_chapter
-    # We want scenes 2 to scenes_per_chapter (skip scene 1 which is the intro)
-    available_hooks = []
-    if hook_chapter_scenes:
-        # hook_chapter_scenes should already be filtered to scenes 2 to scenes_per_chapter
-        # But let's be safe and filter by scene ID
-        for scene in hook_chapter_scenes:
-            scene_id = scene.get("id", 0)
-            # Only include scenes from chapter 1 (scenes 1 to scenes_per_chapter), but skip scene 1 (intro)
-            if 2 <= scene_id <= config.scenes_per_chapter:
-                available_hooks.append({
-                    "scene_id": scene_id,
-                    "title": scene.get("title", ""),
-                    "narration": scene.get("narration", ""),
-                    "year": scene.get("year", "")
-                })
-        print(f"[SHORTS] Extracted {len(available_hooks)} hooks from intro chapter (scenes 2-{config.scenes_per_chapter})")
-    
-    if not available_hooks:
-        print(f"[SHORTS] WARNING: No hooks available from intro chapter. Shorts may not be generated properly.")
-    
-    # STEP 1: Generate all outlines sequentially (selecting different hooks)
-    print(f"\n[OPTIMIZATION] Step 1: Generating all short outlines from intro hooks...")
+    # STEP 1: Generate all outlines sequentially (LLM picks from full outline, ensuring no topic repeat)
+    print(f"\n[OPTIMIZATION] Step 1: Generating all short outlines from full documentary outline...")
     short_outlines = []
+    previously_used_topics = []  # Track topics to prevent repeats across shorts
     for short_num in range(1, config.num_shorts + 1):
-        print(f"\n[SHORT {short_num}/{config.num_shorts}] Creating trailer outline from intro hook...")
-        
-        # Select a hook that hasn't been used yet
-        selected_hook = None
-        if available_hooks:
-            # Try to find an unused hook
-            for hook in available_hooks:
-                hook_id = hook.get("scene_id")
-                if hook_id not in previously_used_hooks:
-                    selected_hook = hook
-                    previously_used_hooks.append(hook_id)
-                    break
-            
-            # If all hooks used, cycle back (shouldn't happen with 3 shorts and 4 scenes, but handle it)
-            if not selected_hook and available_hooks:
-                selected_hook = available_hooks[(short_num - 1) % len(available_hooks)]
-                print(f"[SHORTS]   • Reusing hook from Scene {selected_hook.get('scene_id')} (all hooks used)")
-        else:
-            print(f"[SHORTS]   • WARNING: No hooks available, generating without hook")
+        print(f"\n[SHORT {short_num}/{config.num_shorts}] Picking best topic from full outline...")
+        if previously_used_topics:
+            print(f"[SHORTS]   • Avoiding topics already used: {', '.join(previously_used_topics[:3])}{'...' if len(previously_used_topics) > 3 else ''}")
         
         short_outline = generate_short_outline(
             person=person_of_interest,
-            selected_hook=selected_hook,
+            outline=outline,
             short_num=short_num,
             total_shorts=config.num_shorts,
             birth_year=outline.get('birth_year'),
-            death_year=outline.get('death_year')
+            death_year=outline.get('death_year'),
+            previously_used_topics=previously_used_topics,
         )
+        
+        # Add this short's topic to the exclusion list so next shorts pick different topics
+        short_title = short_outline.get('short_title', '')
+        hook_expansion = short_outline.get('hook_expansion', '')
+        if short_title:
+            previously_used_topics.append(short_title)
+        # Also add key topic from hook_expansion (e.g. "Verrocchio/Baptism of Christ") to catch semantic overlap
+        if hook_expansion:
+            # Extract a concise topic: first 60 chars often captures the main subject
+            topic_snippet = hook_expansion[:60].strip() + ("..." if len(hook_expansion) > 60 else "")
+            if topic_snippet and topic_snippet not in previously_used_topics:
+                previously_used_topics.append(topic_snippet)
         
         short_outlines.append((short_num, short_outline))
         print(f"[SHORT {short_num}] Title: {short_outline.get('short_title', f'Short {short_num}')}")
@@ -601,13 +746,18 @@ def generate_shorts(person_of_interest: str, main_title: str, global_block: str,
             # Determine short file path first for diff path
             short_file = SHORTS_DIR / f"{base_name}_short{short_num}.json"
             diff_path = short_file.parent / f"{short_file.stem}_refinement_diff.json" if config.generate_refinement_diffs else None
-            all_scenes, refinement_diff = build_scripts_utils.refine_scenes(all_scenes, person_of_interest, is_short=True, chapter_context=short_context, diff_output_path=diff_path, subject_type="person", skip_significance_scenes=False, scenes_per_chapter=None)
+            all_scenes, refinement_diff = build_scripts_utils.refine_scenes(all_scenes, person_of_interest, is_short=True, chapter_context=short_context, diff_output_path=diff_path, subject_type="person", skip_significance_scenes=True, scenes_per_chapter=None)
             
-            # Generate thumbnail (if enabled) - using shared WHY scene prompt
+            # Generate thumbnail (if enabled) - use short-specific prompt + audience targeting
             thumbnail_path = None
             if config.generate_short_thumbnails:
                 import prompt_builders
-                thumbnail_prompt = prompt_builders.get_thumbnail_prompt_why_scene("9:16")
+                short_thumb = short_outline.get("thumbnail_prompt", "")
+                thumbnail_prompt = f"""{short_thumb}
+
+{prompt_builders.get_thumbnail_prompt_why_scene("9:16")}
+
+{prompt_builders.get_thumbnail_audience_targeting()}"""
                 thumb_file = THUMBNAILS_DIR / f"{base_name}_short{short_num}_thumbnail.jpeg"
                 thumbnail_path = build_scripts_utils.generate_thumbnail(thumbnail_prompt, thumb_file, "1024x1536", config.generate_short_thumbnails)
             
@@ -720,7 +870,7 @@ def generate_script(person_of_interest: str, output_path: str):
     print(f"{'='*60}")
     
     if config.generate_main:
-        print(f"[CONFIG] Main video: {config.chapters} chapters × {config.scenes_per_chapter} scenes = {config.total_scenes} scenes")
+        print(f"[CONFIG] Main video: {config.chapters} chapters, target ~{config.target_total_scenes} scenes (variable per chapter)")
     else:
         print(f"[CONFIG] Main video: SKIPPED")
     if config.num_shorts > 0:
@@ -730,9 +880,12 @@ def generate_script(person_of_interest: str, output_path: str):
     print(f"[CONFIG] Thumbnails: {'Yes' if config.generate_thumbnails else 'No'}")
     print(f"[CONFIG] Model: {llm_utils.get_text_model_display()}")
     
-    # Step 1: Generate detailed outline (needed for both main and shorts)
+    # Step 1a: Generate landmark events (for adding detail when we cover these events—does NOT change outline structure)
+    landmarks = generate_landmark_events(person_of_interest)
+
+    # Step 1b: Generate detailed outline (needed for both main and shorts)
     print("\n[STEP 1] Creating life outline...")
-    outline = generate_outline(person_of_interest)
+    outline = generate_outline(person_of_interest, landmark_events=landmarks)
     chapters = outline.get("chapters", [])
     
     if config.generate_main and len(chapters) < config.chapters:
@@ -746,11 +899,11 @@ def generate_script(person_of_interest: str, output_path: str):
 
     content = llm_utils.generate_text(
         messages=[
-            {"role": "system", "content": "Documentary producer. Respond with valid JSON only."},
+            {"role": "system", "content": f"Documentary producer. Create metadata (title, tag line, thumbnail description, global_block) tailored for our target audience. {prompt_builders.get_biopic_audience_profile()}"},
             {"role": "user", "content": initial_metadata_prompt}
         ],
         temperature=0.7,
-        response_format={"type": "json_object"},
+        response_json_schema=INITIAL_METADATA_SCHEMA,
     )
     initial_metadata = json.loads(clean_json_response(content))
     
@@ -769,10 +922,12 @@ def generate_script(person_of_interest: str, output_path: str):
         THUMBNAILS_DIR.mkdir(parents=True, exist_ok=True)
         thumbnail_path = THUMBNAILS_DIR / f"{Path(output_path).stem}_thumbnail.png"
         
-        # Use shared WHY scene thumbnail prompt
+        # Use shared WHY scene thumbnail prompt + audience targeting
         thumbnail_prompt = f"""{thumbnail_description}
 
-{prompt_builders.get_thumbnail_prompt_why_scene("16:9")}"""
+{prompt_builders.get_thumbnail_prompt_why_scene("16:9")}
+
+{prompt_builders.get_thumbnail_audience_targeting()}"""
         
         generated_thumb = build_scripts_utils.generate_thumbnail(thumbnail_prompt, thumbnail_path, "1024x1024", config.generate_thumbnails)
     
@@ -781,7 +936,8 @@ def generate_script(person_of_interest: str, output_path: str):
     planted_seeds = []  # Track details from early chapters for callbacks
     
     if config.generate_main:
-        print(f"\n[STEP 3] Generating {config.total_scenes} scenes from {len(chapters)} chapters...")
+        total_planned = sum(ch.get('num_scenes', config.scenes_per_chapter_fallback) for ch in chapters)
+        print(f"\n[STEP 3] Generating ~{total_planned} scenes from {len(chapters)} chapters...")
         
         # Get central theme, narrative arc, and plots from outline
         central_theme = outline.get('central_theme', '')
@@ -802,16 +958,20 @@ def generate_script(person_of_interest: str, output_path: str):
                                (estimated_time >= 55 and estimated_time <= 65) or \
                                (estimated_time >= 85 and estimated_time <= 95)
             
+            chapter_scene_budget = chapter.get('num_scenes', config.scenes_per_chapter_fallback)
             print(f"\n[CHAPTER {chapter['chapter_num']}/{len(chapters)}] {chapter['title']}")
             if is_retention_hook:
                 print(f"  ⚠ RETENTION HOOK POINT (~{estimated_time}s mark)")
-            print(f"  Generating {config.scenes_per_chapter} scenes...")
-            
+            print(f"  Generating scene outline for {chapter_scene_budget} scenes...")
+            scene_blocks = generate_scene_outline(chapter, person_of_interest, chapter_scene_budget, landmarks=landmarks)
+            print(f"  Generating {chapter_scene_budget} scenes ({len(scene_blocks)} blocks)...")
+
             try:
                 scenes = generate_scenes_for_chapter(
                     person=person_of_interest,
                     chapter=chapter,
-                    scenes_per_chapter=config.scenes_per_chapter,
+                    scene_blocks=scene_blocks,
+                    chapter_scene_budget=chapter_scene_budget,
                     start_id=start_id,
                     global_style=global_block,
                     prev_chapter=prev_chapter,
@@ -824,11 +984,12 @@ def generate_script(person_of_interest: str, output_path: str):
                     death_year=outline.get('death_year'),
                     tag_line=tag_line if i == 0 else None,  # Only pass tag_line for first chapter (hook chapter)
                     overarching_plots=overarching_plots,
-                    sub_plots=sub_plots
+                    sub_plots=sub_plots,
+                    landmarks=landmarks,
                 )
                 
-                if len(scenes) != config.scenes_per_chapter:
-                    print(f"  [WARNING] Got {len(scenes)} scenes, expected {config.scenes_per_chapter}")
+                if len(scenes) != chapter_scene_budget:
+                    print(f"  [WARNING] Got {len(scenes)} scenes, expected {chapter_scene_budget}")
                 
                 all_scenes.extend(scenes)
                 print(f"  ✓ {len(scenes)} scenes (total: {len(all_scenes)})")
@@ -891,7 +1052,16 @@ def generate_script(person_of_interest: str, output_path: str):
         print("\n[STEP 3.4] Refining main video scenes...")
         chapter_summaries = "\n".join([f"Chapter {ch['chapter_num']}: {ch['title']} ({ch.get('year_range', 'Unknown')}) - {ch['summary']}" for ch in chapters])
         diff_path = Path(output_path).parent / f"{Path(output_path).stem}_refinement_diff.json" if config.generate_refinement_diffs else None
-        all_scenes, refinement_diff = build_scripts_utils.refine_scenes(all_scenes, person_of_interest, is_short=False, chapter_context=chapter_summaries, diff_output_path=diff_path, subject_type="person", skip_significance_scenes=False, scenes_per_chapter=config.scenes_per_chapter, script_type="biopic")
+        # Build chapter boundaries for variable scene counts (exclude ch1 + transition from pivotal moments)
+        chapter_boundaries = []
+        cumulative = 0
+        for ch in chapters:
+            n = ch.get('num_scenes', config.scenes_per_chapter_fallback)
+            start = cumulative + 1
+            end = cumulative + n
+            chapter_boundaries.append((start, end))
+            cumulative += n
+        all_scenes, refinement_diff = build_scripts_utils.refine_scenes(all_scenes, person_of_interest, is_short=False, chapter_context=chapter_summaries, diff_output_path=diff_path, subject_type="person", skip_significance_scenes=True, chapter_boundaries=chapter_boundaries, script_type="biopic")
         
         # Save progress after refinement (metadata and shorts not yet generated)
         _save_biopic_script(
@@ -932,14 +1102,14 @@ Generate JSON:
   "pinned_comment": "An engaging question or comment to pin below the video (1-2 sentences max). Should: spark discussion, ask a thought-provoking question about the person/story, create curiosity, encourage viewers to share their thoughts/opinions, be conversational and inviting. Examples: 'Which moment from their story surprised you most? Drop a comment below!', 'What do you think was their greatest challenge? Share your thoughts!', 'This story shows how one person can change everything. What impact do you want to make?'. Should feel authentic, not clickbaity - genuine curiosity about viewer perspectives."
 }}"""
 
-        system_role = "Documentary producer. Create compelling metadata that accurately reflects the actual content."
+        system_role = f"Documentary producer. Create compelling metadata (description, tags, pinned comment) that accurately reflects the actual content and is tailored for our target audience. {prompt_builders.get_biopic_audience_profile()}"
         content = llm_utils.generate_text(
             messages=[
-                {"role": "system", "content": f"{system_role} Respond with valid JSON only."},
+                {"role": "system", "content": system_role},
                 {"role": "user", "content": final_metadata_prompt}
             ],
             temperature=0.7,
-            response_format={"type": "json_object"},
+            response_json_schema=FINAL_METADATA_SCHEMA,
         )
         final_metadata = json.loads(clean_json_response(content))
         video_description = final_metadata.get("video_description", "")
@@ -973,22 +1143,9 @@ Generate JSON:
         tags = ""
         pinned_comment = ""
     
-    # Step 4: Generate Shorts (extract hooks from intro chapter)
+    # Step 4: Generate Shorts (LLM picks best topic from full outline)
     print("\n[STEP 4] Generating YouTube Shorts...")
-    hook_chapter_scenes = []
-    if config.generate_main and all_scenes:
-        # Extract hook chapter scenes (chapter 1 scenes, excluding intro scene)
-        # Hook chapter = scenes 1 to scenes_per_chapter
-        # We want scenes 2 to scenes_per_chapter (skip intro)
-        hook_start_idx = 1  # Skip scene 1 (intro)
-        hook_end_idx = config.scenes_per_chapter
-        for i in range(hook_start_idx, min(hook_end_idx, len(all_scenes))):
-            if i < config.scenes_per_chapter:  # Only include hook chapter scenes
-                hook_chapter_scenes.append(all_scenes[i])
-        print(f"[SHORTS] Extracted {len(hook_chapter_scenes)} hooks from intro chapter (scenes 2-{config.scenes_per_chapter})")
-    
-    # Generate shorts
-    shorts_info = generate_shorts(person_of_interest, title, global_block, outline, output_path, hook_chapter_scenes=hook_chapter_scenes)
+    shorts_info = generate_shorts(person_of_interest, title, global_block, outline, output_path)
     
     # Step 5: Save
     print("\n[STEP 5] Saving script...")
@@ -1027,6 +1184,101 @@ Generate JSON:
     return output_data
 
 
+def regenerate_thumbnail(script_path: str, include_shorts: bool = False) -> dict:
+    """
+    Regenerate thumbnail(s) for an existing biopic script.
+    Loads the script, generates thumbnail from thumbnail_description, updates and saves.
+    
+    Args:
+        script_path: Path to the script JSON file
+        include_shorts: If True, also regenerate thumbnails for shorts listed in metadata.shorts
+    
+    Returns:
+        Updated script data (with new thumbnail_path)
+    """
+    import prompt_builders
+    
+    path = Path(script_path)
+    if not path.exists():
+        raise FileNotFoundError(f"Script not found: {script_path}")
+    
+    with open(path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    
+    metadata = data.get("metadata", {})
+    if not metadata:
+        raise ValueError("Script has no metadata")
+    
+    thumbnail_description = metadata.get("thumbnail_description")
+    if not thumbnail_description:
+        raise ValueError("Script metadata has no thumbnail_description - cannot regenerate thumbnail")
+    
+    THUMBNAILS_DIR.mkdir(parents=True, exist_ok=True)
+    stem = path.stem
+    
+    # Main video thumbnail
+    print("\n[THUMBNAIL] Regenerating main video thumbnail...")
+    thumb_file = THUMBNAILS_DIR / f"{stem}_thumbnail.png"
+    thumbnail_prompt = f"""{thumbnail_description}
+
+{prompt_builders.get_thumbnail_prompt_why_scene("16:9")}
+
+{prompt_builders.get_thumbnail_audience_targeting()}"""
+    
+    generated_thumb = build_scripts_utils.generate_thumbnail(
+        thumbnail_prompt, thumb_file, "1024x1024", generate_thumbnails=True
+    )
+    metadata["thumbnail_path"] = str(generated_thumb) if generated_thumb else None
+    
+    # Short thumbnails (optional)
+    if include_shorts:
+        shorts_info = metadata.get("shorts", [])
+        for short_entry in shorts_info:
+            short_file = short_entry.get("file")
+            if not short_file:
+                continue
+            short_path = Path(short_file)
+            if not short_path.is_absolute():
+                # Try cwd, then project root (parent of scripts dir)
+                for base in [Path.cwd(), path.resolve().parent.parent]:
+                    candidate = base / short_file
+                    if candidate.exists():
+                        short_path = candidate
+                        break
+            if not short_path.exists():
+                print(f"[THUMBNAIL] Short not found, skipping: {short_file}")
+                continue
+            with open(short_path, "r", encoding="utf-8") as f:
+                short_data = json.load(f)
+            short_metadata = short_data.get("metadata", {})
+            short_outline = short_metadata.get("outline", short_data.get("outline", {}))
+            short_thumb = short_outline.get("thumbnail_prompt", "")
+            if not short_thumb:
+                print(f"[THUMBNAIL] Short has no thumbnail_prompt, skipping: {short_file}")
+                continue
+            short_id = short_metadata.get("short_id", short_path.stem.split("_short")[-1].split("_")[0])
+            short_stem = short_path.stem
+            thumb_prompt = f"""{short_thumb}
+
+{prompt_builders.get_thumbnail_prompt_why_scene("9:16")}
+
+{prompt_builders.get_thumbnail_audience_targeting()}"""
+            short_thumb_file = THUMBNAILS_DIR / f"{short_stem}_thumbnail.jpeg"
+            print(f"[THUMBNAIL] Regenerating short {short_id} thumbnail...")
+            short_generated = build_scripts_utils.generate_thumbnail(
+                thumb_prompt, short_thumb_file, "1024x1536", generate_thumbnails=True
+            )
+            short_metadata["thumbnail_path"] = str(short_generated) if short_generated else None
+            with open(short_path, "w", encoding="utf-8") as f:
+                json.dump(short_data, f, indent=2, ensure_ascii=False)
+    
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+    
+    print(f"[THUMBNAIL] Saved script: {path}")
+    return data
+
+
 def parse_args():
     parser = argparse.ArgumentParser(
         description="Generate documentary scripts with AI",
@@ -1038,6 +1290,12 @@ Examples:
 
   # Quick test (4 scenes main, 1 short with 4 scenes, no thumbnails)
   python build_script_biopic.py "Albert Einstein" --test
+
+  # Regenerate thumbnail for existing script
+  python build_script_biopic.py --thumbnail-only scripts/leonardo_vinci.json
+
+  # Regenerate main + short thumbnails for existing script
+  python build_script_biopic.py --thumbnail-only scripts/leonardo_vinci.json --short-thumbnails
 
   # Custom main video settings
   python build_script_biopic.py "Albert Einstein" --chapters 5 --scenes 3
@@ -1056,7 +1314,7 @@ Examples:
         """
     )
     
-    parser.add_argument("person", help="Person to create documentary about")
+    parser.add_argument("person", nargs="?", help="Person to create documentary about")
     parser.add_argument("output", nargs="?", help="Output JSON file (default: <person>_script.json)")
     
     # Quick test mode
@@ -1072,8 +1330,8 @@ Examples:
     # Main video settings (defaults from config)
     parser.add_argument("--chapters", type=int, default=config.chapters,
                         help=f"Main video outline chapters (default: {config.chapters})")
-    parser.add_argument("--scenes", type=int, default=config.scenes_per_chapter,
-                        help=f"Scenes per main chapter (default: {config.scenes_per_chapter}, total = chapters × scenes)")
+    parser.add_argument("--target-scenes", "--scenes", dest="target_scenes", type=int, default=config.target_total_scenes,
+                        help=f"Target total scenes - outline distributes across chapters (default: {config.target_total_scenes})")
     
     # Shorts settings (defaults from config)
     parser.add_argument("--shorts", type=int, default=config.num_shorts,
@@ -1081,10 +1339,12 @@ Examples:
     parser.add_argument("--short-scenes", type=int, default=config.short_scenes_per_chapter,
                         help=f"Scenes per short (default: {config.short_scenes_per_chapter}: build, build, cliffhanger)")
     
+    parser.add_argument("--thumbnail-only", metavar="SCRIPT", dest="thumbnail_only_script",
+                        help="Regenerate thumbnail for existing script (path to JSON); skips full generation")
     parser.add_argument("--no-thumbnails", action="store_true",
                         help="Skip main video thumbnail generation")
     parser.add_argument("--short-thumbnails", action="store_true",
-                        help="Generate thumbnails for shorts (disabled by default)")
+                        help="Generate thumbnails for shorts (disabled by default); with --thumbnail-only, also regen short thumbnails")
     parser.add_argument("--refinement-diffs", action="store_true",
                         help="Generate refinement diff JSON files showing what changed during scene refinement")
     
@@ -1096,10 +1356,40 @@ Examples:
 if __name__ == "__main__":
     args = parse_args()
     
+    # Thumbnail-only mode: regenerate thumbnail for existing script
+    if args.thumbnail_only_script:
+        if not args.person:
+            pass  # person not needed
+        if not os.getenv("OPENAI_API_KEY"):
+            print("ERROR: Set OPENAI_API_KEY environment variable first.")
+            sys.exit(1)
+        try:
+            script_data = regenerate_thumbnail(
+                args.thumbnail_only_script,
+                include_shorts=args.short_thumbnails
+            )
+            print("\n" + "="*60)
+            print("THUMBNAIL REGENERATED!")
+            print("="*60)
+            print(f"   Script: {args.thumbnail_only_script}")
+            if script_data.get("metadata", {}).get("thumbnail_path"):
+                print(f"   Thumbnail: {script_data['metadata']['thumbnail_path']}")
+            sys.exit(0)
+        except Exception as e:
+            print(f"\n[ERROR] {e}")
+            import traceback
+            traceback.print_exc()
+            sys.exit(1)
+    
+    # Normal mode: require person
+    if not args.person:
+        print("ERROR: Person required (e.g. 'Albert Einstein') or use --thumbnail-only <script.json>")
+        sys.exit(1)
+    
     # Apply test mode settings
     if args.test:
         config.chapters = 2
-        config.scenes_per_chapter = 2
+        config.target_total_scenes = 4
         config.num_shorts = 1
         config.short_chapters = 1
         config.short_scenes_per_chapter = 4
@@ -1109,7 +1399,7 @@ if __name__ == "__main__":
         print("[MODE] Test mode enabled")
     else:
         config.chapters = args.chapters
-        config.scenes_per_chapter = args.scenes
+        config.target_total_scenes = args.target_scenes
         config.num_shorts = args.shorts
         config.short_scenes_per_chapter = args.short_scenes
         config.generate_thumbnails = not args.no_thumbnails

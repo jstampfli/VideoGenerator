@@ -310,6 +310,8 @@ class Config:
     save_assets = False
     temp_dir = None
     is_vertical = False  # True for shorts (9:16), False for main videos (16:9)
+    biopic_music_enabled = True
+    biopic_music_volume = None  # dB; None = use default from biopic_music_config
     
     @property
     def output_resolution(self):
@@ -1512,6 +1514,270 @@ def apply_volume_to_audioclip(clip: AudioClip, volume_factor: float) -> AudioCli
     return AudioClip(volume_adjusted_audio, duration=clip.duration, fps=clip.fps)
 
 
+def _fit_song_to_duration(song_path: Path, required_duration: float) -> AudioFileClip | None:
+    """
+    Load an MP3 and fit it to required_duration by looping (if shorter) or trimming (if longer).
+    Returns AudioFileClip or None on failure.
+    """
+    try:
+        song = AudioFileClip(str(song_path))
+    except Exception as e:
+        print(f"[BIOPIC MUSIC] Warning: Could not load {song_path}: {e}")
+        return None
+
+    # MoviePy 2.x uses subclipped(), 1.x uses subclip()
+    subclip_fn = getattr(song, "subclipped", getattr(song, "subclip", None))
+    if subclip_fn is None:
+        try:
+            song.close()
+        except Exception:
+            pass
+        print("[BIOPIC MUSIC] Warning: Could not fit song to duration: clip has no subclip/subclipped method")
+        return None
+
+    try:
+        if song.duration < required_duration:
+            loops_needed = int(np.ceil(required_duration / song.duration))
+            clips = [song] * loops_needed
+            combined = concatenate_audioclips(clips)
+            if combined.duration > required_duration:
+                combined_subclip = getattr(combined, "subclipped", getattr(combined, "subclip", None))
+                if combined_subclip:
+                    combined = combined_subclip(0, required_duration)
+            # Don't close song: combined clip still reads from it
+            return combined
+        elif song.duration > required_duration:
+            trimmed = subclip_fn(0, required_duration)
+            # Don't close song: trimmed clip shares the reader
+            return trimmed
+        return song
+    except Exception as e:
+        print(f"[BIOPIC MUSIC] Warning: Could not fit song to duration: {e}")
+        try:
+            song.close()
+        except Exception:
+            pass
+        return None
+
+
+def build_biopic_music_track(metadata: dict | None, scene_audio_clips: list, total_duration: float,
+                            scenes: list[dict] | None = None, music_volume_db: float = None) -> AudioClip | None:
+    """
+    Build a continuous music track from biopic_music/ mood folders, one song per chapter.
+    Uses chapter.music_mood from outline (LLM-picked). Loops or trims songs to fit chapter duration.
+    Stitches chapters with crossfade.
+    When scenes have chapter_num (including significance and storyline completion scenes), groups by
+    chapter_num for correct alignment. Falls back to num_scenes-based boundaries for legacy scripts.
+    Returns AudioClip or None if music cannot be built (e.g., biopic_music/ missing).
+    """
+    try:
+        from collections import defaultdict
+        from biopic_music_config import (
+            BIOPIC_MUSIC_DIR,
+            BIOPIC_MUSIC_VOLUME_DB,
+            BIOPIC_MUSIC_CROSSFADE_SEC,
+            BIOPIC_MUSIC_DEFAULT_MOODS,
+        )
+    except ImportError:
+        print("[BIOPIC MUSIC] biopic_music_config not found, skipping")
+        return None
+
+    if not BIOPIC_MUSIC_DIR.exists() or not BIOPIC_MUSIC_DIR.is_dir():
+        print(f"[BIOPIC MUSIC] Directory {BIOPIC_MUSIC_DIR} not found, skipping")
+        return None
+
+    vol_db = music_volume_db if music_volume_db is not None else BIOPIC_MUSIC_VOLUME_DB
+    crossfade = BIOPIC_MUSIC_CROSSFADE_SEC
+
+    chapters = (metadata or {}).get("outline", {}).get("chapters") or (metadata or {}).get("chapters") or []
+    total_scenes_from_chapters = sum(ch.get("num_scenes", 0) for ch in chapters)
+    num_clips = len(scene_audio_clips)
+
+    # Scene-based mode: use chapter_num on scenes (handles significance + storyline completion)
+    use_scene_based = (
+        scenes is not None
+        and len(scenes) == num_clips
+        and any(s.get("chapter_num") for s in scenes)
+    )
+
+    # Single segment mode: no chapters, or scene count mismatch (e.g., --scene-id), or shorts
+    # Used for shorts (1 song) and --scene-id (filtered scenes). Shorts have metadata.outline.music_mood.
+    if not use_scene_based and (not chapters or num_clips != total_scenes_from_chapters):
+        outline = (metadata or {}).get("outline") or {}
+        mood = (outline.get("music_mood") or (metadata or {}).get("music_mood") or "").strip().lower()
+        default_mood = BIOPIC_MUSIC_DEFAULT_MOODS[0] if BIOPIC_MUSIC_DEFAULT_MOODS else "relaxing"
+        mood = mood or default_mood
+        mood_dir = BIOPIC_MUSIC_DIR / mood
+        songs = list(mood_dir.glob("*.mp3")) if mood_dir.exists() else []
+        if not songs:
+            for fallback in BIOPIC_MUSIC_DEFAULT_MOODS:
+                if fallback != mood:
+                    fallback_dir = BIOPIC_MUSIC_DIR / fallback
+                    if fallback_dir.exists():
+                        songs = list(fallback_dir.glob("*.mp3"))
+                        if songs:
+                            mood_dir = fallback_dir
+                            break
+        if not songs:
+            print(f"[BIOPIC MUSIC] No MP3s for mood '{mood}', skipping")
+            return None
+        song_path = random.choice(songs)
+        clip = _fit_song_to_duration(song_path, total_duration)
+        if clip is None:
+            return None
+        music = apply_volume_to_audioclip(clip, 10 ** (vol_db / 20.0))
+        return music
+
+    # Chapter-based mode: scene-based (chapter_num on scenes) or legacy (num_scenes from outline)
+    segment_clips = []
+    chapter_to_mood = {ch.get("chapter_num"): (ch.get("music_mood") or "relaxing").strip().lower() for ch in chapters if ch.get("chapter_num")}
+    # Shorts have chapter_num on scenes but no outline.chapters; use outline.music_mood
+    outline_mood = ((metadata or {}).get("outline") or {}).get("music_mood")
+    outline_mood = (outline_mood or "").strip().lower() or None
+
+    if use_scene_based:
+        # Group scenes by chapter_num; compute duration per chapter from actual scene_audio_clips
+        chapter_durations = defaultdict(float)
+        for i, scene in enumerate(scenes):
+            ch_num = scene.get("chapter_num") or 1
+            if i < len(scene_audio_clips):
+                chapter_durations[ch_num] += scene_audio_clips[i].duration + END_SCENE_PAUSE_LENGTH
+
+        for ch_num in sorted(chapter_durations.keys()):
+            chapter_duration = chapter_durations[ch_num]
+            if chapter_duration <= 0:
+                continue
+            mood = chapter_to_mood.get(ch_num) or outline_mood or "relaxing"
+            mood_dir = BIOPIC_MUSIC_DIR / mood
+            if not mood_dir.exists():
+                mood_dir = BIOPIC_MUSIC_DIR / (BIOPIC_MUSIC_DEFAULT_MOODS[0] if BIOPIC_MUSIC_DEFAULT_MOODS else "relaxing")
+            mp3s = list(mood_dir.glob("*.mp3"))
+            if not mp3s:
+                for fallback in BIOPIC_MUSIC_DEFAULT_MOODS:
+                    if fallback != mood:
+                        fallback_dir = BIOPIC_MUSIC_DIR / fallback
+                        if fallback_dir.exists():
+                            mp3s = list(fallback_dir.glob("*.mp3"))
+                            if mp3s:
+                                mood_dir = fallback_dir
+                                break
+            if not mp3s:
+                print(f"[BIOPIC MUSIC] No MP3s for mood '{mood}' (ch {ch_num}), skipping chapter")
+                continue
+            song_path = random.choice(mp3s)
+            clip = _fit_song_to_duration(song_path, chapter_duration)
+            if clip is not None:
+                segment_clips.append(clip)
+    else:
+        # Legacy: use num_scenes from outline (scene count must match)
+        scene_idx = 0
+        for ch in chapters:
+            num_scenes = ch.get("num_scenes", 0)
+            if num_scenes <= 0:
+                continue
+            chapter_duration = 0.0
+            for i in range(num_scenes):
+                if scene_idx + i < len(scene_audio_clips):
+                    chapter_duration += scene_audio_clips[scene_idx + i].duration + END_SCENE_PAUSE_LENGTH
+
+            mood = (ch.get("music_mood") or "relaxing").strip().lower()
+            mood_dir = BIOPIC_MUSIC_DIR / mood
+            if not mood_dir.exists():
+                mood_dir = BIOPIC_MUSIC_DIR / BIOPIC_MUSIC_DEFAULT_MOODS[0]
+            mp3s = list(mood_dir.glob("*.mp3"))
+            if not mp3s:
+                for fallback in BIOPIC_MUSIC_DEFAULT_MOODS:
+                    if fallback != mood:
+                        fallback_dir = BIOPIC_MUSIC_DIR / fallback
+                        if fallback_dir.exists():
+                            mp3s = list(fallback_dir.glob("*.mp3"))
+                            if mp3s:
+                                mood_dir = fallback_dir
+                                break
+            if not mp3s:
+                print(f"[BIOPIC MUSIC] No MP3s for mood '{mood}', skipping chapter")
+                scene_idx += num_scenes
+                continue
+
+            song_path = random.choice(mp3s)
+            clip = _fit_song_to_duration(song_path, chapter_duration)
+            if clip is not None:
+                segment_clips.append(clip)
+            scene_idx += num_scenes
+
+    if not segment_clips:
+        return None
+
+    # Prepend crossfade seconds of silence to each segment except the first.
+    # FFmpeg acrossfade overlaps the end of seg N with the start of seg N+1, so the next
+    # song starts fading in (crossfade_duration) seconds BEFORE the chapter boundary. By
+    # prepending silence to seg N+1, the crossfade overlaps seg N's end with silence, so
+    # the next song's content starts exactly at the chapter boundary.
+    if len(segment_clips) > 1 and crossfade > 0:
+        fps = getattr(segment_clips[0], "fps", 44100) or 44100
+
+        def _make_silence(t):
+            if np.isscalar(t):
+                return np.array([0.0, 0.0], dtype=np.float32)
+            return np.zeros((len(t), 2), dtype=np.float32)
+
+        for i in range(1, len(segment_clips)):
+            silence = AudioClip(_make_silence, duration=crossfade, fps=fps)
+            segment_clips[i] = concatenate_audioclips([silence, segment_clips[i]])
+
+    # Stitch segments
+    if len(segment_clips) == 1:
+        music = segment_clips[0]
+    else:
+        # Use FFmpeg acrossfade to chain segments
+        temp_dir = tempfile.mkdtemp(prefix="biopic_music_")
+        try:
+            wav_paths = []
+            for i, seg in enumerate(segment_clips):
+                p = Path(temp_dir) / f"seg_{i}.wav"
+                seg.write_audiofile(str(p), logger=None)
+                wav_paths.append(p)
+                seg.close()
+
+            if len(wav_paths) == 2:
+                filter_complex = f"[0][1]acrossfade=d={crossfade}:c1=tri:c2=tri[out]"
+            else:
+                chain = []
+                for i in range(1, len(wav_paths)):
+                    prev = "[0]" if i == 1 else f"[a{i-1}]"
+                    out_label = "[out]" if i == len(wav_paths) - 1 else f"[a{i}]"
+                    chain.append(f"{prev}[{i}]acrossfade=d={crossfade}:c1=tri:c2=tri{out_label}")
+                filter_complex = ";".join(chain)
+
+            out_wav = Path(temp_dir) / "mixed.wav"
+            cmd = ["ffmpeg", "-y"]
+            for p in wav_paths:
+                cmd.extend(["-i", str(p)])
+            cmd.extend(["-filter_complex", filter_complex, "-map", "[out]", str(out_wav)])
+            subprocess.run(cmd, check=True, capture_output=True)
+            music = AudioFileClip(str(out_wav))
+        finally:
+            try:
+                shutil.rmtree(temp_dir, ignore_errors=True)
+            except Exception:
+                pass
+
+    music = apply_volume_to_audioclip(music, 10 ** (vol_db / 20.0))
+    return music
+
+
+def mix_biopic_background_music(narration_audio: AudioClip, duration: float, metadata: dict | None,
+                                scene_audio_clips: list, scenes: list[dict] | None = None,
+                                music_volume_db: float = None) -> CompositeAudioClip:
+    """
+    Mix biopic background music under narration.
+    """
+    music_track = build_biopic_music_track(metadata, scene_audio_clips, duration, scenes=scenes, music_volume_db=music_volume_db)
+    if music_track is None:
+        return CompositeAudioClip([narration_audio])
+    return CompositeAudioClip([narration_audio, music_track])
+
+
 def mix_horror_background_audio(narration_audio: AudioFileClip, duration: float, 
                                 scenes: list[dict] = None,
                                 scene_audio_clips: list[AudioFileClip] = None,
@@ -2167,7 +2433,8 @@ def generate_audio_for_scene_with_retry(scene: dict) -> Path:
 
 def build_video(scenes_path: str, out_video_path: str | None = None, save_assets: bool = False, is_short: bool = False, scene_id: int | None = None, audio_only: bool = False,
                 is_horror: bool = False, horror_bg_enabled: bool = True, room_tone_volume: float = None, 
-                drone_volume: float = None, detail_volume: float = -30.0):
+                drone_volume: float = None, detail_volume: float = -30.0,
+                biopic_music_enabled: bool = True, biopic_music_volume: float = None):
     """
     Build a video from scenes JSON file.
     
@@ -2187,6 +2454,8 @@ def build_video(scenes_path: str, out_video_path: str | None = None, save_assets
     """
     config.save_assets = save_assets
     config.is_vertical = is_short
+    config.biopic_music_enabled = biopic_music_enabled
+    config.biopic_music_volume = biopic_music_volume
 
     # Set which narration instructions to use for TTS based on horror mode (--horror)
     global NARRATION_INSTRUCTIONS_FOR_TTS
@@ -2489,6 +2758,27 @@ def _build_video_impl(scenes_path: str, out_video_path: str | None = None, scene
             import traceback
             traceback.print_exc()
 
+    # Apply biopic background music if this is a biopic (non-horror) and biopic music is enabled
+    if not is_horror and getattr(config, "biopic_music_enabled", True):
+        biopic_vol = getattr(config, "biopic_music_volume", None)
+        try:
+            print("\n[BIOPIC MUSIC] Adding background music...")
+            mixed_audio = mix_biopic_background_music(
+                final.audio,
+                final.duration,
+                metadata=metadata,
+                scene_audio_clips=scene_audio_clips,
+                scenes=scenes,
+                music_volume_db=biopic_vol,
+            )
+            final = final.with_audio(mixed_audio)
+            print("[BIOPIC MUSIC] Background music added successfully")
+        except Exception as e:
+            print(f"[WARNING] Failed to add biopic background music: {e}")
+            print("[WARNING] Continuing with narration audio only...")
+            import traceback
+            traceback.print_exc()
+
     # Write final video with optimized encoding settings for speed
     if out_video_path is None:
         print(f"\n[WARNING] No output path provided, skipping video encoding")
@@ -2604,6 +2894,10 @@ Examples:
                         help="Enable horror video mode (adds horror background audio)")
     parser.add_argument("--horror-bg-disable", action="store_true",
                         help="Disable horror background audio even for horror videos")
+    parser.add_argument("--no-biopic-music", action="store_true",
+                        help="Disable biopic background music (enabled by default for non-horror videos)")
+    parser.add_argument("--biopic-music-volume", type=float, default=None, metavar="DB",
+                        help="Biopic music volume in dB (default: -22)")
     
     args = parser.parse_args()
     
@@ -2679,7 +2973,9 @@ if __name__ == "__main__":
                        is_horror=args.horror, horror_bg_enabled=not args.horror_bg_disable,
                        room_tone_volume=args.horror_bg_room_tone_volume,
                        drone_volume=args.horror_bg_drone_volume,
-                       detail_volume=args.horror_bg_detail_volume)
+                       detail_volume=args.horror_bg_detail_volume,
+                       biopic_music_enabled=not args.no_biopic_music,
+                       biopic_music_volume=args.biopic_music_volume)
         
         print(f"\n{'='*60}")
         print("[COMPLETE] All shorts built!")
@@ -2719,7 +3015,9 @@ if __name__ == "__main__":
                is_horror=args.horror, horror_bg_enabled=not args.horror_bg_disable,
                room_tone_volume=args.horror_bg_room_tone_volume,
                drone_volume=args.horror_bg_drone_volume,
-               detail_volume=args.horror_bg_detail_volume)
+               detail_volume=args.horror_bg_detail_volume,
+               biopic_music_enabled=not args.no_biopic_music,
+               biopic_music_volume=args.biopic_music_volume)
     
     # Build shorts if requested
     if args.with_shorts:
@@ -2745,7 +3043,9 @@ if __name__ == "__main__":
                            is_horror=args.horror, horror_bg_enabled=not args.horror_bg_disable,
                            room_tone_volume=args.horror_bg_room_tone_volume,
                            drone_volume=args.horror_bg_drone_volume,
-                           detail_volume=args.horror_bg_detail_volume)
+                           detail_volume=args.horror_bg_detail_volume,
+                           biopic_music_enabled=not args.no_biopic_music,
+                           biopic_music_volume=args.biopic_music_volume)
         
         print(f"\n{'='*60}")
         print("[COMPLETE] All videos built!")

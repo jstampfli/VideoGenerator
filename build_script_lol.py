@@ -184,7 +184,6 @@ CRITICAL:
 - Emphasize MAGICAL elements, MYSTICAL powers, REGIONAL conflicts, FACTION relationships
 - Include WORLD-BUILDING details that make Runeterra feel alive
 
-Respond with JSON:
 {{
   "subject": "{subject}",
   "subject_type": "{subject_type}",
@@ -231,7 +230,7 @@ Respond with JSON:
 
     content = llm_utils.generate_text(
         messages=[
-            {"role": "system", "content": "You are a League of Legends lore expert who finds the drama and epic scope in every story. You understand Runeterra's history, magic systems, and conflicts. Respond with valid JSON only."},
+            {"role": "system", "content": "You are a League of Legends lore expert who finds the drama and epic scope in every story. You understand Runeterra's history, magic systems, and conflicts. "},
             {"role": "user", "content": outline_prompt}
         ],
         temperature=0.7,
@@ -288,7 +287,6 @@ REQUIREMENTS:
 
 5. YEAR/TIMELINE: "introduction" or "transition"
 
-Respond with JSON:
 {{
   "id": 0,
   "title": "3-5 word CTA title",
@@ -300,7 +298,7 @@ Respond with JSON:
 
     content = llm_utils.generate_text(
         messages=[
-            {"role": "system", "content": "You are a YouTuber creating ranking list content. Write naturally from YOUR perspective. Keep the CTA simple and direct - no story references. Respond with valid JSON only."},
+            {"role": "system", "content": "You are a YouTuber creating ranking list content. Write naturally from YOUR perspective. Keep the CTA simple and direct - no story references. "},
             {"role": "user", "content": cta_prompt}
         ],
         temperature=0.85,
@@ -381,7 +379,6 @@ REQUIREMENTS:
 
 5. YEAR/TIMELINE: "transition" or relevant timeline from early in the story
 
-Respond with JSON:
 {{
   "id": 0,
   "title": "3-5 word transition title",
@@ -393,7 +390,7 @@ Respond with JSON:
 
     content = llm_utils.generate_text(
         messages=[
-            {"role": "system", "content": "You are a YouTuber creating engaging lore content. Write naturally from YOUR perspective. Make the transition smooth and the CTA feel authentic, not forced. Respond with valid JSON only."},
+            {"role": "system", "content": "You are a YouTuber creating engaging lore content. Write naturally from YOUR perspective. Make the transition smooth and the CTA feel authentic, not forced. "},
             {"role": "user", "content": cta_prompt}
         ],
         temperature=0.85,
@@ -459,7 +456,6 @@ For each entry, provide:
 
 CRITICAL: Rankings must be justified and make sense based on actual LoL lore and the specific topic/criteria. Higher-ranked entries should have more impressive/relevant facts.
 
-Respond with JSON:
 {{
   "topic": "{topic}",
   "num_entries": {num_entries},
@@ -488,7 +484,7 @@ Respond with JSON:
 
     content = llm_utils.generate_text(
         messages=[
-            {"role": "system", "content": "You are a League of Legends lore expert who understands power scaling, cosmic hierarchies, and demonstrated feats. You can accurately rank beings based on actual lore events and achievements. Respond with valid JSON only."},
+            {"role": "system", "content": "You are a League of Legends lore expert who understands power scaling, cosmic hierarchies, and demonstrated feats. You can accurately rank beings based on actual lore events and achievements. "},
             {"role": "user", "content": outline_prompt}
         ],
         temperature=0.7,
@@ -552,7 +548,6 @@ Each scene must include:
 - "emotion": Scene emotion (e.g., "exciting", "anticipatory", "epic")
 - "year": "introduction" or relevant timeline
 
-Respond with JSON array:
 [
   {{"id": 1, "title": "...", "narration": "...", "image_prompt": "...", "emotion": "...", "year": "introduction"}},
   {{"id": 2, "title": "...", "narration": "...", "image_prompt": "...", "emotion": "...", "year": "introduction"}}
@@ -560,7 +555,7 @@ Respond with JSON array:
 
     content = llm_utils.generate_text(
         messages=[
-            {"role": "system", "content": "You are a YouTuber creating engaging top 10 list content. Write naturally from YOUR perspective. Create anticipation and excitement. Respond with valid JSON array only."},
+            {"role": "system", "content": "You are a YouTuber creating engaging top 10 list content. Write naturally from YOUR perspective. Create anticipation and excitement. "},
             {"role": "user", "content": intro_prompt}
         ],
         temperature=0.85,
@@ -667,7 +662,6 @@ IMAGE PROMPTS:
 - For entity/concept type: focus on visual representation of their power/essence
 - End with ", 16:9 cinematic, highly detailed, fantasy art"
 
-Respond with JSON array of exactly {num_scenes} scenes:
 [
   {{"id": 1, "title": "2-5 words", "narration": "...", "image_prompt": "...", "emotion": "A single word describing scene emotion", "year": "timeline or 'various'"}},
   ...
@@ -675,7 +669,7 @@ Respond with JSON array of exactly {num_scenes} scenes:
 
     content = llm_utils.generate_text(
         messages=[
-            {"role": "system", "content": "You are a YouTuber creating high-energy top N ranking content. Write narration from YOUR perspective. Focus on interesting League of Legends lore facts about power and feats. Keep it fast-paced, fact-dense, and high-energy. NO story structure - just rank and present facts. Respond with valid JSON array only."},
+            {"role": "system", "content": "You are a YouTuber creating high-energy top N ranking content. Write narration from YOUR perspective. Focus on interesting League of Legends lore facts about power and feats. Keep it fast-paced, fact-dense, and high-energy. NO story structure - just rank and present facts. "},
             {"role": "user", "content": scene_prompt}
         ],
         temperature=0.85,
@@ -1000,7 +994,6 @@ IMAGE PROMPT STYLE:
 - FANTASY/MAGICAL ELEMENTS: Emphasize mystical powers, magical settings, otherworldly landscapes, regional architecture, faction symbols - make it feel like League of Legends lore
 - End with ", 16:9 cinematic"
 
-Respond with JSON array:
 [
   {{
     "id": {start_id},
@@ -1015,7 +1008,7 @@ Respond with JSON array:
 
     content = llm_utils.generate_text(
         messages=[
-            {"role": "system", "content": "You are a YouTuber creating lore documentary content. Write narration from YOUR perspective - this is YOUR script that YOU wrote. Tell the story naturally, directly to the viewer. Avoid any meta references to chapters, production elements, or the script structure. Focus on what actually happened in the lore, why it mattered, and how it felt. CRITICAL: SMOOTH EMOTIONAL TRANSITIONS - The emotion field must flow smoothly between scenes. Emotions should only change GRADUALLY from one scene to the next. Build intensity gradually: 'contemplative' → 'thoughtful' → 'somber' → 'serious' → 'tense'. Avoid dramatic jumps. The narration should not sound completely different from one scene to the next. Respond with valid JSON array only."},
+            {"role": "system", "content": "You are a YouTuber creating lore documentary content. Write narration from YOUR perspective - this is YOUR script that YOU wrote. Tell the story naturally, directly to the viewer. Avoid any meta references to chapters, production elements, or the script structure. Focus on what actually happened in the lore, why it mattered, and how it felt. CRITICAL: SMOOTH EMOTIONAL TRANSITIONS - The emotion field must flow smoothly between scenes. Emotions should only change GRADUALLY from one scene to the next. Build intensity gradually: 'contemplative' → 'thoughtful' → 'somber' → 'serious' → 'tense'. Avoid dramatic jumps. The narration should not sound completely different from one scene to the next. "},
             {"role": "user", "content": scene_prompt}
         ],
         temperature=0.85,
@@ -1124,7 +1117,7 @@ Provide JSON:
 
     content = llm_utils.generate_text(
         messages=[
-            {"role": "system", "content": "You create viral LoL lore content. Every word must deliver value. No fluff. When generating multiple shorts about the same subject, ensure each tells a COMPLETELY DIFFERENT story from the lore - different events, different moments, different incidents. Respond with valid JSON only."},
+            {"role": "system", "content": "You create viral LoL lore content. Every word must deliver value. No fluff. When generating multiple shorts about the same subject, ensure each tells a COMPLETELY DIFFERENT story from the lore - different events, different moments, different incidents. "},
             {"role": "user", "content": outline_prompt}
         ],
         temperature=0.9,
@@ -1212,7 +1205,6 @@ IMAGE PROMPTS:
 - FANTASY/MAGICAL ELEMENTS: Emphasize mystical powers, magical settings, otherworldly landscapes, regional architecture, faction symbols - make it feel like League of Legends lore
 - End with ", 9:16 vertical"
 
-Respond with JSON array of exactly 5 scenes:
 [
   {{"id": 1, "title": "2-4 words", "narration": "...", "image_prompt": "... (include fantasy/magical elements and {subject_type}-appropriate details)", "emotion": "A single word or short phrase (e.g., 'tense', 'triumphant', 'desperate', 'contemplative'). CRITICAL: Emotions must flow SMOOTHLY between scenes - only change gradually.", "year": "YYYY or YYYY-YYYY or timeline era"}},
   {{"id": 2, "title": "...", "narration": "...", "image_prompt": "... (include fantasy/magical elements and {subject_type}-appropriate details)", "emotion": "A single word or short phrase - must be a GRADUAL progression from scene 1's emotion (e.g., if scene 1 was 'contemplative', this might be 'thoughtful' or 'somber', not 'urgent').", "year": "YYYY or YYYY-YYYY or timeline era"}},
@@ -1229,7 +1221,7 @@ IMPORTANT: Each scene must include:
 
     content = llm_utils.generate_text(
         messages=[
-            {"role": "system", "content": "You are a YouTuber creating viral LoL lore content. Write narration from YOUR perspective - this is YOUR script. Simple words, specific facts, deep storytelling with details. No fluff, no made-up transitions. Tell continuous stories with actual lore events. Avoid any meta references to chapters, production elements, or script structure. CRITICAL: SMOOTH EMOTIONAL TRANSITIONS - The emotion field must flow smoothly between scenes. Emotions should only change GRADUALLY from one scene to the next. Build intensity gradually. Avoid dramatic jumps. The narration should not sound completely different from one scene to the next. Respond with valid JSON array only."},
+            {"role": "system", "content": "You are a YouTuber creating viral LoL lore content. Write narration from YOUR perspective - this is YOUR script. Simple words, specific facts, deep storytelling with details. No fluff, no made-up transitions. Tell continuous stories with actual lore events. Avoid any meta references to chapters, production elements, or script structure. CRITICAL: SMOOTH EMOTIONAL TRANSITIONS - The emotion field must flow smoothly between scenes. Emotions should only change GRADUALLY from one scene to the next. Build intensity gradually. Avoid dramatic jumps. The narration should not sound completely different from one scene to the next. "},
             {"role": "user", "content": scene_prompt}
         ],
         temperature=0.85,
@@ -1490,7 +1482,7 @@ Generate JSON:
 
     content = llm_utils.generate_text(
         messages=[
-            {"role": "system", "content": "League of Legends lore documentary producer. Respond with valid JSON only."},
+            {"role": "system", "content": "League of Legends lore documentary producer. "},
             {"role": "user", "content": initial_metadata_prompt}
         ],
         temperature=0.7,
@@ -1695,7 +1687,7 @@ Generate JSON:
 
         content = llm_utils.generate_text(
             messages=[
-                {"role": "system", "content": "League of Legends lore documentary producer. Create compelling metadata that accurately reflects the actual content. Respond with valid JSON only."},
+                {"role": "system", "content": "League of Legends lore documentary producer. Create compelling metadata that accurately reflects the actual content. "},
                 {"role": "user", "content": final_metadata_prompt}
             ],
             temperature=0.7,
@@ -1819,7 +1811,7 @@ Generate JSON:
 
     content = llm_utils.generate_text(
         messages=[
-            {"role": "system", "content": "League of Legends lore documentary producer. Create compelling top 10 list metadata. Respond with valid JSON only."},
+            {"role": "system", "content": "League of Legends lore documentary producer. Create compelling top 10 list metadata. "},
             {"role": "user", "content": initial_metadata_prompt}
         ],
         temperature=0.7,
@@ -1948,7 +1940,7 @@ Generate JSON:
 
         content = llm_utils.generate_text(
             messages=[
-                {"role": "system", "content": "League of Legends lore documentary producer. Create compelling metadata that accurately reflects the actual content. Respond with valid JSON only."},
+                {"role": "system", "content": "League of Legends lore documentary producer. Create compelling metadata that accurately reflects the actual content. "},
                 {"role": "user", "content": final_metadata_prompt}
             ],
             temperature=0.7,

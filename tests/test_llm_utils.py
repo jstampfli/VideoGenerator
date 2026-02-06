@@ -46,6 +46,55 @@ class TestGenerateText(unittest.TestCase):
         self.assertIsInstance(result, str)
         self.assertEqual(result, "Hello, world.")
 
+    @patch.dict("os.environ", {"TEXT_PROVIDER": "openai", "OPENAI_API_KEY": "sk-test"}, clear=False)
+    @patch("openai.OpenAI")
+    def test_openai_with_response_json_schema(self, mock_openai_class):
+        """When response_json_schema is provided, OpenAI receives json_schema in response_format."""
+        mock_client = MagicMock()
+        mock_openai_class.return_value = mock_client
+        mock_resp = MagicMock()
+        mock_resp.choices = [MagicMock()]
+        mock_resp.choices[0].message.content = '{"name": "test"}'
+        mock_client.chat.completions.create.return_value = mock_resp
+
+        schema = {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}
+        llm_utils.generate_text(
+            messages=[{"role": "user", "content": "Hi"}],
+            provider="openai",
+            response_json_schema=schema,
+        )
+        call_kw = mock_client.chat.completions.create.call_args[1]
+        rf = call_kw.get("response_format")
+        self.assertIsNotNone(rf)
+        self.assertEqual(rf["type"], "json_schema")
+        self.assertIn("json_schema", rf)
+        self.assertTrue(rf["json_schema"]["strict"])
+        self.assertIn("additionalProperties", rf["json_schema"]["schema"])
+
+    @patch.dict("os.environ", {"TEXT_PROVIDER": "google", "GOOGLE_API_KEY": "test-key"}, clear=False)
+    @patch("google.genai.Client")
+    def test_google_with_response_json_schema(self, mock_client_class):
+        """When response_json_schema is provided, Google receives it in config."""
+        mock_client = MagicMock()
+        mock_client_class.return_value = mock_client
+        mock_resp = MagicMock()
+        mock_resp.text = '{"name": "test"}'
+        mock_resp.candidates = []
+        mock_client.models.generate_content.return_value = mock_resp
+
+        schema = {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}
+        llm_utils.generate_text(
+            messages=[{"role": "user", "content": "Hi"}],
+            provider="google",
+            response_json_schema=schema,
+        )
+        call_kw = mock_client.models.generate_content.call_args[1]
+        config = call_kw.get("config")
+        self.assertIsNotNone(config)
+        self.assertEqual(getattr(config, "response_mime_type", None) or config.get("response_mime_type"), "application/json")
+        schema_in_config = getattr(config, "response_json_schema", None) or config.get("response_json_schema")
+        self.assertIsNotNone(schema_in_config)
+
     def test_invalid_provider_raises(self):
         with self.assertRaises(ValueError) as ctx:
             llm_utils.generate_text(

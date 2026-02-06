@@ -46,9 +46,9 @@ class ScriptType(ABC):
 class MainVideoScript(ScriptType):
     """Main video script type - full documentary with chapters."""
     
-    def get_outline_prompt(self, subject: str, chapters: int, total_scenes: int) -> str:
-        """Use the standard outline prompt builder. Subject is person name for biopics."""
-        return prompt_builders.build_outline_prompt(subject, chapters, total_scenes)
+    def get_outline_prompt(self, subject: str, chapters: int, total_scenes: int, min_scenes: int = 2, max_scenes: int = 10) -> str:
+        """Use the standard outline prompt builder. Subject is person name for biopics. total_scenes is target_total_scenes."""
+        return prompt_builders.build_outline_prompt(subject, chapters, total_scenes, min_scenes, max_scenes)
     
     def get_scene_generation_prompt(self, context: dict) -> str:
         """

@@ -149,25 +149,62 @@ class TestBuildOutlinePrompt(unittest.TestCase):
     
     def test_outline_prompt_structure(self):
         """Test outline prompt includes all required sections."""
-        result = prompt_builders.build_outline_prompt("Einstein", chapters=6, total_scenes=24)
+        result = prompt_builders.build_outline_prompt("Einstein", chapters=6, target_total_scenes=24)
         self.assertIn("Einstein", result)
         self.assertIn("6", result)
         self.assertIn("24", result)
         self.assertIn("NARRATIVE STRUCTURE", result)
         self.assertIn("STORY ARC REQUIREMENTS", result)
         self.assertIn("Chapter 1", result)
-        self.assertIn("Chapter 6", result)
-        self.assertIn("JSON", result)
+        self.assertIn("1-6", result)  # chapter_num range
+        self.assertIn("6 chapters", result)
+        self.assertIn("person", result)  # structure example
+        self.assertIn("65-year-old", result)  # audience targeting
+        self.assertIn("TARGET AUDIENCE", result)
     
     def test_outline_prompt_chapters(self):
         """Test outline prompt with different chapter counts."""
-        result = prompt_builders.build_outline_prompt("Darwin", chapters=5, total_scenes=20)
+        result = prompt_builders.build_outline_prompt("Darwin", chapters=5, target_total_scenes=20)
         self.assertIn("Darwin", result)
         self.assertIn("5", result)
         self.assertIn("20", result)
-        # Should mention chapter 5, not 6
-        self.assertIn("Chapter 5", result)
-        self.assertNotIn("Chapter 6", result)
+        # Should mention 5 chapters
+        self.assertIn("5 chapters", result)
+        self.assertIn("1-5", result)  # chapter_num range
+
+    def test_outline_prompt_music_mood(self):
+        """Test outline prompt includes music_mood when available_moods provided."""
+        result = prompt_builders.build_outline_prompt(
+            "Einstein", chapters=3, target_total_scenes=12,
+            available_moods=["relaxing", "passionate", "happy"]
+        )
+        self.assertIn("music_mood", result)
+        self.assertIn("relaxing", result)
+        self.assertIn("passionate", result)
+        self.assertIn("happy", result)
+
+
+class TestBuildShortOutlinePrompt(unittest.TestCase):
+    """Test cases for build_short_outline_prompt function."""
+
+    def test_short_outline_includes_music_mood(self):
+        """Test short outline prompt includes music_mood when available_moods provided."""
+        outline = {
+            "chapters": [
+                {"chapter_num": 1, "title": "Hook", "year_range": "1879-1955", "summary": "Preview", "key_events": ["Birth", "Annus mirabilis"]},
+                {"chapter_num": 2, "title": "Early Years", "year_range": "1879-1900", "summary": "Youth", "key_events": ["School", "Patent office"]},
+            ]
+        }
+        result = prompt_builders.build_short_outline_prompt(
+            "Einstein", outline, short_num=1, total_shorts=3,
+            available_moods=["relaxing", "passionate", "happy"]
+        )
+        self.assertIn("music_mood", result)
+        self.assertIn("relaxing", result)
+        self.assertIn("passionate", result)
+        self.assertIn("happy", result)
+        self.assertIn("high-energy trailer", result.lower())
+        self.assertIn("FULL DOCUMENTARY OUTLINE", result)
 
 
 class TestBuildMetadataPrompt(unittest.TestCase):

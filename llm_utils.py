@@ -38,12 +38,45 @@ def get_text_model_display() -> str:
     return f"{prov} / {model}"
 
 
+def _resolve_json_schema(schema: dict | type) -> dict:
+    """Resolve a JSON schema from a Pydantic model or dict."""
+    if isinstance(schema, dict):
+        return schema
+    # Pydantic BaseModel
+    if hasattr(schema, "model_json_schema"):
+        return schema.model_json_schema()
+    raise TypeError("response_json_schema must be a dict or Pydantic BaseModel")
+
+
+def _ensure_openai_schema(schema: dict) -> dict:
+    """Ensure schema has additionalProperties: false for OpenAI Structured Outputs."""
+    if schema.get("type") != "object":
+        return schema
+    result = dict(schema)
+    if "additionalProperties" not in result:
+        result["additionalProperties"] = False
+    if "properties" in result:
+        result["properties"] = {
+            k: _ensure_openai_schema(v) if isinstance(v, dict) else v
+            for k, v in result["properties"].items()
+        }
+    if "items" in result and isinstance(result["items"], dict):
+        result["items"] = _ensure_openai_schema(result["items"])
+    if "$defs" in result:
+        result["$defs"] = {
+            k: _ensure_openai_schema(v) if isinstance(v, dict) else v
+            for k, v in result["$defs"].items()
+        }
+    return result
+
+
 def generate_text(
     messages: list[dict[str, str]],
     model: str | None = None,
     provider: str | None = None,
     temperature: float = 0.7,
     response_format: dict | None = None,
+    response_json_schema: dict | type | None = None,
     **kwargs: Any,
 ) -> str:
     """
@@ -55,6 +88,10 @@ def generate_text(
         provider: "openai" or "google"; if None, use env TEXT_PROVIDER.
         temperature: Sampling temperature.
         response_format: Optional e.g. {"type": "json_object"} for JSON mode.
+        response_json_schema: Optional JSON schema (dict or Pydantic BaseModel) for structured
+            output. When provided, the schema is passed in the API config (not the prompt).
+            For Google: uses response_json_schema in config. For OpenAI: uses response_format
+            with type json_schema. Takes precedence over response_format for structured output.
         **kwargs: Passed through to the underlying API.
 
     Returns:
@@ -66,6 +103,11 @@ def generate_text(
             f"TEXT_PROVIDER must be 'openai' or 'google'. Got: {prov}. "
             "Set TEXT_PROVIDER in .env or pass provider=."
         )
+
+    # Resolve schema if provided
+    schema_dict: dict | None = None
+    if response_json_schema is not None:
+        schema_dict = _resolve_json_schema(response_json_schema)
 
     if prov == "openai":
         api_key = os.getenv("OPENAI_API_KEY")
@@ -80,7 +122,19 @@ def generate_text(
             "temperature": temperature,
             **kwargs,
         }
-        if response_format is not None:
+        if schema_dict is not None:
+            # Structured Outputs: pass schema in response_format
+            openai_schema = _ensure_openai_schema(schema_dict)
+            schema_name = openai_schema.get("title", "response")
+            req["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": schema_name,
+                    "strict": True,
+                    "schema": openai_schema,
+                },
+            }
+        elif response_format is not None:
             req["response_format"] = response_format
         response = client.chat.completions.create(**req)
         return response.choices[0].message.content or ""
@@ -108,12 +162,16 @@ def generate_text(
         else:
             chat_parts.append(("user" if role == "user" else "model", content))
     system_instruction = "\n\n".join(system_parts) if system_parts else None
-    if response_format == {"type": "json_object"} and system_instruction:
+    # Only add "Respond with valid JSON only" when using json_object mode (no schema)
+    if schema_dict is None and response_format == {"type": "json_object"} and system_instruction:
         system_instruction = system_instruction.rstrip() + "\n\nRespond with valid JSON only."
-    elif response_format == {"type": "json_object"}:
+    elif schema_dict is None and response_format == {"type": "json_object"}:
         system_instruction = "Respond with valid JSON only."
     config_kw: dict[str, Any] = {"temperature": temperature}
-    if response_format == {"type": "json_object"}:
+    if schema_dict is not None:
+        config_kw["response_mime_type"] = "application/json"
+        config_kw["response_json_schema"] = schema_dict
+    elif response_format == {"type": "json_object"}:
         config_kw["response_mime_type"] = "application/json"
     try:
         config = types.GenerateContentConfig(

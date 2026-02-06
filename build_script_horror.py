@@ -42,7 +42,7 @@ def generate_horror_outline(story_concept: str, chapters: int, total_scenes: int
 
     content = llm_utils.generate_text(
         messages=[
-            {"role": "system", "content": "You are a master horror storyteller who creates terrifying, atmospheric stories. Respond with valid JSON only."},
+            {"role": "system", "content": "You are a master horror storyteller who creates terrifying, atmospheric stories. "},
             {"role": "user", "content": outline_prompt}
         ],
         temperature=0.7,
@@ -350,7 +350,6 @@ CRITICAL: You can only use hold, swell, shrink, fade_out, and hard_cut once the 
 
 {prompt_builders.get_image_prompt_guidelines(story_concept, None, None, "16:9 cinematic", is_trailer=False, recurring_themes=horror_elements_str, is_horror=True)}
 
-Respond with JSON array:
 [
   {{
     "id": {start_id},
@@ -369,7 +368,7 @@ Respond with JSON array:
     
     content = llm_utils.generate_text(
         messages=[
-            {"role": "system", "content": "You are a horror storyteller creating a first-person scary story. Write narration in FIRST PERSON (I/me/my), present tense. CRITICAL: Use first person throughout - the protagonist is telling their own story. Create tension, atmosphere, and fear. Use WHY/WHAT paradigm at scene level. Build horror progressively. Focus on atmosphere and unease. CRITICAL: For each scene, provide narration_instructions as ONE SENTENCE focusing on a single emotion from the emotion field. Keep it simple: 'Focus on [emotion].' Examples: 'Focus on tension.' or 'Focus on unease.' The narration_instructions should flow smoothly between scenes - if previous scene was 'Focus on tension', next might be 'Focus on anxiety' (gradual progression). Avoid overly dramatic language. Respond with valid JSON array only."},
+            {"role": "system", "content": "You are a horror storyteller creating a first-person scary story. Write narration in FIRST PERSON (I/me/my), present tense. CRITICAL: Use first person throughout - the protagonist is telling their own story. Create tension, atmosphere, and fear. Use WHY/WHAT paradigm at scene level. Build horror progressively. Focus on atmosphere and unease. CRITICAL: For each scene, provide narration_instructions as ONE SENTENCE focusing on a single emotion from the emotion field. Keep it simple: 'Focus on [emotion].' Examples: 'Focus on tension.' or 'Focus on unease.' The narration_instructions should flow smoothly between scenes - if previous scene was 'Focus on tension', next might be 'Focus on anxiety' (gradual progression). Avoid overly dramatic language. "},
             {"role": "user", "content": scene_prompt}
         ],
         temperature=0.85,
@@ -446,7 +445,7 @@ Generate JSON:
 
     content = llm_utils.generate_text(
         messages=[
-            {"role": "system", "content": "You are a master horror storyteller creating quick, scary short stories for YouTube Shorts. These shorts are designed to drive traffic and attention to the channel. Create compelling, open-ended horror that leaves viewers wanting more. Respond with valid JSON only."},
+            {"role": "system", "content": "You are a master horror storyteller creating quick, scary short stories for YouTube Shorts. These shorts are designed to drive traffic and attention to the channel. Create compelling, open-ended horror that leaves viewers wanting more. "},
             {"role": "user", "content": short_outline_prompt}
         ],
         temperature=0.8,
@@ -544,7 +543,6 @@ For each scene, add a "drone_change" field with one of these values:
 
 {prompt_builders.get_image_prompt_guidelines(story_concept, None, None, "9:16 vertical", is_trailer=True, recurring_themes=horror_elements_str, is_horror=True)}
 
-Respond with JSON array of exactly 3 scenes (ALL should be WHY scenes for quick horror format):
 [
   {{"id": 1, "title": "2-4 words", "narration": "HIGH ENERGY - first-person horror narration that establishes the scary premise, creates immediate tension and fear", "scene_type": "WHY", "image_prompt": "Horror visual with dark, shadowy, eerie atmosphere, 9:16 vertical", "emotion": "Horror emotion (e.g., 'uneasy', 'tense', 'atmospheric', 'dread-filled', 'fearful', 'paranoid'). CRITICAL: Emotions must flow SMOOTHLY between scenes - only change gradually. Build intensity gradually: 'uneasy' → 'tense' → 'anxious' → 'fearful' → 'terrified'.", "narration_instructions": "ONE SENTENCE: Focus on a single emotion from the emotion field. Example: 'Focus on tension.' or 'Focus on unease.'", "drone_change": "fade_in" or "hold" or "swell" or "shrink" or "fade_out" or "hard_cut" or "none" - Indicate how the low frequency drone should change for this scene.", "year": "present or relevant time reference"}},
   {{"id": 2, "title": "...", "narration": "HIGH ENERGY - escalate the horror, deepen the fear, intensify the threat", "scene_type": "WHY", "image_prompt": "Horror visual with dark, shadowy, eerie atmosphere, 9:16 vertical", "emotion": "Horror emotion - must be a GRADUAL progression from scene 1's emotion (e.g., if scene 1 was 'uneasy', this might be 'tense' or 'anxious', not 'terrified').", "narration_instructions": "ONE SENTENCE: Focus on a single emotion from the emotion field, flowing smoothly from scene 1. Example: if scene 1 was 'Focus on tension.', this might be 'Focus on anxiety.'", "drone_change": "fade_in" or "hold" or "swell" or "shrink" or "fade_out" or "hard_cut" or "none" - Indicate how the low frequency drone should change for this scene.", "year": "present or relevant time reference"}},
@@ -563,7 +561,7 @@ IMPORTANT:
 
     content = llm_utils.generate_text(
         messages=[
-            {"role": "system", "content": "You are a horror storyteller creating a quick, scary first-person horror story for YouTube Shorts. Write narration in FIRST PERSON (I/me/my), present tense. CRITICAL: Use first person throughout - the protagonist is telling their own story. Create tension, atmosphere, and fear quickly. This is a short horror story designed to drive traffic - make it compelling and open-ended. All scenes should be WHY scenes that build fear. CRITICAL: For each scene, provide narration_instructions as ONE SENTENCE focusing on a single emotion from the emotion field. Keep it simple: 'Focus on [emotion].' Examples: 'Focus on tension.' or 'Focus on unease.' The narration_instructions should flow smoothly between scenes - if previous scene was 'Focus on tension', next might be 'Focus on anxiety' (gradual progression). Avoid overly dramatic language. Respond with valid JSON array only."},
+            {"role": "system", "content": "You are a horror storyteller creating a quick, scary first-person horror story for YouTube Shorts. Write narration in FIRST PERSON (I/me/my), present tense. CRITICAL: Use first person throughout - the protagonist is telling their own story. Create tension, atmosphere, and fear quickly. This is a short horror story designed to drive traffic - make it compelling and open-ended. All scenes should be WHY scenes that build fear. CRITICAL: For each scene, provide narration_instructions as ONE SENTENCE focusing on a single emotion from the emotion field. Keep it simple: 'Focus on [emotion].' Examples: 'Focus on tension.' or 'Focus on unease.' The narration_instructions should flow smoothly between scenes - if previous scene was 'Focus on tension', next might be 'Focus on anxiety' (gradual progression). Avoid overly dramatic language. "},
             {"role": "user", "content": scene_prompt}
         ],
         temperature=0.85,
@@ -752,7 +750,7 @@ def generate_script(story_concept: str, output_path: str, is_short: bool = False
 
     content = llm_utils.generate_text(
         messages=[
-            {"role": "system", "content": "Horror story producer. Respond with valid JSON only."},
+            {"role": "system", "content": "Horror story producer. "},
             {"role": "user", "content": initial_metadata_prompt}
         ],
         temperature=0.7,
@@ -936,7 +934,7 @@ Generate JSON:
 
         content = llm_utils.generate_text(
             messages=[
-                {"role": "system", "content": "Horror story producer. Create compelling metadata that accurately reflects the actual horror content. Respond with valid JSON only."},
+                {"role": "system", "content": "Horror story producer. Create compelling metadata that accurately reflects the actual horror content. "},
                 {"role": "user", "content": final_metadata_prompt}
             ],
             temperature=0.7,

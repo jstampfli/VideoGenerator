@@ -88,7 +88,6 @@ STORY STRUCTURE:
   * Camera work: Cinematic camera angles and smooth camera movements
   * Overall feel: Professional, polished, heartwarming animated film quality
 
-Respond with JSON:
 {{
   "title": "Story title",
   "summary": "Brief story summary (2-3 sentences)",
@@ -108,7 +107,7 @@ Respond with JSON:
 
     content = llm_utils.generate_text(
         messages=[
-            {"role": "system", "content": "You are a children's story writer who creates engaging, age-appropriate animated stories with positive themes. Respond with valid JSON only."},
+            {"role": "system", "content": "You are a children's story writer who creates engaging, age-appropriate animated stories with positive themes. "},
             {"role": "user", "content": story_prompt}
         ],
         temperature=0.8,
@@ -194,7 +193,6 @@ CRITICAL - NO TEXT OR CREDITS:
 - The video must contain NO text, NO credits, NO logos, NO end screens, NO titles, NO watermarks, NO written words
 - Simply end with the characters in their final positions showing the story's resolution
 
-Respond with JSON:
 {{
   "scenes": [
     {{
@@ -252,7 +250,6 @@ CONTINUITY:
 - Scenes should flow naturally from one to the next
 - All introduced characters must be clearly visible at the end of each scene
 
-Respond with JSON:
 {{
   "scenes": [
     {{
@@ -277,9 +274,9 @@ Respond with JSON:
     
     # Use different system message for single scene vs multiple scenes
     if num_scenes == 1:
-        system_message = "You are a children's story animator who creates a single complete 10-second animated story. CRITICAL REQUIREMENTS: 1) This is ONE complete 10-second animation that tells the FULL STORY from beginning to end. 2) ALL actions must be extremely simple and large-scale - no intricate movements, small details, or subtle gestures. Everything happens in open space with clear, obvious movements (walking, running, jumping, waving, reaching out). 3) MINIMAL DIALOGUE: Keep dialogue to an absolute minimum - prefer visual storytelling. The scene should work without dialogue. 4) COMPLETE STORY: Include beginning (characters meet or problem starts), middle (action or interaction), and end (resolution or conclusion). All characters should be involved. 5) When characters do speak, ALWAYS explicitly state which character is speaking using format: '[Character Name] says, \"[dialogue]\"'. 6) video_prompt must be detailed enough to fill 10 seconds - include 5-8 sentences with simple, large-scale actions that tell the complete story. 7) At the end, all characters should be clearly visible together, showing the story's resolution. 8) image_prompt should match the first moment of video_prompt. 9) CRITICAL - NO TEXT OR CREDITS: The video must contain NO text, NO credits, NO logos, NO end screens, NO titles, NO watermarks, NO written words. Simply end with the characters in their final positions. Use clear, straightforward language. Respond with valid JSON only."
+        system_message = "You are a children's story animator who creates a single complete 10-second animated story. CRITICAL REQUIREMENTS: 1) This is ONE complete 10-second animation that tells the FULL STORY from beginning to end. 2) ALL actions must be extremely simple and large-scale - no intricate movements, small details, or subtle gestures. Everything happens in open space with clear, obvious movements (walking, running, jumping, waving, reaching out). 3) MINIMAL DIALOGUE: Keep dialogue to an absolute minimum - prefer visual storytelling. The scene should work without dialogue. 4) COMPLETE STORY: Include beginning (characters meet or problem starts), middle (action or interaction), and end (resolution or conclusion). All characters should be involved. 5) When characters do speak, ALWAYS explicitly state which character is speaking using format: '[Character Name] says, \"[dialogue]\"'. 6) video_prompt must be detailed enough to fill 10 seconds - include 5-8 sentences with simple, large-scale actions that tell the complete story. 7) At the end, all characters should be clearly visible together, showing the story's resolution. 8) image_prompt should match the first moment of video_prompt. 9) CRITICAL - NO TEXT OR CREDITS: The video must contain NO text, NO credits, NO logos, NO end screens, NO titles, NO watermarks, NO written words. Simply end with the characters in their final positions. Use clear, straightforward language. "
     else:
-        system_message = "You are a children's story animator who creates detailed scene descriptions for animated videos. CRITICAL REQUIREMENTS: 1) ALL actions must be extremely simple and large-scale - no intricate movements, small details, or subtle gestures. Everything happens in open space with clear, obvious movements (walking, running, jumping, waving, reaching out). 2) MINIMAL DIALOGUE: Keep dialogue to an absolute minimum - prefer visual storytelling. Most scenes should have NO dialogue. Only include dialogue when absolutely essential. 3) ONE SCENE PER CHARACTER SPEAKING: Each character can only speak in ONE scene throughout the entire story. Once a character has spoken, they should NOT speak in any other scenes. Plan dialogue carefully. 4) When characters do speak, ALWAYS explicitly state which character is speaking using format: '[Character Name] says, \"[dialogue]\"'. 5) At the end of each scene, ALL characters introduced so far must be clearly visible in the frame - describe their positions. 6) video_prompt must be detailed enough to fill the scene duration (~{SCENE_DURATION} seconds) - include 3-5 sentences with simple, large-scale actions. 7) For scenes 2+: Start with new actions only - the video automatically begins from the previous scene's final frame. 8) Keep character appearances consistent across all scenes. 9) image_prompt (scene 1 only) should match the first moment of video_prompt. 10) CRITICAL - NO TEXT OR CREDITS: The video must contain NO text, NO credits, NO logos, NO end screens, NO titles, NO watermarks, NO written words. The final scene should end with story action only - no closing scenes, credits, or text overlays. Use clear, straightforward language. Respond with valid JSON only."
+        system_message = "You are a children's story animator who creates detailed scene descriptions for animated videos. CRITICAL REQUIREMENTS: 1) ALL actions must be extremely simple and large-scale - no intricate movements, small details, or subtle gestures. Everything happens in open space with clear, obvious movements (walking, running, jumping, waving, reaching out). 2) MINIMAL DIALOGUE: Keep dialogue to an absolute minimum - prefer visual storytelling. Most scenes should have NO dialogue. Only include dialogue when absolutely essential. 3) ONE SCENE PER CHARACTER SPEAKING: Each character can only speak in ONE scene throughout the entire story. Once a character has spoken, they should NOT speak in any other scenes. Plan dialogue carefully. 4) When characters do speak, ALWAYS explicitly state which character is speaking using format: '[Character Name] says, \"[dialogue]\"'. 5) At the end of each scene, ALL characters introduced so far must be clearly visible in the frame - describe their positions. 6) video_prompt must be detailed enough to fill the scene duration (~{SCENE_DURATION} seconds) - include 3-5 sentences with simple, large-scale actions. 7) For scenes 2+: Start with new actions only - the video automatically begins from the previous scene's final frame. 8) Keep character appearances consistent across all scenes. 9) image_prompt (scene 1 only) should match the first moment of video_prompt. 10) CRITICAL - NO TEXT OR CREDITS: The video must contain NO text, NO credits, NO logos, NO end screens, NO titles, NO watermarks, NO written words. The final scene should end with story action only - no closing scenes, credits, or text overlays. Use clear, straightforward language. "
 
     content = llm_utils.generate_text(
         messages=[
@@ -349,7 +346,6 @@ REQUIREMENTS:
   * Use common YouTube search terms for kids content
   * Format: "tag1,tag2,tag3,..." (single string with commas)
 
-Respond with JSON:
 {{
   "description": "Full YouTube video description (150-300 words)",
   "tags": "tag1,tag2,tag3,tag4,tag5,..."
@@ -357,7 +353,7 @@ Respond with JSON:
 
     content = llm_utils.generate_text(
         messages=[
-            {"role": "system", "content": "You are a YouTube content creator who writes engaging, kid-friendly video descriptions and tags for children's animated content. Respond with valid JSON only."},
+            {"role": "system", "content": "You are a YouTube content creator who writes engaging, kid-friendly video descriptions and tags for children's animated content. "},
             {"role": "user", "content": metadata_prompt}
         ],
         temperature=0.7,

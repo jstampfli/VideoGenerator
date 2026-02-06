@@ -8,6 +8,13 @@ import re
 from pathlib import Path
 
 import llm_utils
+import prompt_builders
+from biopic_schemas import (
+    PIVOTAL_MOMENTS_SCHEMA,
+    SCENE_SCHEMA,
+    HANGING_STORYLINES_SCHEMA,
+    SCENES_ARRAY_SCHEMA,
+)
 
 NO_TEXT_CONSTRAINT: str = """
 CRITICAL: Do NOT include any text, words, letters, numbers, titles, labels, watermarks, or any written content in the image. The image must be completely text-free."""
@@ -61,8 +68,13 @@ def get_shared_scene_requirements(content_type: str = "historical") -> str:
     return base_requirements
 
 
-def get_shared_narration_style(is_short: bool = False) -> str:
-    """Shared narration style instructions for both main video and shorts."""
+def get_shared_narration_style(is_short: bool = False, script_type: str | None = None) -> str:
+    """Shared narration style instructions for both main video and shorts.
+    
+    Args:
+        is_short: If True, use shorter scene length guidance for shorts.
+        script_type: "biopic" adds audience-specific guidance for 65-year-old American men.
+    """
     base_style = """NARRATION STYLE - CRITICAL:
 
 THREE PRINCIPLES (every scene must satisfy all three):
@@ -75,6 +87,9 @@ THREE PRINCIPLES (every scene must satisfy all three):
 - SIMPLE, CLEAR language. Write for a general audience.
 - AVOID flowery, artistic, or poetic language
 - AVOID vague phrases like "little did he know", "destiny awaited", "the world would never be the same"
+- AVOID sensationalist or gimmicky language: no "shocking", "incredible", "unbelievable", "mind-blowing", "what nobody expected", "the secret that would change everything", or similar rhetorical hooks repeated across scenes
+- LET FACTS SPEAK: Present what happened clearly. The significance of events is in the facts themselves—don't oversell with hype or repeated dramatic framing
+- SIMPLE AND STRAIGHTFORWARD: Prefer direct, clear statements over theatrical buildup. "In 1905, Einstein published four papers" over "The year 1905 would witness something that would reshape the very fabric of reality"
 - NO dramatic pauses or buildup - just deliver the facts engagingly
 - NO made-up temporal transitions - stick to what actually happened
 - Use present tense: "Einstein submits his paper to the journal..."
@@ -105,6 +120,10 @@ THREE PRINCIPLES (every scene must satisfy all three):
   * References to "the script" or "this episode" or "this part"
 - Write as if you're naturally telling a story, not referencing the structure behind it"""
     
+    if script_type == "biopic":
+        import prompt_builders
+        base_style += f"\n\n{prompt_builders.get_biopic_audience_profile()}"
+    
     if is_short:
         base_style += "\n- 1-2 sentences per scene (~8-12 seconds when spoken) - shorts need to be concise but detailed"
     else:
@@ -116,7 +135,8 @@ THREE PRINCIPLES (every scene must satisfy all three):
   * Film directions like "Smash cut—", "Hard cut to", "Cut to:", "Fade in:"
   * Camera directions like "Close-up of", "Wide shot:", "Pan to"
   * Any production/editing terminology
-  Write ONLY words that should be spoken by a narrator's voice."""
+  Write ONLY words that should be spoken by a narrator's voice.
+- QUOTES (CRITICAL FOR TTS): Use quotes ONLY around proper nouns you want to emphasize (e.g. titles of works, key terms). Otherwise do NOT use any quotes—they will mess up the text-to-speech. No quoted dialogue, no quoted phrases for emphasis, no scare quotes."""
     
     return base_style
 
@@ -292,7 +312,7 @@ def generate_refinement_diff(original_scenes: list[dict], refined_scenes: list[d
     return diff_data
 
 
-def identify_pivotal_moments(scenes: list[dict], subject_name: str, chapter_context: str = None, excluded_scene_ids: set = None) -> list[dict]:
+def identify_pivotal_moments(scenes: list[dict], subject_name: str, chapter_context: str = None, excluded_scene_ids: set = None, script_type: str = "biopic") -> list[dict]:
     """
     Identify 4-7 most pivotal moments from the scenes.
     
@@ -350,7 +370,6 @@ For each pivotal moment, explain:
 - How it changes the story trajectory
 - What makes it significant to the overall narrative
 
-Respond with JSON array:
 [
   {{
     "scene_id": 12,
@@ -362,12 +381,14 @@ Respond with JSON array:
 Return 4-7 pivotal moments only. Be selective - only the moments that are truly game-changers."""
 
     try:
+        audience_note = f" {prompt_builders.get_biopic_audience_profile()}" if script_type == "biopic" else ""
         content = llm_utils.generate_text(
             messages=[
-                {"role": "system", "content": "You are an expert story analyst who identifies pivotal moments in narratives. You understand what makes a moment truly significant and game-changing. CRITICAL: Do NOT select scenes from chapter 1 (the hook/preview chapter) or the CTA transition scene as pivotal moments - these scenes should not have significance scenes inserted after them. Only select pivotal moments from scenes after chapter 1 and the CTA scene. Respond with valid JSON array only."},
+                {"role": "system", "content": f"You are an expert story analyst who identifies pivotal moments in narratives. You understand what makes a moment truly significant and game-changing. CRITICAL: Do NOT select scenes from chapter 1 (the hook/preview chapter) or the CTA transition scene as pivotal moments - these scenes should not have significance scenes inserted after them. Only select pivotal moments from scenes after chapter 1 and the CTA scene.{audience_note}"},
                 {"role": "user", "content": identification_prompt}
             ],
             temperature=0.5,
+            response_json_schema=PIVOTAL_MOMENTS_SCHEMA,
         )
         pivotal_moments = json.loads(clean_json_response(content))
         
@@ -488,7 +509,6 @@ This is NOT a repeat of the pivotal moment - it's an EXPLANATION of WHY that mom
 
 CRITICAL: Make this scene feel significant and weighty. The viewer should understand: "This is why this moment changed everything."
 
-Respond with JSON (ALL FIELDS ARE REQUIRED):
 {{
   "title": "2-5 word title about the significance",
   "narration": "1-3 sentences explaining why this pivotal moment matters - its significance, impact, and what it changed. Make viewers FEEL the weight.",
@@ -508,12 +528,14 @@ CRITICAL: The "narration_instructions" field is REQUIRED and must be included in
         narration_instructions_note = "CRITICAL: The 'narration_instructions' field is REQUIRED in your JSON response. It must be ONE SENTENCE focusing on a single emotion from the emotion field. Keep it simple: 'Focus on [emotion].' Examples: 'Focus on contemplation.' or 'Focus on thoughtfulness.' The narration_instructions should flow smoothly from the previous scene's narration_instructions (gradual emotion progression). DO NOT omit this field."
     
     try:
+        audience_note = f" {prompt_builders.get_biopic_audience_profile()}" if script_type == "biopic" else ""
         content = llm_utils.generate_text(
             messages=[
-                {"role": "system", "content": f"You create powerful scenes that explain why pivotal moments matter. You help viewers understand the significance and weight of game-changing moments. {narration_instructions_note} Respond with valid JSON only."},
+                {"role": "system", "content": f"You create powerful scenes that explain why pivotal moments matter. You help viewers understand the significance and weight of game-changing moments. {narration_instructions_note}{audience_note}"},
                 {"role": "user", "content": significance_prompt}
             ],
             temperature=0.7,
+            response_json_schema=SCENE_SCHEMA,
         )
         scene = json.loads(clean_json_response(content))
         
@@ -652,7 +674,6 @@ For each hanging storyline, provide:
 - The year when the completion should occur
 - Where to insert the new scene(s) (after which scene ID)
 
-Respond with JSON array:
 [
   {{
     "storyline_description": "Brief description of the hanging storyline (e.g., 'Engagement to Martha mentioned but marriage never shown')",
@@ -668,12 +689,14 @@ Respond with JSON array:
 If there are NO hanging storylines, return an empty array []."""
 
     try:
+        audience_note = f" {prompt_builders.get_biopic_audience_profile()}" if script_type == "biopic" else ""
         content = llm_utils.generate_text(
             messages=[
-                {"role": "system", "content": f"You are an expert story analyst who identifies incomplete storylines in {'horror stories' if script_type == 'horror' else 'narratives'}. You understand narrative structure and ensure all introduced plot threads are resolved. {'For horror: Focus on tension building and ensuring threats/mysteries are properly developed.' if script_type == 'horror' else ''} Respond with valid JSON array only."},
+                {"role": "system", "content": f"You are an expert story analyst who identifies incomplete storylines in {'horror stories' if script_type == 'horror' else 'narratives'}. You understand narrative structure and ensure all introduced plot threads are resolved. {'For horror: Focus on tension building and ensuring threats/mysteries are properly developed.' if script_type == 'horror' else ''}{audience_note}"},
                 {"role": "user", "content": hanging_storylines_prompt}
             ],
             temperature=0.5,
+            response_json_schema=HANGING_STORYLINES_SCHEMA,
         )
         hanging_storylines = json.loads(clean_json_response(content))
         
@@ -753,7 +776,6 @@ This scene should:
 - Write from the YouTuber's perspective - natural storytelling
 - Use 1-2 sentences (brief but complete)
 
-Respond with JSON:
 {{
   "title": "2-5 word title",
   "narration": "1-2 sentences that complete the hanging storyline naturally",
@@ -766,9 +788,10 @@ Respond with JSON:
 
             # Adjust system prompt based on script type
             if script_type == "horror":
-                system_content = "You create scenes that complete hanging horror threads in horror stories. You ensure narrative completeness and maintain horror atmosphere. CRITICAL: narration_instructions should match the scene's emotion field with brief delivery guidance. Keep it simple - just follow the emotion with some context. Respond with valid JSON only."
+                system_content = "You create scenes that complete hanging horror threads in horror stories. You ensure narrative completeness and maintain horror atmosphere. CRITICAL: narration_instructions should match the scene's emotion field with brief delivery guidance. Keep it simple - just follow the emotion with some context. "
             else:
-                system_content = "You create scenes that complete hanging storylines in documentaries. You ensure narrative completeness and chronological accuracy. CRITICAL: narration_instructions should match the scene's emotion field with brief delivery guidance. Keep it simple - just follow the emotion with some context. Respond with valid JSON only."
+                audience_note = f" {prompt_builders.get_biopic_audience_profile()}" if script_type == "biopic" else ""
+                system_content = f"You create scenes that complete hanging storylines in documentaries. You ensure narrative completeness and chronological accuracy. CRITICAL: narration_instructions should match the scene's emotion field with brief delivery guidance. Keep it simple - just follow the emotion with some context.{audience_note}"
             
             try:
                 completion_content = llm_utils.generate_text(
@@ -777,6 +800,7 @@ Respond with JSON:
                         {"role": "user", "content": completion_prompt}
                     ],
                     temperature=0.7,
+                    response_json_schema=SCENE_SCHEMA,
                 )
                 new_scene = json.loads(clean_json_response(completion_content))
                 
@@ -811,8 +835,9 @@ Respond with JSON:
                         new_scene['drone_change'] = "fade_in"
                         print(f"[STORYLINE CHECK] WARNING: Generated scene missing valid drone_change, defaulting to 'fade_in'")
                 
-                # Mark as storyline completion scene
+                # Mark as storyline completion scene and inherit chapter_num for music track alignment
                 new_scene['is_storyline_completion'] = True
+                new_scene['chapter_num'] = scene_after.get('chapter_num', 1)
                 
                 # Set temporary ID (will be renumbered later)
                 new_scene['id'] = insert_after_id + 0.5
@@ -853,7 +878,8 @@ Respond with JSON:
 
 def refine_scenes(scenes: list[dict], subject_name: str, is_short: bool = False, chapter_context: str = None, 
                   diff_output_path: Path | None = None, subject_type: str = "person", skip_significance_scenes: bool = False,
-                  scenes_per_chapter: int = None, script_type: str = "biopic") -> tuple[list[dict], dict]:
+                  scenes_per_chapter: int = None, chapter_boundaries: list[tuple[int, int]] = None,
+                  script_type: str = "biopic") -> tuple[list[dict], dict]:
     """
     Refine generated scenes through THREE PASSES:
     1. Check for hanging storylines and add scenes to complete them
@@ -868,7 +894,8 @@ def refine_scenes(scenes: list[dict], subject_name: str, is_short: bool = False,
         diff_output_path: Optional path to save refinement diff JSON
         subject_type: Type of subject - "person", "character", "region", "topic", etc. (for prompt customization)
         skip_significance_scenes: If True, skip identifying pivotal moments and generating significance scenes (for top 10 lists, etc.)
-        scenes_per_chapter: Number of scenes per chapter (used to identify chapter 1 scenes and CTA scene to exclude from pivotal moments)
+        scenes_per_chapter: Legacy - fixed scenes per chapter (used when chapter_boundaries not provided)
+        chapter_boundaries: List of (start_id, end_id) per chapter for variable scene counts. Takes precedence over scenes_per_chapter.
     
     Returns:
         tuple: (refined_scenes, diff_data) - The refined scenes and a diff dict showing what changed
@@ -901,20 +928,25 @@ def refine_scenes(scenes: list[dict], subject_name: str, is_short: bool = False,
         print(f"\n[REFINEMENT PASS 2] Identifying pivotal moments and adding significance scenes...")
         print(f"[REFINEMENT] Identifying pivotal moments and adding significance scenes (before refinement)...")
         
-        # Exclude chapter 1 scenes and CTA scene from pivotal moment identification
+        # Exclude chapter 1 scenes and first scene of chapter 2 (transition) from pivotal moment identification
         excluded_scene_ids = set()
-        if scenes_per_chapter is not None:
-            # Chapter 1 scenes: scenes 1 to scenes_per_chapter
+        if chapter_boundaries and len(chapter_boundaries) >= 2:
+            # Use chapter boundaries: exclude all of chapter 1 + first scene of chapter 2
+            ch1_start, ch1_end = chapter_boundaries[0]
+            ch2_start, _ = chapter_boundaries[1]
+            chapter_1_scene_ids = set(range(ch1_start, ch1_end + 1))
+            excluded_scene_ids.update(chapter_1_scene_ids)
+            excluded_scene_ids.add(ch2_start)  # Transition scene from hook to story
+            print(f"[REFINEMENT]   • Excluding chapter 1 scenes (IDs {ch1_start}-{ch1_end}) and transition scene (ID {ch2_start}) from pivotal moment identification")
+        elif scenes_per_chapter is not None:
+            # Legacy: fixed scenes per chapter
             chapter_1_scene_ids = set(range(1, scenes_per_chapter + 1))
             excluded_scene_ids.update(chapter_1_scene_ids)
-            
-            # CTA scene: scene right after chapter 1 (scenes_per_chapter + 1)
             cta_scene_id = scenes_per_chapter + 1
             excluded_scene_ids.add(cta_scene_id)
-            
-            print(f"[REFINEMENT]   • Excluding chapter 1 scenes (IDs {min(chapter_1_scene_ids)}-{max(chapter_1_scene_ids)}) and CTA scene (ID {cta_scene_id}) from pivotal moment identification")
+            print(f"[REFINEMENT]   • Excluding chapter 1 scenes (IDs 1-{scenes_per_chapter}) and CTA scene (ID {cta_scene_id}) from pivotal moment identification")
         
-        pivotal_moments = identify_pivotal_moments(scenes_after_pivotal, subject_name, chapter_context, excluded_scene_ids=excluded_scene_ids)
+        pivotal_moments = identify_pivotal_moments(scenes_after_pivotal, subject_name, chapter_context, excluded_scene_ids=excluded_scene_ids, script_type=script_type)
         
         if pivotal_moments:
             print(f"[REFINEMENT PASS 2]   • Identified {len(pivotal_moments)} pivotal moment(s)")
@@ -962,8 +994,9 @@ def refine_scenes(scenes: list[dict], subject_name: str, is_short: bool = False,
                         significance_scene['narration_instructions'] = f"Focus on {emotion}."
                     print(f"[REFINEMENT PASS 2] WARNING: Generated significance scene missing narration_instructions, generated fallback: {significance_scene['narration_instructions']}")
                 
-                # Mark this as a significance scene
+                # Mark this as a significance scene and inherit chapter_num for music track alignment
                 significance_scene['is_significance_scene'] = True
+                significance_scene['chapter_num'] = pivotal_scene.get('chapter_num', 1)
                 
                 # Set temporary ID (will be renumbered later)
                 significance_scene['id'] = pivotal_scene_id + 0.5  # Temporary ID between pivotal and next
@@ -1078,7 +1111,13 @@ HORROR-SPECIFIC REFINEMENT FOCUS:
         narration_style_note = "Write from the YouTuber's perspective - natural storytelling without referencing how it's organized."
         horror_focus = ""
     
+    biopic_audience_note = ""
+    if script_type == "biopic":
+        import prompt_builders
+        biopic_audience_note = f"\n\n{prompt_builders.get_biopic_audience_profile()}\n"
+    
     refinement_prompt = f"""You are reviewing and refining scenes for {subject_descriptor} {subject_name}.
+{biopic_audience_note}
 
 CURRENT SCENES (JSON):
 {scenes_json}
@@ -1099,7 +1138,7 @@ YOUR TASK: Review these scenes and improve them. Look for:
      - If a WHY scene doesn't create curiosity or anticipation, strengthen it by adding: a mystery to solve, a problem to overcome, a counterintuitive fact, a secret revealed, or something unexpected
      - If a WHY scene is confusing or vague about what's happening, strengthen it by adding: clear context about the situation, specific facts about what's happening, and clear establishment of the story state
      - WHY scenes should hook viewers and make them anticipate the upcoming WHAT section, but NEVER at the expense of clarity about what's happening
-     - Examples of good WHY scenes that maintain clarity: "In 1905, Einstein faces an impossible challenge. But how did he manage to...?", "The secret that would change everything was hidden in plain sight. What he didn't know was...", "What nobody realized was that this moment would define everything. The risk was enormous because..."
+     - Examples of good WHY scenes (straightforward, not sensationalist): "In 1905, Einstein faces a major challenge. How did he manage to...?", "A discovery was about to change his work. What he found would surprise him.", "This moment would prove significant. The stakes were high because..."
    * WHAT scenes should: deliver core content, solutions, actual information, and details. They satisfy the anticipation created by WHY sections. CRITICAL: Every WHAT scene must clearly communicate:
      - WHAT is happening: The specific events, actions, or information
      - WHY it's important: The significance, impact, or meaning of what's happening
@@ -1112,24 +1151,28 @@ YOUR TASK: Review these scenes and improve them. Look for:
      - If a WHY scene doesn't clearly establish what is happening (causing potential confusion), strengthen it by adding: clear context about the situation, specific facts about what's happening, and clear establishment of the story state
      - If a WHY scene doesn't set up what/why/stakes for the next WHAT scene, strengthen it by adding: what will happen (or what question/problem needs addressing), why it matters, and what the stakes are
      - WHY scenes should create anticipation by establishing the context that the WHAT scene will address, but NEVER at the expense of clarity about what's happening
-     - Examples of good WHY scenes that maintain clarity: "In 1905, Einstein faces an impossible challenge. But how did he manage to...?", "The secret that would change everything was hidden in plain sight. What he didn't know was...", "What nobody realized was that this moment would define everything. If he failed, everything would be lost...", "The risk was enormous because..."
+     - Examples of good WHY scenes (straightforward, not sensationalist): "In 1905, Einstein faces a major challenge. How did he manage to...?", "A discovery was about to change his work.", "This moment would prove significant. If he failed, the consequences would be severe.", "The stakes were high because..."
    * Ensure WHY sections set up what/why/stakes for upcoming WHAT sections - if a WHY scene doesn't establish what will happen, why it matters, and what the stakes are, refine it to do so
    * Ensure WHAT sections clearly communicate what/why/stakes - if a WHAT scene doesn't clearly explain what's happening, why it's important, and what the stakes are, refine it to do so
-2. META REFERENCES (CRITICAL) - Remove ANY references to:
+2. SENSATIONALIST LANGUAGE - Simplify and tone down:
+   * Remove or replace gimmicky phrases: "shocking", "incredible", "unbelievable", "what nobody expected", "the secret that would change everything", "mind-blowing"
+   * Let facts speak for themselves—don't oversell with hype or repeated dramatic framing
+   * Prefer direct, straightforward statements over theatrical buildup
+3. META REFERENCES (CRITICAL) - Remove ANY references to:
    * "Chapter" or "chapters" - viewers don't know about chapters
    * "In this video" or "In this documentary" or "In this story"
    * "As we'll see" or "Later in this video" or "As we continue"
    * "Let me tell you" or "I want to show you" - just narrate directly
    * Any production elements, scripts, outlines, prompts, or behind-the-scenes info
    * References like "this part" or "this section" or "here we see"
-3. OVERLAPPING/DUPLICATE EVENTS (CRITICAL) - If multiple scenes describe the SAME event, moment, or action in detail, consolidate or remove the duplicate. Each scene should cover DIFFERENT events. For example, if Scene 24 describes Antony's suicide attempt and being brought to the mausoleum, Scene 27 should NOT repeat this same event - instead it should focus on what happens NEXT (his death, Cleopatra's response, or the consequences). Remove overlapping content and ensure each scene advances the story with NEW information.
-4. MISSING EMOTIONAL ENGAGEMENT - If scenes read too factually without emotional weight, add:
+4. OVERLAPPING/DUPLICATE EVENTS (CRITICAL) - If multiple scenes describe the SAME event, moment, or action in detail, consolidate or remove the duplicate. Each scene should cover DIFFERENT events. For example, if Scene 24 describes Antony's suicide attempt and being brought to the mausoleum, Scene 27 should NOT repeat this same event - instead it should focus on what happens NEXT (his death, Cleopatra's response, or the consequences). Remove overlapping content and ensure each scene advances the story with NEW information.
+5. MISSING EMOTIONAL ENGAGEMENT - If scenes read too factually without emotional weight, add:
    * How events feel to the character (fear, determination, despair, triumph)
    * The emotional significance and personal stakes
    * Internal experience details (what they're thinking, feeling, fearing)
    * Physical sensations and reactions that create empathy
    * Make events feel significant by connecting them to human emotions
-5. EMOTION CONSISTENCY AND SMOOTH TRANSITIONS - Ensure the scene's "emotion" field matches the narration tone and image mood, AND flows smoothly from the previous scene:
+6. EMOTION CONSISTENCY AND SMOOTH TRANSITIONS - Ensure the scene's "emotion" field matches the narration tone and image mood, AND flows smoothly from the previous scene:
    * The emotion field should accurately reflect how the scene FEELS
    * Narration tone should match the emotion (e.g., "desperate" → urgent/anxious narration)
    * Image prompt mood should match the emotion (e.g., "desperate" → tense atmosphere in image)
@@ -1138,13 +1181,13 @@ YOUR TASK: Review these scenes and improve them. Look for:
    * Build intensity gradually: 'contemplative' → 'thoughtful' → 'somber' → 'serious' → 'tense' (not 'calm' → 'urgent')
    * Avoid dramatic emotional jumps - each scene's emotion should be a natural progression from the previous scene
    * narration_instructions should also transition smoothly - keep to ONE SENTENCE focusing on a single emotion: "Focus on [emotion]." If previous scene was "Focus on tension", next might be "Focus on anxiety" (gradual progression)
-6. CONTEXT AND DEPTH (documentary/biopic) - Viewers must never be lost. If a scene name-drops a place, person, or event (e.g. Fort Necessity, General Braddock, the Newburgh Conspiracy) without context, add one phrase so a general viewer understands. If a scene jumps into an event without establishing the situation (who is involved, where we are, why this moment), add a sentence of setup. If a major event has no consequence stated, briefly note what it changes or what would have happened otherwise. Prioritize clarity and depth—use 3-4 sentences when a scene needs more context.
-7. VIEWER CONFUSION (CRITICAL FOR RETENTION) - The biggest issue for retention is viewer confusion. Ensure WHY scenes make it clear what is happening:
+7. CONTEXT AND DEPTH (documentary/biopic) - Viewers must never be lost. If a scene name-drops a place, person, or event (e.g. Fort Necessity, General Braddock, the Newburgh Conspiracy) without context, add one phrase so a general viewer understands. If a scene jumps into an event without establishing the situation (who is involved, where we are, why this moment), add a sentence of setup. If a major event has no consequence stated, briefly note what it changes or what would have happened otherwise. Prioritize clarity and depth—use 3-4 sentences when a scene needs more context.
+8. VIEWER CONFUSION (CRITICAL FOR RETENTION) - The biggest issue for retention is viewer confusion. Ensure WHY scenes make it clear what is happening:
    * WHY scenes MUST ensure the viewer knows WHAT IS HAPPENING in the story - provide clear context, establish the situation, and make sure viewers understand the basic facts before introducing mysteries or questions
    * If a WHY scene is confusing or vague about what's happening, strengthen it by adding: clear context about the situation, specific facts about what's happening, and clear establishment of the story state
    * Don't create confusion by being vague - viewers should always understand what is happening in the story, even when mysteries or questions are being introduced
    * Examples of clear WHY scenes: "In 1905, Einstein faces an impossible challenge. But how did he manage to...?" (clear context first, then question) vs. "But how did he manage to...?" (confusing - no context)
-8. SEAMLESS JOURNEY AND CONNECTIONS (CRITICAL) - Ensure scenes feel connected, not like consecutive pieces of disjoint information:
+9. SEAMLESS JOURNEY AND CONNECTIONS (CRITICAL) - Ensure scenes feel connected, not like consecutive pieces of disjoint information:
    * Each scene should build on the previous scene - reference what came before naturally, show how events connect
    * Scenes should feel like a flowing narrative where each scene grows from the last, not like separate disconnected facts
    * If scenes feel disconnected or like they're just listing information (A and B and C), strengthen connections by:
@@ -1154,17 +1197,17 @@ YOUR TASK: Review these scenes and improve them. Look for:
      - Creating logical progression where each scene feels like the natural next step
    * Use WHY/WHAT interleaving to create natural connections - WHY scenes should set up questions that the following WHAT scenes answer
    * The goal: When scenes are strung together, they should feel like one continuous, connected story
-9. AWKWARD TRANSITIONS - scene endings that don't flow smoothly into the next scene
+10. AWKWARD TRANSITIONS - scene endings that don't flow smoothly into the next scene
    * CRITICAL: If significance scenes were inserted after pivotal moments, ensure scenes immediately AFTER significance scenes transition FROM the significance scene, not from the original pivotal scene
    * Example: If Scene 17 is pivotal, Scene 18 is a significance scene (inserted), and Scene 19 follows - Scene 19's beginning should reference/flow from Scene 18, not Scene 17
    * Significance scenes bridge pivotal moments and their consequences - scenes after them should acknowledge this bridge
-10. WEIRD OR UNNATURAL SENTENCES - phrases that sound odd when spoken, overly flowery language, vague statements
-11. REPETITIVE LANGUAGE - same words or phrases used too frequently
-12. CLARITY ISSUES - sentences that are confusing or hard to understand when spoken aloud
-13. NARRATION STYLE VIOLATIONS - film directions ("Cut to:", "Smash cut—"), camera directions ("Close-up of", "Wide shot"), or production terminology
-14. MISSING CONNECTIONS - scenes that don't reference what came before when they should
-15. PACING ISSUES - scenes that feel rushed or too slow for the story beat
-16. FACTUAL INCONSISTENCIES - any contradictions or inaccuracies
+11. WEIRD OR UNNATURAL SENTENCES - phrases that sound odd when spoken, overly flowery language, vague statements
+12. REPETITIVE LANGUAGE - same words or phrases used too frequently
+13. CLARITY ISSUES - sentences that are confusing or hard to understand when spoken aloud
+14. NARRATION STYLE VIOLATIONS - film directions ("Cut to:", "Smash cut—"), camera directions ("Close-up of", "Wide shot"), production terminology, or unnecessary quotes (use quotes ONLY for proper nouns to emphasize—e.g. titles of works; otherwise no quotes, they mess up TTS)
+15. MISSING CONNECTIONS - scenes that don't reference what came before when they should
+16. PACING ISSUES - scenes that feel rushed or too slow for the story beat
+17. FACTUAL INCONSISTENCIES - any contradictions or inaccuracies
 
 IMPORTANT GUIDELINES:
 - Keep ALL factual information accurate
@@ -1191,15 +1234,17 @@ CRITICAL JSON STRUCTURE REQUIREMENTS:
 - If a scene is missing narration_instructions, add it based on the scene's emotion field
 - FOR HORROR SCRIPTS: The "drone_change" field is REQUIRED for every scene - it must be one of: 'fade_in', 'fade_out', 'hard_cut', 'hold', 'swell', 'shrink', 'none'. Update drone_change if the scene's emotional intensity or narrative flow changed during refinement.
 
-Respond with JSON array only (no markdown, no explanation). Each scene object must include: id, title, narration, image_prompt, emotion, year, scene_type, narration_instructions{', and drone_change (for horror scripts)' if script_type == 'horror' else ''}."""
+Each scene object must include: id, title, narration, image_prompt, emotion, year, scene_type, narration_instructions{', and drone_change (for horror scripts)' if script_type == 'horror' else ''}."""
     
     try:
+        audience_note = f" {prompt_builders.get_biopic_audience_profile()}" if script_type == "biopic" else ""
         content = llm_utils.generate_text(
             messages=[
-                {"role": "system", "content": f"You are an expert editor who refines {'horror stories\'' if script_type == 'horror' else 'historical biopics\''} narration for clarity, flow, and naturalness. THREE PRINCIPLES (every scene must satisfy all three): (1) The viewer must know WHAT IS HAPPENING. (2) The viewer must know WHY IT IS IMPORTANT. (3) The viewer must know WHAT COULD GO WRONG. If a scene misses any of these, add the missing element. CRITICAL FOR RETENTION - AVOID VIEWER CONFUSION: The biggest issue for retention is viewer confusion. WHY scenes MUST ensure the viewer knows WHAT IS HAPPENING in the story - provide clear context, establish the situation, and make sure viewers understand the basic facts before introducing mysteries or questions. Don't create confusion by being vague about what's happening. CRITICAL: Create a SEAMLESS JOURNEY through the video - scenes should feel CONNECTED, not like consecutive pieces of disjoint information (A and B and C). Each scene should build on the previous scene, reference what came before naturally, and show how events connect. You understand the WHY/WHAT paradigm: WHY scenes frame mysteries, problems, questions, obstacles, counterintuitive information, secrets, or suggest there's something we haven't considered - they create anticipation by setting up what will happen, why it matters, and what the stakes are for upcoming WHAT sections. WHY scenes MUST clearly establish what is happening (MOST IMPORTANT for retention) before introducing questions or mysteries. WHAT scenes deliver core content, solutions, and information - they satisfy anticipation by clearly communicating what is happening, why it's important, and what the stakes are (what can go wrong, what can go right, what's at risk). {'CRITICAL FOR HORROR: All narration must be in FIRST PERSON (I/me/my), present tense. The protagonist is telling their own story. Focus on tension building, atmosphere, and horror pacing. For final chapter, ensure open ending that keeps viewers scared.' if script_type == 'horror' else ''} You catch awkward transitions, weird sentences, style violations, and especially meta references (chapters, production elements, etc.). You ensure scenes feel connected and build on each other, WHY scenes clearly establish what is happening (avoiding confusion) and set up what/why/stakes for upcoming WHAT sections, and WHAT scenes clearly communicate what/why/stakes. {narration_style_note} CRITICAL JSON REQUIREMENT: Every scene in your response MUST include the 'narration_instructions' field. This field must be ONE SENTENCE focusing on a single emotion from the emotion field. Keep it simple: 'Focus on [emotion].' Examples: 'Focus on tension.' or 'Focus on contemplation.' The narration_instructions should flow smoothly from the previous scene's narration_instructions (gradual emotion progression). DO NOT omit this field from any scene. Respond with valid JSON array only - same structure as input, including narration_instructions for every scene."},
+                {"role": "system", "content": f"You are an expert editor who refines {'horror stories\'' if script_type == 'horror' else 'historical biopics\''} narration for clarity, flow, and naturalness. THREE PRINCIPLES (every scene must satisfy all three): (1) The viewer must know WHAT IS HAPPENING. (2) The viewer must know WHY IT IS IMPORTANT. (3) The viewer must know WHAT COULD GO WRONG. If a scene misses any of these, add the missing element. CRITICAL FOR RETENTION - AVOID VIEWER CONFUSION: The biggest issue for retention is viewer confusion. WHY scenes MUST ensure the viewer knows WHAT IS HAPPENING in the story - provide clear context, establish the situation, and make sure viewers understand the basic facts before introducing mysteries or questions. Don't create confusion by being vague about what's happening. CRITICAL: Create a SEAMLESS JOURNEY through the video - scenes should feel CONNECTED, not like consecutive pieces of disjoint information (A and B and C). Each scene should build on the previous scene, reference what came before naturally, and show how events connect. You understand the WHY/WHAT paradigm: WHY scenes frame mysteries, problems, questions, obstacles, counterintuitive information, secrets, or suggest there's something we haven't considered - they create anticipation by setting up what will happen, why it matters, and what the stakes are for upcoming WHAT sections. WHY scenes MUST clearly establish what is happening (MOST IMPORTANT for retention) before introducing questions or mysteries. WHAT scenes deliver core content, solutions, and information - they satisfy anticipation by clearly communicating what is happening, why it's important, and what the stakes are (what can go wrong, what can go right, what's at risk). {'CRITICAL FOR HORROR: All narration must be in FIRST PERSON (I/me/my), present tense. The protagonist is telling their own story. Focus on tension building, atmosphere, and horror pacing. For final chapter, ensure open ending that keeps viewers scared.' if script_type == 'horror' else ''} You catch awkward transitions, weird sentences, style violations, sensationalist or gimmicky phrasing, and especially meta references (chapters, production elements, etc.). Simplify sensationalist language—let facts speak for themselves. You ensure scenes feel connected and build on each other, WHY scenes clearly establish what is happening (avoiding confusion) and set up what/why/stakes for upcoming WHAT sections, and WHAT scenes clearly communicate what/why/stakes. {narration_style_note}{audience_note} CRITICAL JSON REQUIREMENT: Every scene in your response MUST include the 'narration_instructions' field. This field must be ONE SENTENCE focusing on a single emotion from the emotion field. Keep it simple: 'Focus on [emotion].' Examples: 'Focus on tension.' or 'Focus on contemplation.' The narration_instructions should flow smoothly from the previous scene's narration_instructions (gradual emotion progression). DO NOT omit this field from any scene. Same structure as input, including narration_instructions for every scene."},
                 {"role": "user", "content": refinement_prompt}
             ],
             temperature=0.3,  # Lower temperature for refinement - more focused changes
+            response_json_schema=SCENES_ARRAY_SCHEMA,
         )
         refined_scenes = json.loads(clean_json_response(content))
         

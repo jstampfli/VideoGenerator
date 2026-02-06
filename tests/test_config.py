@@ -21,7 +21,7 @@ class TestConfig(unittest.TestCase):
         
         # Main video settings
         self.assertIsInstance(cfg.chapters, int)
-        self.assertIsInstance(cfg.scenes_per_chapter, int)
+        self.assertIsInstance(cfg.target_total_scenes, int)
         self.assertIsInstance(cfg.generate_main, bool)
         
         # Shorts settings
@@ -35,10 +35,9 @@ class TestConfig(unittest.TestCase):
         self.assertIsInstance(cfg.generate_refinement_diffs, bool)
     
     def test_total_scenes_property(self):
-        """Test total_scenes property calculation."""
+        """Test total_scenes property returns target_total_scenes."""
         cfg = config.Config()
-        expected = cfg.chapters * cfg.scenes_per_chapter
-        self.assertEqual(cfg.total_scenes, expected)
+        self.assertEqual(cfg.total_scenes, cfg.target_total_scenes)
     
     def test_total_short_scenes_property(self):
         """Test total_short_scenes property calculation."""
@@ -52,7 +51,7 @@ class TestConfig(unittest.TestCase):
         
         # Check main video defaults
         self.assertEqual(cfg.chapters, 6)
-        self.assertEqual(cfg.scenes_per_chapter, 4)
+        self.assertEqual(cfg.target_total_scenes, 24)
         self.assertTrue(cfg.generate_main)
         
         # Check shorts defaults
@@ -74,9 +73,9 @@ class TestConfig(unittest.TestCase):
         self.assertEqual(cfg.chapters, 5)
         self.assertNotEqual(cfg.chapters, original_chapters)
         
-        # Verify total_scenes updates
-        expected_total = cfg.chapters * cfg.scenes_per_chapter
-        self.assertEqual(cfg.total_scenes, expected_total)
+        # Verify total_scenes (target_total_scenes) can be modified
+        cfg.target_total_scenes = 30
+        self.assertEqual(cfg.total_scenes, 30)
     
     def test_multiple_instances(self):
         """Test that multiple Config instances are independent."""

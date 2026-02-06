@@ -19,7 +19,10 @@ IMAGE_MODEL_GOOGLE = os.getenv("IMAGE_MODEL_GOOGLE", "gemini-2.0-flash-exp")
 class Config:
     # Main video settings
     chapters = 6           # Number of outline chapters
-    scenes_per_chapter = 4  # Scenes per chapter (total = chapters * scenes_per_chapter)
+    target_total_scenes = 24  # Target total scenes; outline distributes across chapters via num_scenes
+    min_scenes_per_chapter = 2  # Minimum scenes per chapter (for outline guidance)
+    max_scenes_per_chapter = 10  # Maximum scenes per chapter (for outline guidance)
+    # Legacy fallback: when outline lacks num_scenes, use target_total_scenes / chapters
     generate_main = True    # Whether to generate main video
     
     # Shorts settings
@@ -33,8 +36,14 @@ class Config:
     
     @property
     def total_scenes(self):
-        return self.chapters * self.scenes_per_chapter
-    
+        """Target total scenes (used before outline is generated). Actual count = sum of chapter num_scenes."""
+        return self.target_total_scenes
+
+    @property
+    def scenes_per_chapter_fallback(self):
+        """Fallback when outline lacks num_scenes per chapter (e.g., legacy outlines)."""
+        return max(self.min_scenes_per_chapter, self.target_total_scenes // self.chapters)
+
     @property
     def total_short_scenes(self):
         return self.short_chapters * self.short_scenes_per_chapter
