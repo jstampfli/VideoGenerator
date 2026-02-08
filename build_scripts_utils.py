@@ -7,6 +7,8 @@ import time
 import re
 from pathlib import Path
 
+from PIL import Image
+
 import llm_utils
 import prompt_builders
 from biopic_schemas import (
@@ -18,6 +20,27 @@ from biopic_schemas import (
 
 NO_TEXT_CONSTRAINT: str = """
 CRITICAL: Do NOT include any text, words, letters, numbers, titles, labels, watermarks, or any written content in the image. The image must be completely text-free."""
+
+THUMBNAIL_MAX_BYTES = 2 * 1024 * 1024  # 2 MB
+
+
+def _compress_thumbnail_if_needed(path: Path, max_bytes: int = THUMBNAIL_MAX_BYTES) -> None:
+    """Re-save thumbnail with lower JPEG quality if file size exceeds max_bytes."""
+    if not path.exists():
+        return
+    size = path.stat().st_size
+    if size <= max_bytes:
+        return
+    try:
+        img = Image.open(path).convert("RGB")
+        for quality in (85, 75, 65, 55, 45, 35):
+            img.save(path, "JPEG", quality=quality, optimize=True)
+            if path.stat().st_size <= max_bytes:
+                print(f"[THUMBNAIL] Compressed to {path.stat().st_size / 1024:.0f} KB (was {size / 1024:.0f} KB, quality={quality})")
+                return
+        print(f"[WARNING] Thumbnail still {path.stat().st_size / 1024:.0f} KB after compression (target < 2 MB)")
+    except Exception as e:
+        print(f"[WARNING] Could not compress thumbnail: {e}")
 
 
 def clean_json_response(content: str) -> str:
@@ -239,6 +262,7 @@ def generate_thumbnail(prompt: str, output_path: Path, size: str = "1024x1024", 
                 moderation="low",
             )
             
+            _compress_thumbnail_if_needed(output_path)
             print(f"[THUMBNAIL] Saved: {output_path}")
             return output_path
             

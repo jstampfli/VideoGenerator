@@ -1322,7 +1322,7 @@ def generate_lol_shorts(subject_of_interest: str, main_title: str, global_block:
                 thumbnail_prompt = short_outline.get("thumbnail_prompt", "")
                 if thumbnail_prompt:
                     thumbnail_prompt += "\n\nCLICKBAIT YouTube Shorts thumbnail - MAXIMIZE SCROLL-STOPPING POWER: Vertical 9:16, EXTREME close-up or dramatic composition, intense emotional expression (shock/passion/conflict), HIGH CONTRAST dramatic lighting (chiaroscuro), bold eye-catching colors (reds/yellows/oranges for urgency), subject in MOMENT OF IMPACT, fantasy/magical elements, movie-poster energy, optimized for mobile scrolling - must instantly grab attention when tiny in feed."
-                    thumb_file = THUMBNAILS_DIR / f"{base_name}_short{short_num}_thumbnail.png"
+                    thumb_file = THUMBNAILS_DIR / f"{base_name}_short{short_num}_thumbnail.jpg"
                     thumbnail_path = generate_thumbnail(thumbnail_prompt, thumb_file, size="1024x1536")
             
             # Build short output
@@ -1504,7 +1504,7 @@ Generate JSON:
     if config.generate_main:
         print("\n[THUMBNAIL] Main video thumbnail...")
         THUMBNAILS_DIR.mkdir(parents=True, exist_ok=True)
-        thumbnail_path = THUMBNAILS_DIR / f"{Path(output_path).stem}_thumbnail.png"
+        thumbnail_path = THUMBNAILS_DIR / f"{Path(output_path).stem}_thumbnail.jpg"
         
         thumbnail_prompt = f"""{thumbnail_description}
 
@@ -1833,7 +1833,7 @@ Generate JSON:
     if config.generate_main:
         print("\n[THUMBNAIL] Main video thumbnail...")
         THUMBNAILS_DIR.mkdir(parents=True, exist_ok=True)
-        thumbnail_path = THUMBNAILS_DIR / f"{Path(output_path).stem}_thumbnail.png"
+        thumbnail_path = THUMBNAILS_DIR / f"{Path(output_path).stem}_thumbnail.jpg"
         
         thumbnail_prompt = f"""{thumbnail_description}
 
@@ -2098,7 +2098,7 @@ def generate_top10_shorts(topic: str, main_title: str, global_block: str, outlin
                 thumbnail_prompt = entry_outline.get("thumbnail_prompt", "")
                 if thumbnail_prompt:
                     thumbnail_prompt += "\n\nCLICKBAIT YouTube Shorts thumbnail - MAXIMIZE SCROLL-STOPPING POWER: Vertical 9:16, EXTREME close-up or dramatic composition, intense emotional expression, HIGH CONTRAST dramatic lighting, bold eye-catching colors, fantasy/magical elements, movie-poster energy, optimized for mobile scrolling."
-                    thumb_file = THUMBNAILS_DIR / f"{base_name}_entry{rank}_short_thumbnail.png"
+                    thumb_file = THUMBNAILS_DIR / f"{base_name}_entry{rank}_short_thumbnail.jpg"
                     thumbnail_path = generate_thumbnail(thumbnail_prompt, thumb_file, size="1024x1536")
             
             # Build short output

@@ -3,6 +3,8 @@ JSON schemas for biopic script generation.
 Pass these to llm_utils.generate_text(response_json_schema=...) for structured output.
 """
 
+from kenburns_config import KENBURNS_PATTERNS
+
 # --- Landmark events (pre-outline: most important moments to give deep focus) ---
 LANDMARK_EVENTS_SCHEMA = {
     "type": "object",
@@ -135,9 +137,10 @@ SCENES_ARRAY_SCHEMA = {
             "emotion": {"type": "string"},
             "narration_instructions": {"type": "string"},
             "year": {"type": ["string", "integer"]},
-            "chapter_num": {"type": "integer"},  # optional, for biopic chapter scenes
+            "chapter_num": {"type": "integer"},  # for biopic chapter scenes
+            "kenburns_pattern": {"type": "string", "enum": KENBURNS_PATTERNS},  # camera motion pattern
         },
-        "required": ["id", "title", "narration", "scene_type", "image_prompt", "emotion", "narration_instructions", "year"],
+        "required": ["id", "title", "narration", "scene_type", "image_prompt", "emotion", "narration_instructions", "year", "chapter_num", "kenburns_pattern"],
     },
 }
 

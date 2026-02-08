@@ -41,6 +41,14 @@ from build_video import (
     HORROR_DISCLAIMER_WIDE,
     END_SCENE_PAUSE_LENGTH,
     _build_video_impl,
+    make_motion_clip_with_audio,
+    make_static_clip_with_audio,
+    build_biopic_music_track,
+    mix_biopic_background_music,
+    KENBURNS_PATTERNS,
+    KENBURNS_ENABLED,
+    CROSSFADE_DURATION,
+    FPS,
 )
 from moviepy import AudioClip, CompositeAudioClip, VideoClip, AudioFileClip
 import numpy as np
@@ -1687,6 +1695,532 @@ class TestHorrorDisclaimer(unittest.TestCase):
         finally:
             if tmp.exists():
                 shutil.rmtree(tmp, ignore_errors=True)
+
+
+class TestKenBurnsMotion(unittest.TestCase):
+    """Unit tests for PIL-based Ken Burns motion clip generation."""
+
+    @classmethod
+    def setUpClass(cls):
+        try:
+            from PIL import Image as _Image
+        except ImportError:
+            raise unittest.SkipTest("PIL not available")
+
+        cls._tmp = Path(__file__).parent / "tmp_kenburns_unit"
+        cls._tmp.mkdir(parents=True, exist_ok=True)
+
+        # Create a test image with a gradient so motion produces different pixel values
+        img = _Image.new("RGB", (1536, 1024))
+        for x in range(1536):
+            for y in range(1024):
+                img.putpixel((x, y), (x % 256, y % 256, (x + y) % 256))
+        cls._img_path = cls._tmp / "scene.png"
+        img.save(str(cls._img_path))
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls._tmp, ignore_errors=True)
+
+    def _make_audio(self, duration=1.0):
+        """Create a short silent audio clip for testing."""
+        def make_silence(t):
+            return [0.0, 0.0]
+        return AudioClip(make_silence, duration=duration, fps=44100)
+
+    def test_motion_clip_returns_correct_duration(self):
+        """make_motion_clip_with_audio returns a clip with the expected duration."""
+        audio = self._make_audio(1.0)
+        clip = make_motion_clip_with_audio(self._img_path, audio, pattern="zoom_in")
+        expected = 1.0 + END_SCENE_PAUSE_LENGTH
+        self.assertAlmostEqual(clip.duration, expected, places=2)
+
+    def test_motion_clip_frame_shape(self):
+        """Each frame has the correct shape (out_h, out_w, 3)."""
+        import build_video as bv
+        audio = self._make_audio(0.5)
+        clip = make_motion_clip_with_audio(self._img_path, audio, pattern="zoom_in")
+        out_w, out_h = bv.config.output_resolution
+        frame = clip.get_frame(0)
+        self.assertEqual(frame.shape, (out_h, out_w, 3))
+
+    def test_all_patterns_produce_valid_clips(self):
+        """Every declared pattern produces a clip without crashing."""
+        audio = self._make_audio(0.5)
+        for pattern in KENBURNS_PATTERNS:
+            with self.subTest(pattern=pattern):
+                clip = make_motion_clip_with_audio(self._img_path, audio, pattern=pattern)
+                self.assertGreater(clip.duration, 0)
+                frame = clip.get_frame(0)
+                self.assertEqual(len(frame.shape), 3)
+
+    def test_unknown_pattern_uses_fallback(self):
+        """An unknown pattern name still produces a valid clip (fallback to zoom_in)."""
+        audio = self._make_audio(0.5)
+        clip = make_motion_clip_with_audio(self._img_path, audio, pattern="nonexistent_pattern")
+        self.assertGreater(clip.duration, 0)
+        frame = clip.get_frame(0)
+        self.assertEqual(len(frame.shape), 3)
+
+    def test_frames_change_over_time(self):
+        """First and last frames differ (motion is actually happening)."""
+        import numpy as _np
+        audio = self._make_audio(1.0)
+        clip = make_motion_clip_with_audio(self._img_path, audio, pattern="zoom_in")
+        first = clip.get_frame(0)
+        last = clip.get_frame(clip.duration - 0.01)
+        # Frames should not be identical — the zoom changes the crop
+        self.assertFalse(_np.array_equal(first, last), "First and last frames are identical — no motion")
+
+    def test_clip_has_audio(self):
+        """The returned clip has audio attached."""
+        audio = self._make_audio(0.5)
+        clip = make_motion_clip_with_audio(self._img_path, audio, pattern="zoom_in")
+        self.assertIsNotNone(clip.audio)
+
+
+_TESTS_DIR = Path(__file__).parent
+
+
+def _make_integration_test_fixtures(tmp: Path):
+    """
+    Helper: create the minimal fixtures (scenes.json, image, audio) for integration tests.
+    Returns (scenes_path, scene_image_path, scene_audio_path).
+    """
+    from PIL import Image
+    import wave
+
+    scenes_path = tmp / "scenes.json"
+    scenes_data = {
+        "scenes": [
+            {"id": 1, "title": "Scene 1", "narration": "Hello.", "image_prompt": "A room."},
+            {"id": 2, "title": "Scene 2", "narration": "World.", "image_prompt": "A field."},
+        ]
+    }
+    with open(scenes_path, "w", encoding="utf-8") as f:
+        json.dump(scenes_data, f, indent=2)
+
+    img_path = tmp / "scene.png"
+    Image.new("RGB", (1536, 1024), color="white").save(str(img_path))
+
+    audio_path = tmp / "scene.wav"
+    with wave.open(str(audio_path), "wb") as wav:
+        wav.setnchannels(2)
+        wav.setsampwidth(2)
+        wav.setframerate(44100)
+        num_frames = 44100 * 2  # 2 seconds
+        wav.writeframes(b"\x00\x00" * (num_frames * 2))
+
+    return scenes_path, img_path, audio_path
+
+
+class TestMotionIntegration(unittest.TestCase):
+    """Integration tests: motion=True/False through _build_video_impl."""
+
+    # Keep a direct reference to the real function so it survives patching
+    _real_static = staticmethod(make_static_clip_with_audio)
+
+    @staticmethod
+    def _static_ignoring_pattern(img_path, audio_clip, **kwargs):
+        """Wrap make_static_clip_with_audio, accepting and ignoring extra kwargs like pattern."""
+        return TestMotionIntegration._real_static(img_path, audio_clip)
+
+    def test_motion_flag_calls_make_motion_clip(self):
+        """When motion=True, make_motion_clip_with_audio is called for each scene."""
+        try:
+            from PIL import Image
+        except ImportError:
+            self.skipTest("PIL not available")
+
+        import build_video as bv
+        tmp = _TESTS_DIR / "tmp_motion_on"
+        tmp.mkdir(parents=True, exist_ok=True)
+        try:
+            scenes_path, img_path, audio_path = _make_integration_test_fixtures(tmp)
+            out_path = tmp / "out.mp4"
+
+            with patch.object(bv.config, "save_assets", False), \
+                 patch.object(bv.config, "is_vertical", False), \
+                 patch.object(bv.config, "temp_dir", str(tmp)), \
+                 patch("build_video.generate_image_for_scene_with_retry", return_value=img_path), \
+                 patch("build_video.generate_audio_for_scene_with_retry", return_value=audio_path), \
+                 patch("build_video.make_motion_clip_with_audio", wraps=self._static_ignoring_pattern) as mock_motion, \
+                 patch("build_video.make_static_clip_with_audio") as mock_static, \
+                 patch("build_video.KENBURNS_ENABLED", True):
+                # Don't actually write video
+                with patch("moviepy.video.VideoClip.VideoClip.write_videofile"):
+                    _build_video_impl(
+                        str(scenes_path),
+                        out_video_path=str(out_path),
+                        motion=True,
+                    )
+                # make_motion_clip should have been called (once per scene)
+                self.assertGreaterEqual(mock_motion.call_count, 2)
+                # make_static_clip should NOT have been called for regular scenes
+                # (it may still be called by make_motion_clip fallback, but the
+                # direct path should not call it)
+                mock_static.assert_not_called()
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_no_motion_flag_calls_static_clip(self):
+        """When motion=False, only make_static_clip_with_audio is called."""
+        try:
+            from PIL import Image
+        except ImportError:
+            self.skipTest("PIL not available")
+
+        import build_video as bv
+        tmp = _TESTS_DIR / "tmp_motion_off"
+        tmp.mkdir(parents=True, exist_ok=True)
+        try:
+            scenes_path, img_path, audio_path = _make_integration_test_fixtures(tmp)
+            out_path = tmp / "out.mp4"
+
+            with patch.object(bv.config, "save_assets", False), \
+                 patch.object(bv.config, "is_vertical", False), \
+                 patch.object(bv.config, "temp_dir", str(tmp)), \
+                 patch("build_video.generate_image_for_scene_with_retry", return_value=img_path), \
+                 patch("build_video.generate_audio_for_scene_with_retry", return_value=audio_path), \
+                 patch("build_video.make_motion_clip_with_audio") as mock_motion, \
+                 patch("build_video.concatenate_videoclips") as mock_concat:
+                mock_concat.return_value = MagicMock(duration=4.0, audio=MagicMock(fps=44100))
+                with patch("moviepy.video.VideoClip.VideoClip.write_videofile"):
+                    _build_video_impl(
+                        str(scenes_path),
+                        out_video_path=str(out_path),
+                        motion=False,
+                    )
+                mock_motion.assert_not_called()
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_motion_enables_crossfade_concatenation(self):
+        """When motion=True, concatenate_videoclips is called with crossfade padding."""
+        try:
+            from PIL import Image
+        except ImportError:
+            self.skipTest("PIL not available")
+
+        import build_video as bv
+        tmp = _TESTS_DIR / "tmp_crossfade_on"
+        tmp.mkdir(parents=True, exist_ok=True)
+        try:
+            scenes_path, img_path, audio_path = _make_integration_test_fixtures(tmp)
+            out_path = tmp / "out.mp4"
+
+            concat_calls = []
+            real_concat = bv.concatenate_videoclips
+
+            def capture_concat(*args, **kwargs):
+                concat_calls.append(kwargs)
+                return real_concat(*args, **kwargs)
+
+            with patch.object(bv.config, "save_assets", False), \
+                 patch.object(bv.config, "is_vertical", False), \
+                 patch.object(bv.config, "temp_dir", str(tmp)), \
+                 patch.object(bv.config, "biopic_music_enabled", False), \
+                 patch("build_video.generate_image_for_scene_with_retry", return_value=img_path), \
+                 patch("build_video.generate_audio_for_scene_with_retry", return_value=audio_path), \
+                 patch("build_video.make_motion_clip_with_audio", wraps=self._static_ignoring_pattern), \
+                 patch("build_video.KENBURNS_ENABLED", True), \
+                 patch("build_video.CROSSFADE_DURATION", 0.4), \
+                 patch("build_video.concatenate_videoclips", side_effect=capture_concat):
+                with patch("moviepy.video.VideoClip.VideoClip.write_videofile"):
+                    _build_video_impl(
+                        str(scenes_path),
+                        out_video_path=str(out_path),
+                        motion=True,
+                    )
+            # Should have at least one call with crossfade padding
+            crossfade_calls = [c for c in concat_calls if c.get("padding") and c["padding"] < 0]
+            self.assertGreaterEqual(len(crossfade_calls), 1, f"Expected crossfade concat call, got: {concat_calls}")
+            self.assertEqual(crossfade_calls[0]["method"], "compose")
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_no_motion_uses_chain_concatenation(self):
+        """When motion=False, concatenate_videoclips uses method='chain' (no crossfade)."""
+        try:
+            from PIL import Image
+        except ImportError:
+            self.skipTest("PIL not available")
+
+        import build_video as bv
+        tmp = _TESTS_DIR / "tmp_chain_concat"
+        tmp.mkdir(parents=True, exist_ok=True)
+        try:
+            scenes_path, img_path, audio_path = _make_integration_test_fixtures(tmp)
+            out_path = tmp / "out.mp4"
+
+            concat_calls = []
+            real_concat = bv.concatenate_videoclips
+
+            def capture_concat(*args, **kwargs):
+                concat_calls.append(kwargs)
+                return real_concat(*args, **kwargs)
+
+            with patch.object(bv.config, "save_assets", False), \
+                 patch.object(bv.config, "is_vertical", False), \
+                 patch.object(bv.config, "temp_dir", str(tmp)), \
+                 patch.object(bv.config, "biopic_music_enabled", False), \
+                 patch("build_video.generate_image_for_scene_with_retry", return_value=img_path), \
+                 patch("build_video.generate_audio_for_scene_with_retry", return_value=audio_path), \
+                 patch("build_video.concatenate_videoclips", side_effect=capture_concat):
+                with patch("moviepy.video.VideoClip.VideoClip.write_videofile"):
+                    _build_video_impl(
+                        str(scenes_path),
+                        out_video_path=str(out_path),
+                        motion=False,
+                    )
+            # Should have called with method="chain" (no padding or padding=0)
+            chain_calls = [c for c in concat_calls if c.get("method") == "chain"]
+            self.assertGreaterEqual(len(chain_calls), 1, f"Expected chain concat call, got: {concat_calls}")
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
+class TestBiopicMusicWithMotion(unittest.TestCase):
+    """Regression tests: biopic background music integration works with motion clips."""
+
+    def test_biopic_music_mixed_when_not_horror(self):
+        """For non-horror videos with biopic_music_enabled, mix_biopic_background_music is called."""
+        try:
+            from PIL import Image
+        except ImportError:
+            self.skipTest("PIL not available")
+
+        import build_video as bv
+        tmp = _TESTS_DIR / "tmp_biopic_music"
+        tmp.mkdir(parents=True, exist_ok=True)
+        try:
+            scenes_path, img_path, audio_path = _make_integration_test_fixtures(tmp)
+            out_path = tmp / "out.mp4"
+
+            with patch.object(bv.config, "save_assets", False), \
+                 patch.object(bv.config, "is_vertical", False), \
+                 patch.object(bv.config, "temp_dir", str(tmp)), \
+                 patch.object(bv.config, "biopic_music_enabled", True), \
+                 patch("build_video.generate_image_for_scene_with_retry", return_value=img_path), \
+                 patch("build_video.generate_audio_for_scene_with_retry", return_value=audio_path), \
+                 patch("build_video.mix_biopic_background_music") as mock_mix:
+                # mix returns a mock audio clip
+                mock_mix.return_value = MagicMock(duration=5.0)
+                with patch("moviepy.video.VideoClip.VideoClip.write_videofile"):
+                    _build_video_impl(
+                        str(scenes_path),
+                        out_video_path=str(out_path),
+                        is_horror=False,
+                        motion=False,
+                    )
+                mock_mix.assert_called_once()
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_biopic_music_mixed_with_motion(self):
+        """Biopic music is still applied when motion=True (motion clips have valid audio)."""
+        try:
+            from PIL import Image
+        except ImportError:
+            self.skipTest("PIL not available")
+
+        import build_video as bv
+        tmp = _TESTS_DIR / "tmp_biopic_music_motion"
+        tmp.mkdir(parents=True, exist_ok=True)
+        try:
+            scenes_path, img_path, audio_path = _make_integration_test_fixtures(tmp)
+            out_path = tmp / "out.mp4"
+
+            with patch.object(bv.config, "save_assets", False), \
+                 patch.object(bv.config, "is_vertical", False), \
+                 patch.object(bv.config, "temp_dir", str(tmp)), \
+                 patch.object(bv.config, "biopic_music_enabled", True), \
+                 patch("build_video.generate_image_for_scene_with_retry", return_value=img_path), \
+                 patch("build_video.generate_audio_for_scene_with_retry", return_value=audio_path), \
+                 patch("build_video.make_motion_clip_with_audio", wraps=TestMotionIntegration._static_ignoring_pattern), \
+                 patch("build_video.KENBURNS_ENABLED", True), \
+                 patch("build_video.mix_biopic_background_music") as mock_mix:
+                mock_mix.return_value = MagicMock(duration=5.0)
+                with patch("moviepy.video.VideoClip.VideoClip.write_videofile"):
+                    _build_video_impl(
+                        str(scenes_path),
+                        out_video_path=str(out_path),
+                        is_horror=False,
+                        motion=True,
+                    )
+                mock_mix.assert_called_once()
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_biopic_music_skipped_for_horror(self):
+        """For horror videos, mix_biopic_background_music must NOT be called."""
+        try:
+            from PIL import Image
+        except ImportError:
+            self.skipTest("PIL not available")
+
+        import build_video as bv
+        tmp = _TESTS_DIR / "tmp_biopic_skip_horror"
+        tmp.mkdir(parents=True, exist_ok=True)
+        try:
+            scenes_path, img_path, audio_path = _make_integration_test_fixtures(tmp)
+            out_path = tmp / "out.mp4"
+
+            with patch.object(bv.config, "save_assets", False), \
+                 patch.object(bv.config, "is_vertical", False), \
+                 patch.object(bv.config, "temp_dir", str(tmp)), \
+                 patch.object(bv.config, "biopic_music_enabled", True), \
+                 patch("build_video.generate_image_for_scene_with_retry", return_value=img_path), \
+                 patch("build_video.generate_audio_for_scene_with_retry", return_value=audio_path), \
+                 patch("build_video.mix_biopic_background_music") as mock_mix, \
+                 patch("build_video.mix_horror_background_audio", return_value=MagicMock(duration=5.0)):
+                with patch("moviepy.video.VideoClip.VideoClip.write_videofile"):
+                    _build_video_impl(
+                        str(scenes_path),
+                        out_video_path=str(out_path),
+                        is_horror=True,
+                        horror_bg_enabled=False,
+                        motion=False,
+                    )
+                mock_mix.assert_not_called()
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
+class TestBiopicMusicFadeout(unittest.TestCase):
+    """Tests that biopic background music fadeout uses the MoviePy 2.x API (not the removed 1.x API)."""
+
+    def test_build_biopic_music_track_single_segment_with_fadeout(self):
+        """build_biopic_music_track applies AudioFadeOut when tail_sec and fadeout_sec are set."""
+        def make_silence(t):
+            return np.array([0.0, 0.0])
+        scene_audio = AudioClip(make_silence, duration=2.0, fps=44100)
+        music_clip = AudioClip(make_silence, duration=4.0, fps=44100)
+
+        # Create a fake music dir with a dummy mp3 so glob finds it
+        fake_music_dir = _TESTS_DIR / "fake_music"
+        fake_mood_dir = fake_music_dir / "relaxing"
+        fake_mood_dir.mkdir(parents=True, exist_ok=True)
+        fake_mp3 = fake_mood_dir / "test.mp3"
+        fake_mp3.touch()
+        try:
+            with patch("build_video._fit_song_to_duration", return_value=music_clip), \
+                 patch("biopic_music_config.BIOPIC_MUSIC_DIR", fake_music_dir), \
+                 patch("biopic_music_config.BIOPIC_MUSIC_DEFAULT_MOODS", ["relaxing"]):
+                result = build_biopic_music_track(
+                    metadata={"outline": {"music_mood": "relaxing"}},
+                    scene_audio_clips=[scene_audio],
+                    total_duration=2.0,
+                    scenes=None,  # Single segment mode
+                    music_volume_db=-23.0,
+                    tail_sec=2.0,
+                    fadeout_sec=1.5,
+                )
+                # Should return a valid audio clip (not None, no crash from AudioFadeOut)
+                self.assertIsNotNone(result)
+                self.assertGreater(result.duration, 0)
+        finally:
+            shutil.rmtree(fake_music_dir, ignore_errors=True)
+
+    def test_build_biopic_music_track_no_crash_without_fadeout(self):
+        """build_biopic_music_track works with tail_sec=0 (no fadeout applied)."""
+        def make_silence(t):
+            return np.array([0.0, 0.0])
+        scene_audio = AudioClip(make_silence, duration=2.0, fps=44100)
+        music_clip = AudioClip(make_silence, duration=2.0, fps=44100)
+
+        fake_music_dir = _TESTS_DIR / "fake_music2"
+        fake_mood_dir = fake_music_dir / "relaxing"
+        fake_mood_dir.mkdir(parents=True, exist_ok=True)
+        fake_mp3 = fake_mood_dir / "test.mp3"
+        fake_mp3.touch()
+        try:
+            with patch("build_video._fit_song_to_duration", return_value=music_clip), \
+                 patch("biopic_music_config.BIOPIC_MUSIC_DIR", fake_music_dir), \
+                 patch("biopic_music_config.BIOPIC_MUSIC_DEFAULT_MOODS", ["relaxing"]):
+                result = build_biopic_music_track(
+                    metadata={"outline": {"music_mood": "relaxing"}},
+                    scene_audio_clips=[scene_audio],
+                    total_duration=2.0,
+                    scenes=None,
+                    music_volume_db=-23.0,
+                    tail_sec=0,
+                    fadeout_sec=0,
+                )
+                self.assertIsNotNone(result)
+                self.assertGreater(result.duration, 0)
+        finally:
+            shutil.rmtree(fake_music_dir, ignore_errors=True)
+
+    def test_mix_biopic_background_music_does_not_crash(self):
+        """mix_biopic_background_music runs without import errors (regression for moviepy.audio.fx.all)."""
+        def make_silence(t):
+            return [0.0, 0.0]
+        narration = AudioClip(make_silence, duration=3.0, fps=44100)
+        scene_audio = AudioClip(make_silence, duration=3.0, fps=44100)
+        music_clip = AudioClip(make_silence, duration=5.0, fps=44100)
+
+        with patch("build_video.build_biopic_music_track", return_value=music_clip):
+            result = mix_biopic_background_music(
+                narration,
+                duration=3.0,
+                metadata=None,
+                scene_audio_clips=[scene_audio],
+                scenes=None,
+                music_volume_db=-23.0,
+                tail_sec=2.0,
+                fadeout_sec=1.5,
+            )
+            self.assertIsNotNone(result)
+
+    def test_biopic_music_end_to_end_through_build_video_impl(self):
+        """
+        Full integration: _build_video_impl with biopic music enabled reaches
+        mix_biopic_background_music without crashing (catches moviepy.audio.fx.all breakage).
+        """
+        try:
+            from PIL import Image
+        except ImportError:
+            self.skipTest("PIL not available")
+
+        import build_video as bv
+        tmp = _TESTS_DIR / "tmp_biopic_e2e"
+        tmp.mkdir(parents=True, exist_ok=True)
+        try:
+            scenes_path, img_path, audio_path = _make_integration_test_fixtures(tmp)
+            out_path = tmp / "out.mp4"
+
+            # Track whether mix_biopic_background_music was actually called
+            call_tracker = {"called": False, "error": None}
+            original_mix = bv.mix_biopic_background_music
+
+            def tracking_mix(*args, **kwargs):
+                call_tracker["called"] = True
+                try:
+                    return original_mix(*args, **kwargs)
+                except Exception as e:
+                    call_tracker["error"] = e
+                    raise
+
+            with patch.object(bv.config, "save_assets", False), \
+                 patch.object(bv.config, "is_vertical", False), \
+                 patch.object(bv.config, "temp_dir", str(tmp)), \
+                 patch.object(bv.config, "biopic_music_enabled", True), \
+                 patch("build_video.generate_image_for_scene_with_retry", return_value=img_path), \
+                 patch("build_video.generate_audio_for_scene_with_retry", return_value=audio_path), \
+                 patch("build_video.mix_biopic_background_music", side_effect=tracking_mix):
+                with patch("moviepy.video.VideoClip.VideoClip.write_videofile"):
+                    _build_video_impl(
+                        str(scenes_path),
+                        out_video_path=str(out_path),
+                        is_horror=False,
+                        motion=False,
+                    )
+            self.assertTrue(call_tracker["called"], "mix_biopic_background_music should have been called")
+            self.assertIsNone(call_tracker["error"],
+                              f"mix_biopic_background_music crashed: {call_tracker['error']}")
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
 
 
 if __name__ == "__main__":

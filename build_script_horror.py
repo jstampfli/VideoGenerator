@@ -779,7 +779,7 @@ def generate_script(story_concept: str, output_path: str, is_short: bool = False
     if config.generate_main:
         print("\n[THUMBNAIL] Main video thumbnail...")
         THUMBNAILS_DIR.mkdir(parents=True, exist_ok=True)
-        thumbnail_path = THUMBNAILS_DIR / f"{Path(output_path).stem}_thumbnail.png"
+        thumbnail_path = THUMBNAILS_DIR / f"{Path(output_path).stem}_thumbnail.jpg"
         
         # Use shared WHY scene thumbnail prompt
         thumbnail_prompt = f"""{thumbnail_description}

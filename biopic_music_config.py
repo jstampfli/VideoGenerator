@@ -10,10 +10,16 @@ from pathlib import Path
 BIOPIC_MUSIC_DEFAULT_MOODS = ["relaxing", "passionate", "happy"]
 
 # Music volume in dB (under narration)
-BIOPIC_MUSIC_VOLUME_DB = float(os.getenv("BIOPIC_MUSIC_VOLUME", "-24.0"))
+BIOPIC_MUSIC_VOLUME_DB = float(os.getenv("BIOPIC_MUSIC_VOLUME", "-23.5"))
 
 # Crossfade duration in seconds between chapter segments
 BIOPIC_MUSIC_CROSSFADE_SEC = float(os.getenv("BIOPIC_MUSIC_CROSSFADE", "1.5"))
+
+# Extra seconds at end of biopic videos with only background music (no narration)
+BIOPIC_END_TAIL_SEC = float(os.getenv("BIOPIC_END_TAIL", "2.0"))
+
+# Fade-out duration for the end tail (music transition as if moving to next scene)
+BIOPIC_END_TAIL_FADEOUT_SEC = float(os.getenv("BIOPIC_END_TAIL_FADEOUT", "1.5"))
 
 # Base directory for mood-categorized MP3 files
 BIOPIC_MUSIC_DIR = Path(os.getenv("BIOPIC_MUSIC_DIR", "biopic_music"))

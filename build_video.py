@@ -14,6 +14,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 from openai import OpenAI
 from moviepy import ImageClip, AudioFileClip, concatenate_videoclips, AudioClip, CompositeAudioClip, concatenate_audioclips
+from moviepy.video.fx import CrossFadeIn, CrossFadeOut
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import llm_utils
@@ -81,6 +82,17 @@ HORROR_DISCLAIMER_DURATION = 3.0  # seconds
 FIXED_IMAGES_DIR = Path("fixed_images")
 HORROR_DISCLAIMER_TALL = FIXED_IMAGES_DIR / "tall_horror_disclaimer.jpg"   # 9:16 shorts
 HORROR_DISCLAIMER_WIDE = FIXED_IMAGES_DIR / "wide_horror_disclaimer.jpg"   # 16:9 main
+
+# Ken Burns motion settings
+KENBURNS_ENABLED = os.getenv("KENBURNS_ENABLED", "true").lower() in ("1", "true", "yes")
+KENBURNS_INTENSITY = float(os.getenv("KENBURNS_INTENSITY", "0.04"))  # Max zoom beyond cover-fit (4% default)
+KENBURNS_FPS = int(os.getenv("KENBURNS_FPS", "24"))  # Motion clip FPS (24 = cinema standard, smooth & fast)
+
+# Crossfade transition settings
+CROSSFADE_DURATION = float(os.getenv("CROSSFADE_DURATION", "0.4"))  # Dissolve between scenes in seconds (0 = disabled)
+
+# Ken Burns motion patterns (shared constant from kenburns_config)
+from kenburns_config import KENBURNS_PATTERNS, KENBURNS_PATTERN_DESCRIPTIONS
 
 
 def get_horror_disclaimer_image_path(is_vertical: bool) -> Path | None:
@@ -777,6 +789,13 @@ def generate_audio_for_scene(scene: dict) -> Path:
             voice_id=ELEVENLABS_VOICE_ID,
             text=text,
             model_id=ELEVENLABS_MODEL,
+            voice_settings={
+                "stability": 0.75,
+                "similarity_boost": 0.75,
+                "style": 0.5,
+                "use_speaker_boost": False,
+                "speed": 1.0,
+            },
         )
         # Write the audio chunks to file
         with open(audio_path, "wb") as f:
@@ -938,6 +957,162 @@ def make_static_clip_with_audio(image_path: Path, audio_clip: AudioFileClip):
     # Use concatenate_audioclips for audio clips (not concatenate_videoclips)
     extended_audio = concatenate_audioclips([audio_clip, silent_audio])
 
+    return clip.with_audio(extended_audio).with_duration(total_duration)
+
+
+
+def make_motion_clip_with_audio(image_path: Path, audio_clip: AudioFileClip,
+                                pattern: str | None = None):
+    """
+    Create a scene clip with smooth Ken Burns motion using OpenCV warpAffine.
+
+    Each frame is generated lazily via a ``VideoClip(make_frame)`` callback so
+    only one frame is in memory at a time.  ``cv2.warpAffine`` performs the
+    combined crop + scale in a single SIMD-optimized C operation on numpy arrays,
+    avoiding PIL Image object creation/destruction overhead per frame.
+
+    Sub-pixel precision is native to OpenCV's interpolation, completely avoiding
+    the integer-pixel snapping that plagued FFmpeg's zoompan filter.
+
+    Parameters
+    ----------
+    image_path : Path
+        Path to the scene image.
+    audio_clip : AudioFileClip
+        Narration audio for this scene.
+    pattern : str or None
+        Motion pattern name (from KENBURNS_PATTERNS). If None, one is chosen at random.
+    """
+    import math
+    import cv2
+    from PIL import Image
+    from moviepy import VideoClip
+
+    audio_duration = audio_clip.duration
+    pause_length = END_SCENE_PAUSE_LENGTH
+    total_duration = audio_duration + pause_length
+    output_res = config.output_resolution
+    out_w, out_h = output_res
+
+    # Load source image once as a numpy array (RGB).
+    # PIL handles format decoding; we convert to numpy immediately and close PIL.
+    pil_img = Image.open(image_path).convert("RGB")
+    in_w, in_h = pil_img.size
+    src = np.asarray(pil_img)   # H x W x 3 uint8, RGB order
+    pil_img.close()
+
+    # Zoom range: min_zoom makes the image exactly cover the output frame;
+    # max_zoom adds KENBURNS_INTENSITY (default 4%) extra zoom.
+    min_zoom = max(out_w / in_w, out_h / in_h)
+    max_zoom = min_zoom * (1 + KENBURNS_INTENSITY)
+
+    # Pick motion pattern
+    if pattern is None:
+        pattern = random.choice(KENBURNS_PATTERNS)
+
+    # Maximum drift (in source-image pixels) available at the midpoint zoom.
+    # Used by drift / combined patterns to stay within the image bounds.
+    mid_zoom = (min_zoom + max_zoom) / 2
+    mid_crop_w = out_w / mid_zoom
+    mid_crop_h = out_h / mid_zoom
+    max_drift_x = max((in_w - mid_crop_w) / 2, 0)
+    max_drift_y = max((in_h - mid_crop_h) / 2, 0)
+
+    # Use KENBURNS_FPS (default 24) for motion clips — fewer frames to generate
+    kb_fps = KENBURNS_FPS
+
+    # Pre-allocate the 2x3 affine matrix (reused every frame, mutated in place)
+    M = np.zeros((2, 3), dtype=np.float64)
+
+    # ---- per-frame generator (lazy — only one frame in memory at a time) -----
+    def make_frame(t):
+        # Cosine ease-in-out: 0 → 1 over total_duration
+        progress = min(t / total_duration, 1.0) if total_duration > 0 else 0.0
+        ease = (1 - math.cos(progress * math.pi)) / 2
+
+        # --- compute zoom and centre offsets for the chosen pattern ----------
+        if pattern == "zoom_in":
+            zoom = min_zoom + (max_zoom - min_zoom) * ease
+            cx_off, cy_off = 0.0, 0.0
+
+        elif pattern == "zoom_out":
+            zoom = max_zoom - (max_zoom - min_zoom) * ease
+            cx_off, cy_off = 0.0, 0.0
+
+        elif pattern == "zoom_in_up":
+            zoom = min_zoom + (max_zoom - min_zoom) * ease
+            cx_off = 0.0
+            cy_off = max_drift_y * 0.4 * (1 - ease)   # drift upward
+
+        elif pattern == "zoom_in_down":
+            zoom = min_zoom + (max_zoom - min_zoom) * ease
+            cx_off = 0.0
+            cy_off = -max_drift_y * 0.4 * (1 - ease)  # drift downward
+
+        elif pattern == "drift_up":
+            zoom = mid_zoom
+            cx_off = 0.0
+            cy_off = max_drift_y * (1 - 2 * ease)      # top → bottom in source = upward in frame
+
+        elif pattern == "drift_down":
+            zoom = mid_zoom
+            cx_off = 0.0
+            cy_off = -max_drift_y * (1 - 2 * ease)     # bottom → top in source = downward in frame
+
+        else:
+            # Fallback: gentle zoom in
+            zoom = min_zoom + (max_zoom - min_zoom) * ease
+            cx_off, cy_off = 0.0, 0.0
+
+        # --- derive the floating-point crop box in source-image coords -------
+        crop_w = out_w / zoom
+        crop_h = out_h / zoom
+
+        # Centre the crop, then apply pattern offset
+        left = (in_w - crop_w) / 2 + cx_off
+        top  = (in_h - crop_h) / 2 + cy_off
+
+        # Clamp so the box never exceeds image bounds
+        left = max(0.0, min(left, in_w - crop_w))
+        top  = max(0.0, min(top,  in_h - crop_h))
+
+        # --- build affine matrix: maps output pixel (x,y) → source pixel -----
+        # scale = out_w / crop_w = zoom  (same for height by aspect ratio)
+        # For output pixel (ox, oy) the source pixel is:
+        #   sx = ox / zoom + left
+        #   sy = oy / zoom + top
+        # warpAffine uses WARP_INVERSE_MAP: dst(x,y) = src(M * [x,y,1]^T)
+        inv_zoom = 1.0 / zoom
+        M[0, 0] = inv_zoom          # sx scale
+        M[0, 1] = 0.0
+        M[0, 2] = left               # sx offset
+        M[1, 0] = 0.0
+        M[1, 1] = inv_zoom          # sy scale
+        M[1, 2] = top                # sy offset
+
+        return cv2.warpAffine(
+            src, M, (out_w, out_h),
+            flags=cv2.INTER_LINEAR | cv2.WARP_INVERSE_MAP,
+            borderMode=cv2.BORDER_REFLECT_101,
+        )
+
+    clip = VideoClip(make_frame, duration=total_duration).with_fps(kb_fps)
+
+    # Build extended audio (narration + silence pause) — same logic as static clips
+    fps = audio_clip.fps
+    nchannels = audio_clip.nchannels if hasattr(audio_clip, 'nchannels') else 2
+
+    def make_silence(t):
+        if nchannels == 1:
+            return [0.0]
+        else:
+            return [0.0, 0.0]
+
+    silent_audio = AudioClip(make_silence, duration=pause_length, fps=fps)
+    extended_audio = concatenate_audioclips([audio_clip, silent_audio])
+
+    total_frames = int(total_duration * kb_fps)
+    print(f"[KENBURNS] Scene {image_path.stem}: {pattern} ({total_duration:.1f}s, {total_frames} frames @ {kb_fps}fps)")
     return clip.with_audio(extended_audio).with_duration(total_duration)
 
 
@@ -1561,7 +1736,9 @@ def _fit_song_to_duration(song_path: Path, required_duration: float) -> AudioFil
 
 
 def build_biopic_music_track(metadata: dict | None, scene_audio_clips: list, total_duration: float,
-                            scenes: list[dict] | None = None, music_volume_db: float = None) -> AudioClip | None:
+                            scenes: list[dict] | None = None, music_volume_db: float = None,
+                            tail_sec: float = 0.0, fadeout_sec: float = 0.0,
+                            crossfade_overlap: float = 0.0) -> AudioClip | None:
     """
     Build a continuous music track from biopic_music/ mood folders, one song per chapter.
     Uses chapter.music_mood from outline (LLM-picked). Loops or trims songs to fit chapter duration.
@@ -1622,10 +1799,14 @@ def build_biopic_music_track(metadata: dict | None, scene_audio_clips: list, tot
             print(f"[BIOPIC MUSIC] No MP3s for mood '{mood}', skipping")
             return None
         song_path = random.choice(songs)
-        clip = _fit_song_to_duration(song_path, total_duration)
+        seg_duration = total_duration + tail_sec if tail_sec > 0 else total_duration
+        clip = _fit_song_to_duration(song_path, seg_duration)
         if clip is None:
             return None
         music = apply_volume_to_audioclip(clip, 10 ** (vol_db / 20.0))
+        if tail_sec > 0 and fadeout_sec > 0:
+            from moviepy.audio.fx import AudioFadeOut
+            music = music.with_effects([AudioFadeOut(min(fadeout_sec, music.duration))])
         return music
 
     # Chapter-based mode: scene-based (chapter_num on scenes) or legacy (num_scenes from outline)
@@ -1636,17 +1817,39 @@ def build_biopic_music_track(metadata: dict | None, scene_audio_clips: list, tot
     outline_mood = (outline_mood or "").strip().lower() or None
 
     if use_scene_based:
-        # Group scenes by chapter_num; compute duration per chapter from actual scene_audio_clips
+        # Group scenes by chapter_num; compute duration per chapter from actual scene_audio_clips.
+        # When crossfade is active every scene after the first in the video overlaps with its
+        # predecessor by crossfade_overlap seconds, so the chapter's effective duration in the
+        # final video is shorter than the raw sum of clip durations.
         chapter_durations = defaultdict(float)
+        chapter_scene_counts = defaultdict(int)
         for i, scene in enumerate(scenes):
             ch_num = scene.get("chapter_num") or 1
             if i < len(scene_audio_clips):
                 chapter_durations[ch_num] += scene_audio_clips[i].duration + END_SCENE_PAUSE_LENGTH
+                chapter_scene_counts[ch_num] += 1
 
-        for ch_num in sorted(chapter_durations.keys()):
+        if crossfade_overlap > 0:
+            sorted_ch_nums = sorted(chapter_durations.keys())
+            for idx, ch_num in enumerate(sorted_ch_nums):
+                n_scenes = chapter_scene_counts[ch_num]
+                # Intra-chapter overlaps (between scenes within the same chapter)
+                intra = n_scenes - 1
+                # Inter-chapter overlap: every chapter except the first loses one overlap
+                # with the previous chapter's last scene
+                inter = 1 if idx > 0 else 0
+                total_overlaps = intra + inter
+                chapter_durations[ch_num] -= total_overlaps * crossfade_overlap
+                chapter_durations[ch_num] = max(chapter_durations[ch_num], 0.1)
+
+        sorted_chapters = sorted(chapter_durations.keys())
+        last_ch_num = sorted_chapters[-1] if sorted_chapters else None
+        for ch_num in sorted_chapters:
             chapter_duration = chapter_durations[ch_num]
             if chapter_duration <= 0:
                 continue
+            if ch_num == last_ch_num and tail_sec > 0:
+                chapter_duration += tail_sec
             mood = chapter_to_mood.get(ch_num) or outline_mood or "relaxing"
             mood_dir = BIOPIC_MUSIC_DIR / mood
             if not mood_dir.exists():
@@ -1671,7 +1874,8 @@ def build_biopic_music_track(metadata: dict | None, scene_audio_clips: list, tot
     else:
         # Legacy: use num_scenes from outline (scene count must match)
         scene_idx = 0
-        for ch in chapters:
+        chapter_list = [ch for ch in chapters if ch.get("num_scenes", 0) > 0]
+        for ch_idx, ch in enumerate(chapter_list):
             num_scenes = ch.get("num_scenes", 0)
             if num_scenes <= 0:
                 continue
@@ -1679,6 +1883,14 @@ def build_biopic_music_track(metadata: dict | None, scene_audio_clips: list, tot
             for i in range(num_scenes):
                 if scene_idx + i < len(scene_audio_clips):
                     chapter_duration += scene_audio_clips[scene_idx + i].duration + END_SCENE_PAUSE_LENGTH
+            # Subtract crossfade overlaps (same logic as scene-based path)
+            if crossfade_overlap > 0:
+                intra = num_scenes - 1
+                inter = 1 if ch_idx > 0 else 0
+                chapter_duration -= (intra + inter) * crossfade_overlap
+                chapter_duration = max(chapter_duration, 0.1)
+            if ch_idx == len(chapter_list) - 1 and tail_sec > 0:
+                chapter_duration += tail_sec
 
             mood = (ch.get("music_mood") or "relaxing").strip().lower()
             mood_dir = BIOPIC_MUSIC_DIR / mood
@@ -1763,16 +1975,28 @@ def build_biopic_music_track(metadata: dict | None, scene_audio_clips: list, tot
                 pass
 
     music = apply_volume_to_audioclip(music, 10 ** (vol_db / 20.0))
+    if tail_sec > 0 and fadeout_sec > 0:
+        from moviepy.audio.fx import AudioFadeOut
+        music = music.with_effects([AudioFadeOut(min(fadeout_sec, music.duration))])
     return music
 
 
 def mix_biopic_background_music(narration_audio: AudioClip, duration: float, metadata: dict | None,
                                 scene_audio_clips: list, scenes: list[dict] | None = None,
-                                music_volume_db: float = None) -> CompositeAudioClip:
+                                music_volume_db: float = None, tail_sec: float = 0.0,
+                                fadeout_sec: float = 0.0,
+                                crossfade_overlap: float = 0.0) -> CompositeAudioClip:
     """
     Mix biopic background music under narration.
+    When tail_sec > 0, music extends duration+tail_sec and fades out; narration should include
+    tail_sec of silence so the tail has only music.
     """
-    music_track = build_biopic_music_track(metadata, scene_audio_clips, duration, scenes=scenes, music_volume_db=music_volume_db)
+    music_track = build_biopic_music_track(
+        metadata, scene_audio_clips, duration,
+        scenes=scenes, music_volume_db=music_volume_db,
+        tail_sec=tail_sec, fadeout_sec=fadeout_sec,
+        crossfade_overlap=crossfade_overlap,
+    )
     if music_track is None:
         return CompositeAudioClip([narration_audio])
     return CompositeAudioClip([narration_audio, music_track])
@@ -2434,7 +2658,8 @@ def generate_audio_for_scene_with_retry(scene: dict) -> Path:
 def build_video(scenes_path: str, out_video_path: str | None = None, save_assets: bool = False, is_short: bool = False, scene_id: int | None = None, audio_only: bool = False,
                 is_horror: bool = False, horror_bg_enabled: bool = True, room_tone_volume: float = None, 
                 drone_volume: float = None, detail_volume: float = -30.0,
-                biopic_music_enabled: bool = True, biopic_music_volume: float = None):
+                biopic_music_enabled: bool = True, biopic_music_volume: float = None,
+                motion: bool = False):
     """
     Build a video from scenes JSON file.
     
@@ -2502,7 +2727,7 @@ def build_video(scenes_path: str, out_video_path: str | None = None, save_assets
     try:
         _build_video_impl(scenes_path, out_video_path, scene_id=scene_id, audio_only=audio_only,
                           is_horror=is_horror, horror_bg_enabled=horror_bg_enabled, room_tone_volume=room_tone_volume,
-                          drone_volume=drone_volume, detail_volume=detail_volume)
+                          drone_volume=drone_volume, detail_volume=detail_volume, motion=motion)
     finally:
         # Clean up temp directory
         if not config.save_assets and config.temp_dir and os.path.exists(config.temp_dir):
@@ -2526,7 +2751,7 @@ def build_video(scenes_path: str, out_video_path: str | None = None, save_assets
 
 def _build_video_impl(scenes_path: str, out_video_path: str | None = None, scene_id: int | None = None, audio_only: bool = False,
                      is_horror: bool = False, horror_bg_enabled: bool = True, room_tone_volume: float = None, 
-                     drone_volume: float = None, detail_volume: float = -30.0):
+                     drone_volume: float = None, detail_volume: float = -30.0, motion: bool = False):
     """Internal implementation of build_video."""
     # Use environment variable defaults if not provided
     if room_tone_volume is None:
@@ -2661,11 +2886,48 @@ def _build_video_impl(scenes_path: str, out_video_path: str | None = None, scene
     print("\n[VIDEO] Assembling clips...")
     
     # Parallelize clip creation for better performance
+    use_kenburns = motion and KENBURNS_ENABLED
+    if use_kenburns:
+        print(f"[KENBURNS] Motion enabled (intensity={KENBURNS_INTENSITY})")
+
+    # Pre-compute Ken Burns patterns for all scenes so we can enforce the
+    # no-consecutive-repeat constraint even though clips are built in parallel.
+    scene_patterns = [None] * num_scenes
+    if use_kenburns:
+        for i in range(num_scenes):
+            requested = (scenes[i].get("kenburns_pattern") or "").strip().lower()
+            prev_pattern = scene_patterns[i - 1] if i > 0 else None
+            next_requested = (
+                (scenes[i + 1].get("kenburns_pattern") or "").strip().lower()
+                if i + 1 < num_scenes else None
+            )
+
+            if requested in KENBURNS_PATTERNS and requested != prev_pattern:
+                # LLM-picked pattern is valid and doesn't repeat — use it
+                scene_patterns[i] = requested
+            else:
+                # No pattern, invalid pattern, or would repeat the previous scene.
+                # Also avoid the next scene's requested pattern when possible so
+                # the next scene doesn't have to override its own choice.
+                exclude = {prev_pattern}
+                if next_requested in KENBURNS_PATTERNS:
+                    exclude.add(next_requested)
+                candidates = [p for p in KENBURNS_PATTERNS if p not in exclude]
+                if not candidates:
+                    # Edge case: exclude set covers all patterns — just avoid prev
+                    candidates = [p for p in KENBURNS_PATTERNS if p != prev_pattern]
+                scene_patterns[i] = random.choice(candidates) if candidates else random.choice(KENBURNS_PATTERNS)
+
+        for i, p in enumerate(scene_patterns):
+            print(f"[KENBURNS] Scene {scenes[i]['id']}: {p}")
+
     def create_clip(i):
         scene = scenes[i]
         img_path = image_paths[i]
         scene_audio = scene_audio_clips[i]
         print(f"[CLIP {i}] Scene {scene['id']}: {scene_audio.duration:.3f}s")
+        if use_kenburns:
+            return i, make_motion_clip_with_audio(img_path, scene_audio, pattern=scene_patterns[i])
         return i, make_static_clip_with_audio(img_path, scene_audio)
     
     clips = [None] * num_scenes
@@ -2688,16 +2950,36 @@ def _build_video_impl(scenes_path: str, out_video_path: str | None = None, scene
         clips = [disclaimer_clip] + list(clips)
         print(f"[HORROR] Disclaimer clip added: {disclaimer_duration:.2f}s")
 
-    # Concatenate all clips using method="chain" for better performance with static clips
-    # "chain" is faster than "compose" when clips have the same size/dimensions
-    print("\n[VIDEO] Concatenating clips...")
-    try:
-        # Try "chain" method first (faster for clips with same dimensions)
-        final = concatenate_videoclips(clips, method="chain")
-    except Exception:
-        # Fall back to "compose" if "chain" fails
-        print("[VIDEO] Using compose method instead of chain...")
-        final = concatenate_videoclips(clips, method="compose")
+    # Concatenate clips — optionally with crossfade dissolve transitions
+    crossfade = CROSSFADE_DURATION if motion else 0
+    print(f"\n[VIDEO] Concatenating clips...{f' (crossfade={crossfade}s)' if crossfade > 0 else ''}")
+
+    if crossfade > 0 and len(clips) > 1:
+        # Apply crossfade effects: fade-out on all but last, fade-in on all but first
+        original_clips = list(clips)  # Keep originals for fallback
+        try:
+            faded_clips = []
+            for i, clip in enumerate(clips):
+                effects = []
+                if i > 0:
+                    effects.append(CrossFadeIn(crossfade))
+                if i < len(clips) - 1:
+                    effects.append(CrossFadeOut(crossfade))
+                faded_clips.append(clip.with_effects(effects) if effects else clip)
+
+            # Negative padding creates overlap where crossfades blend
+            final = concatenate_videoclips(faded_clips, padding=-crossfade, method="compose")
+        except Exception as e:
+            print(f"[VIDEO] Crossfade failed ({e}), falling back to simple concatenation...")
+            clips = original_clips
+            final = concatenate_videoclips(clips, method="compose")
+    else:
+        try:
+            # "chain" is faster than "compose" when clips have the same size/dimensions
+            final = concatenate_videoclips(clips, method="chain")
+        except Exception:
+            print("[VIDEO] Using compose method instead of chain...")
+            final = concatenate_videoclips(clips, method="compose")
 
     print(f"[VIDEO] Final duration: {final.duration:.3f}s ({final.duration/60:.1f} min)")
 
@@ -2762,14 +3044,42 @@ def _build_video_impl(scenes_path: str, out_video_path: str | None = None, scene
     if not is_horror and getattr(config, "biopic_music_enabled", True):
         biopic_vol = getattr(config, "biopic_music_volume", None)
         try:
-            print("\n[BIOPIC MUSIC] Adding background music...")
+            from biopic_music_config import BIOPIC_END_TAIL_SEC, BIOPIC_END_TAIL_FADEOUT_SEC
+            tail_sec = BIOPIC_END_TAIL_SEC
+            fadeout_sec = BIOPIC_END_TAIL_FADEOUT_SEC
+
+            if tail_sec > 0:
+                # Extend video with last frame for tail (music-only outro)
+                original_duration = final.duration
+                last_frame = final.get_frame(original_duration - 0.01)
+                tail_clip = ImageClip(last_frame).with_duration(tail_sec)
+                tail_clip = tail_clip.resized(final.size)
+                # Extend narration with silence so tail has only music (before concat)
+                fps = getattr(final.audio, "fps", 44100) or 44100
+
+                def make_silence(t):
+                    if np.isscalar(t):
+                        return np.array([0.0, 0.0])
+                    return np.zeros((len(t), 2))
+
+                silence_tail = AudioClip(make_silence, duration=tail_sec, fps=fps)
+                narration_audio = concatenate_audioclips([final.audio, silence_tail])
+                # Extend video with tail
+                final = concatenate_videoclips([final, tail_clip], method="chain")
+            else:
+                narration_audio = final.audio
+
+            print("\n[BIOPIC MUSIC] Adding background music" + (f" (with {tail_sec}s music-only tail)" if tail_sec > 0 else "") + "...")
             mixed_audio = mix_biopic_background_music(
-                final.audio,
-                final.duration,
+                narration_audio,
+                original_duration if tail_sec > 0 else final.duration,
                 metadata=metadata,
                 scene_audio_clips=scene_audio_clips,
                 scenes=scenes,
                 music_volume_db=biopic_vol,
+                tail_sec=tail_sec,
+                fadeout_sec=fadeout_sec,
+                crossfade_overlap=crossfade,
             )
             final = final.with_audio(mixed_audio)
             print("[BIOPIC MUSIC] Background music added successfully")
@@ -2789,17 +3099,23 @@ def _build_video_impl(scenes_path: str, out_video_path: str | None = None, scene
             print(f"\n[VIDEO] Encoding video (this may take a while)...")
         
         # Use faster preset and more threads for better performance
-        # "fast" preset is ~2-3x faster than "medium" with minimal quality loss
-        # Increase threads based on available CPU cores
+        # Motion videos have actual inter-frame differences so "ultrafast" avoids
+        # the encoder spending time on quality the subtle motion doesn't need.
+        # Static videos benefit from "fast" since identical frames compress trivially.
         max_threads = os.cpu_count() or 8  # Use all available CPU cores
         threads = min(max_threads, 16)  # Cap at 16 to avoid overhead
+        encode_preset = "ultrafast" if motion else "fast"
         
+        # Use KENBURNS_FPS when motion is enabled, otherwise standard FPS.
+        # Motion clips are already built at KENBURNS_FPS; encoding at the same
+        # rate avoids MoviePy having to duplicate/interpolate frames.
+        output_fps = KENBURNS_FPS if motion else FPS
         final.write_videofile(
             out_video_path,
-            fps=FPS,
+            fps=output_fps,
             codec="libx264",
             audio_codec="aac",
-            preset="fast",  # Changed from "medium" to "fast" (~2-3x faster with minimal quality loss)
+            preset=encode_preset,
             threads=threads,  # Use more CPU cores for faster encoding
             bitrate=None,  # Let codec choose optimal bitrate
             ffmpeg_params=[
@@ -2867,6 +3183,9 @@ Examples:
 
   # Generate only audio files (skip images and video) - useful for testing TTS models
   python build_video.py scenes.json --audio-only --save-assets
+
+  # Build video with Ken Burns motion and crossfade transitions
+  python build_video.py scenes.json output.mp4 --motion
         """
     )
     
@@ -2898,6 +3217,8 @@ Examples:
                         help="Disable biopic background music (enabled by default for non-horror videos)")
     parser.add_argument("--biopic-music-volume", type=float, default=None, metavar="DB",
                         help="Biopic music volume in dB (default: -22)")
+    parser.add_argument("--motion", action="store_true",
+                        help="Enable Ken Burns motion and crossfade transitions (smooth pan/zoom on images)")
     
     args = parser.parse_args()
     
@@ -2975,7 +3296,8 @@ if __name__ == "__main__":
                        drone_volume=args.horror_bg_drone_volume,
                        detail_volume=args.horror_bg_detail_volume,
                        biopic_music_enabled=not args.no_biopic_music,
-                       biopic_music_volume=args.biopic_music_volume)
+                       biopic_music_volume=args.biopic_music_volume,
+                       motion=args.motion)
         
         print(f"\n{'='*60}")
         print("[COMPLETE] All shorts built!")
@@ -3017,7 +3339,8 @@ if __name__ == "__main__":
                drone_volume=args.horror_bg_drone_volume,
                detail_volume=args.horror_bg_detail_volume,
                biopic_music_enabled=not args.no_biopic_music,
-               biopic_music_volume=args.biopic_music_volume)
+               biopic_music_volume=args.biopic_music_volume,
+               motion=args.motion)
     
     # Build shorts if requested
     if args.with_shorts:
@@ -3045,7 +3368,8 @@ if __name__ == "__main__":
                            drone_volume=args.horror_bg_drone_volume,
                            detail_volume=args.horror_bg_detail_volume,
                            biopic_music_enabled=not args.no_biopic_music,
-                           biopic_music_volume=args.biopic_music_volume)
+                           biopic_music_volume=args.biopic_music_volume,
+                           motion=args.motion)
         
         print(f"\n{'='*60}")
         print("[COMPLETE] All videos built!")
