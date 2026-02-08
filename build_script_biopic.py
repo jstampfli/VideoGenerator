@@ -13,6 +13,7 @@ import build_scripts_utils
 import llm_utils
 from kenburns_config import KENBURNS_PATTERNS, get_pattern_prompt_str
 from biopic_schemas import (
+    VIDEO_QUESTIONS_SCHEMA,
     LANDMARK_EVENTS_SCHEMA,
     OUTLINE_SCHEMA,
     SCENE_OUTLINE_SCHEMA,
@@ -48,6 +49,35 @@ generate_significance_scene = build_scripts_utils.generate_significance_scene
 # Use build_scripts_utils.generate_thumbnail(prompt, output_path, size, config.generate_thumbnails) directly
 
 
+def generate_video_questions(person_of_interest: str) -> list[str]:
+    """
+    Generate the question(s) this documentary will answer.
+    This is the FIRST step - the questions frame the outline, chapters, and scenes.
+    """
+    import prompt_builders
+
+    print(f"\n[QUESTIONS] Generating video questions (frames everything else)...")
+    prompt = prompt_builders.build_video_questions_prompt(person_of_interest)
+
+    content = llm_utils.generate_text(
+        messages=[
+            {"role": "system", "content": "Documentary producer. Your job is to craft the most engaging, compelling questions that will make viewers stop scrolling and click. These questions are the primary hook—they appear at the very start and drive the entire video. Frame them for an audience that values substance, legacy, and leadership. Make them impossible to ignore."},
+            {"role": "user", "content": prompt}
+        ],
+        temperature=0.8,
+        response_json_schema=VIDEO_QUESTIONS_SCHEMA,
+    )
+    data = json.loads(clean_json_response(content))
+    questions = data.get("video_questions", [])
+    if not isinstance(questions, list):
+        questions = [questions] if questions else []
+    questions = [str(q).strip() for q in questions if q]
+
+    for i, q in enumerate(questions, 1):
+        print(f"  Q{i}: {q}")
+    return questions
+
+
 def generate_landmark_events(person_of_interest: str) -> list[dict]:
     """
     Generate the most important landmark events in the person's life.
@@ -76,8 +106,9 @@ def generate_landmark_events(person_of_interest: str) -> list[dict]:
     return landmarks
 
 
-def generate_outline(person_of_interest: str, landmark_events: list[dict] | None = None) -> dict:
-    """Generate a detailed chronological outline of the person's life."""
+def generate_outline(person_of_interest: str, landmark_events: list[dict] | None = None,
+                    video_questions: list[str] | None = None) -> dict:
+    """Generate a detailed chronological outline of the person's life, framed by video_questions."""
     print(f"\n[OUTLINE] Generating {config.chapters}-chapter outline...")
 
     # Discover available music moods from biopic_music/ for LLM to pick per chapter
@@ -88,13 +119,14 @@ def generate_outline(person_of_interest: str, landmark_events: list[dict] | None
     except ImportError:
         available_moods = ["relaxing", "passionate", "happy"]
 
-    # Use prompt builder for outline
+    # Use prompt builder for outline - video_questions frame the narrative
     import prompt_builders
     outline_prompt = prompt_builders.build_outline_prompt(
         person_of_interest, config.chapters, config.target_total_scenes,
         config.min_scenes_per_chapter, config.max_scenes_per_chapter,
         available_moods=available_moods,
         landmark_events=landmark_events,
+        video_questions=video_questions,
     )
 
     import prompt_builders
@@ -129,7 +161,11 @@ def generate_outline(person_of_interest: str, landmark_events: list[dict] | None
         ch_type = ch.get('chapter_type', '')
         type_str = f" [{ch_type}]" if ch_type else ""
         print(f"  Ch {ch['chapter_num']}: {ch['title']} ({year_range}) - {num_scenes} scenes{type_str}")
-    
+
+    # Inject video_questions into outline so downstream steps have them
+    if video_questions:
+        outline_data["video_questions"] = video_questions
+
     return outline_data
 
 
@@ -183,7 +219,8 @@ def generate_scenes_for_chapter(person: str, chapter: dict, scene_blocks: list[d
                                  planted_seeds: list[str] = None, is_retention_hook_point: bool = False,
                                  birth_year: int | None = None, death_year: int | None = None,
                                  tag_line: str | None = None, overarching_plots: list[dict] = None,
-                                 sub_plots: list[dict] = None, landmarks: list[dict] | None = None) -> list[dict]:
+                                 sub_plots: list[dict] = None, landmarks: list[dict] | None = None,
+                                 video_questions: list[str] | None = None) -> list[dict]:
     """Generate scenes for a single chapter. Uses scene_blocks for variable depth per event."""
     import prompt_builders
     
@@ -260,6 +297,17 @@ End with a transition like "But how did it all begin?" to set up Chapter 2."""
     
     # Build central theme and narrative arc context
     theme_context = ""
+    if is_hook_chapter and video_questions:
+        questions_str = "\n".join(f"• {q}" for q in video_questions)
+        theme_context += f"""
+VIDEO QUESTIONS (ALL must be explicitly asked somewhere in chapter 1):
+{questions_str}
+
+CRITICAL - QUESTION BEFORE ITS FACTS: Each question must come BEFORE any facts that help answer that particular question. The question creates curiosity; the facts satisfy it. So: [Question] → [facts that answer it]. NEVER put facts that answer a question before that question—that inverts the paradigm.
+- CORRECT: "How did Patton nearly destroy his career before his greatest triumph? By 1943, his tactical genius was undeniable, yet a single moment of rage in a Sicilian medical tent nearly erased his legacy."
+- WRONG: "By 1943, his tactical genius was undeniable, yet a single moment of rage... How did Patton nearly destroy his career?" (facts before the question they answer = backwards)
+- NOTE: Questions don't always need to be the very first words—you can have Question 1 → facts for Q1 → Question 2 → facts for Q2. Just ensure each question precedes the facts that answer it.
+"""
     if central_theme:
         theme_context += f"\nCENTRAL THEME (connect all scenes to this): {central_theme}\n"
     if narrative_arc:
@@ -431,7 +479,7 @@ WHY/WHAT PARADIGM FOR HOOK CHAPTER:
 - The goal is to hook viewers and make them want to watch the full story
 
 STRUCTURE:
-- SCENE 1 (COLD OPEN - FIRST 15 SECONDS): The first sentence MUST begin with: "Welcome to Human Footprints. Today we'll talk about {person} - {tag_line if tag_line else ''}." After this introduction, immediately transition to the MOST shocking, intriguing, or compelling moment or question. The tag_line should be short, catchy, and accurate (e.g., "the man who changed the world", "the codebreaker who saved millions", "the mind that rewrote physics"). For example: "Welcome to Human Footprints. Today we'll talk about Albert Einstein - the man who changed the world. In 1905, a 26-year-old patent clerk publishes a paper that will change everything. But first, he must survive the criticism of his own father." OR "Welcome to Human Footprints. Today we'll talk about Charles Darwin - the man who changed the way we understand life. The letter arrives in June 1858. Darwin's hands tremble as he reads his own theory in another man's words." The first 15 seconds are CRITICAL for YouTube - this is what viewers see in search/preview. Hook them immediately after the introduction.
+- SCENE 1 (COLD OPEN - FIRST 15 SECONDS): CRITICAL - QUESTION BEFORE ITS FACTS. Each video_question must come BEFORE any facts that help answer that question. Format: [Question] → [facts that answer it]. You may ask all questions in scene 1, or distribute across scenes 1-4. Example: "How did Theodore Roosevelt come to be the way he was? How did a sickly child become the embodiment of American vigor? The answer begins in Milwaukee, 1912, when an assassin fires point-blank into his chest." Never put facts that answer a question before that question—the question creates curiosity, the facts satisfy it.
 - SCENES 2-4: Rapid-fire preview of the most shocking, interesting, or impactful moments from their entire life - achievements, controversies, dramatic moments, surprising facts
 - Pick the most important and impactful moments to include in the preview
 - CRITICAL: Scenes MUST be in CHRONOLOGICAL ORDER by year - start with earlier moments and progress chronologically to later ones, even though this is a preview
@@ -608,16 +656,20 @@ def generate_short_scenes(person: str, short_outline: dict, birth_year: int | No
     key_facts = short_outline.get('key_facts', [])
     facts_str = "\n".join(f"• {fact}" for fact in key_facts) if key_facts else "Use the hook expansion to create curiosity"
     hook_expansion = short_outline.get('hook_expansion', '')
+    video_question = short_outline.get('video_question', '')
     
     scene_prompt = f"""Write 4 scenes for a YouTube Short about {person}.
 
 TITLE: "{short_outline.get('short_title', '')}"
+VIDEO QUESTION (CRITICAL - Scene 1 MUST start with this exact question): "{video_question}"
 HOOK EXPANSION: {hook_expansion}
 
 KEY FACTS TO USE:
 {facts_str}
 
 {prompt_builders.get_biopic_audience_profile()}
+
+CRITICAL - SCENE 1 MUST START WITH THE VIDEO QUESTION: Scene 1's narration MUST begin with the video_question above—either the exact words or a very close paraphrase. Format: "[The question]? [Then expand the hook with context and curiosity.]" The question creates the curiosity; the rest of the scene sets up the answer. NEVER open with facts or context first—the question comes FIRST.
 
 CRITICAL: Scenes 1-3 are HIGH-ENERGY TRAILER (WHY) that build the hook and end with a clear QUESTION. Scene 4 ANSWERS that question (WHAT scene - payoff), then invites viewers to the full documentary.
 
@@ -632,7 +684,7 @@ CRITICAL: Scenes 1-3 are HIGH-ENERGY TRAILER (WHY) that build the hook and end w
 {prompt_builders.get_image_prompt_guidelines(person, birth_year, death_year, "9:16 vertical", is_trailer=True)}
 
 [
-  {{"id": 1, "title": "2-4 words", "narration": "HIGH ENERGY - expand the hook, create curiosity, make viewers NEED to know more", "scene_type": "WHY", "image_prompt": "Dramatic, attention-grabbing visual including {person}'s age at this time ({birth_year if birth_year else 'unknown'}), 9:16 vertical", "emotion": "High energy emotion (e.g., 'urgent', 'shocking', 'tense', 'intense'). CRITICAL: Emotions must flow SMOOTHLY between scenes - only change gradually.", "narration_instructions": "ONE SENTENCE: Focus on a single emotion from the emotion field. Example: 'Focus on tension.' or 'Focus on urgency.'", "year": "YYYY or YYYY-YYYY", "kenburns_pattern": "{', '.join(KENBURNS_PATTERNS)} - match the scene emotion"}},
+  {{"id": 1, "title": "2-4 words", "narration": "CRITICAL: The FIRST words of scene 1 MUST be the video_question (see above). Format: \"[video_question]? [Then expand the hook with context—2-3 sentences].\" Example: \"How did General Patton pull off the greatest logistical miracle of World War II in just 48 hours? December 1944. The German army has shattered the Allied lines...\" The question MUST come before any facts or context.", "scene_type": "WHY", "image_prompt": "Dramatic, attention-grabbing visual including {person}'s age at this time ({birth_year if birth_year else 'unknown'}), 9:16 vertical", "emotion": "High energy emotion (e.g., 'urgent', 'shocking', 'tense', 'intense'). CRITICAL: Emotions must flow SMOOTHLY between scenes - only change gradually.", "narration_instructions": "ONE SENTENCE: Focus on a single emotion from the emotion field. Example: 'Focus on tension.' or 'Focus on urgency.'", "year": "YYYY or YYYY-YYYY", "kenburns_pattern": "{', '.join(KENBURNS_PATTERNS)} - match the scene emotion"}},
   {{"id": 2, "title": "...", "narration": "HIGH ENERGY - build the hook, escalate curiosity, deepen the mystery", "scene_type": "WHY", "image_prompt": "Dramatic, attention-grabbing visual including {person}'s age at this time, 9:16 vertical", "emotion": "High energy emotion - must be a GRADUAL progression from scene 1's emotion (e.g., if scene 1 was 'tense', this might be 'intense' or 'urgent', not 'calm').", "narration_instructions": "ONE SENTENCE: Focus on a single emotion from the emotion field, flowing smoothly from scene 1. Example: if scene 1 was 'Focus on tension.', this might be 'Focus on intensity.'", "year": "YYYY or YYYY-YYYY", "kenburns_pattern": "MUST differ from scene 1's pattern"}},
   {{"id": 3, "title": "...", "narration": "HIGH ENERGY - build to a climax and END WITH A CLEAR QUESTION that scene 4 will answer (e.g. 'How did he do it?' 'What happened next?' 'Why did this work?'). Do not answer it here.", "scene_type": "WHY", "image_prompt": "Dramatic, attention-grabbing visual including {person}'s age at this time, 9:16 vertical", "emotion": "High energy emotion - must be a GRADUAL progression from scene 2's emotion.", "narration_instructions": "ONE SENTENCE: Focus on a single emotion from the emotion field, flowing smoothly from scene 2. End narration with the question.", "year": "YYYY or YYYY-YYYY", "kenburns_pattern": "MUST differ from scene 2's pattern"}},
   {{"id": 4, "title": "...", "narration": "ANSWER the question from scene 3. WHAT scene - deliver the payoff with clear, punchy facts. End with a soft CTA to watch the full documentary (e.g. 'Watch the full documentary for the complete story.').", "scene_type": "WHAT", "image_prompt": "Dramatic visual showing the resolution/moment of answer including {person}'s age at this time, 9:16 vertical", "emotion": "Satisfying resolution - can be 'triumphant', 'revelatory', 'relieved', or 'impactful' - must flow from scene 3.", "narration_instructions": "ONE SENTENCE: Focus on a single emotion from the emotion field (e.g. 'Focus on the payoff.' or 'Focus on revelation.').", "year": "YYYY or YYYY-YYYY", "kenburns_pattern": "MUST differ from scene 3's pattern"}}
@@ -745,11 +797,14 @@ def generate_shorts(person_of_interest: str, main_title: str, global_block: str,
                 scene["id"] = i + 1
             
             # Refine short scenes (only PASS 3 - skip storyline completion and pivotal moments for trailers)
+            short_video_question = short_outline.get('video_question', '')
             short_context = f"Trailer: {short_outline.get('short_title', '')}"
+            if short_video_question:
+                short_context += f". CRITICAL: Scene 1's narration MUST begin with the video_question—the question comes FIRST, before any facts. Video question: \"{short_video_question}\""
             # Determine short file path first for diff path
             short_file = SHORTS_DIR / f"{base_name}_short{short_num}.json"
             diff_path = short_file.parent / f"{short_file.stem}_refinement_diff.json" if config.generate_refinement_diffs else None
-            all_scenes, refinement_diff = build_scripts_utils.refine_scenes(all_scenes, person_of_interest, is_short=True, chapter_context=short_context, diff_output_path=diff_path, subject_type="person", skip_significance_scenes=True, scenes_per_chapter=None)
+            all_scenes, refinement_diff = build_scripts_utils.refine_scenes(all_scenes, person_of_interest, is_short=True, chapter_context=short_context, diff_output_path=diff_path, subject_type="person", skip_significance_scenes=True, scenes_per_chapter=None, short_video_question=short_video_question)
             
             # Generate thumbnail (if enabled) - use short-specific prompt + audience targeting
             thumbnail_path = None
@@ -773,6 +828,7 @@ def generate_shorts(person_of_interest: str, main_title: str, global_block: str,
                     "description": short_outline.get("short_description", ""),
                     "tags": short_outline.get("tags", ""),
                     "thumbnail_path": str(thumbnail_path) if thumbnail_path else None,
+                    "video_question": short_outline.get("video_question", ""),
                     "hook_expansion": short_outline.get("hook_expansion", ""),
                     "person_of_interest": person_of_interest,
                     "main_video_title": main_title,
@@ -840,6 +896,7 @@ def _save_biopic_script(
     """Write current script state to JSON so progress is saved if a later step fails."""
     output_data = {
         "metadata": {
+            "video_questions": outline.get("video_questions", []),
             "title": title,
             "tag_line": tag_line,
             "video_description": video_description,
@@ -883,12 +940,15 @@ def generate_script(person_of_interest: str, output_path: str):
     print(f"[CONFIG] Thumbnails: {'Yes' if config.generate_thumbnails else 'No'}")
     print(f"[CONFIG] Model: {llm_utils.get_text_model_display()}")
     
+    # Step 0: Generate video questions FIRST - these frame everything else
+    video_questions = generate_video_questions(person_of_interest)
+
     # Step 1a: Generate landmark events (for adding detail when we cover these events—does NOT change outline structure)
     landmarks = generate_landmark_events(person_of_interest)
 
-    # Step 1b: Generate detailed outline (needed for both main and shorts)
+    # Step 1b: Generate detailed outline (framed by video_questions, needed for both main and shorts)
     print("\n[STEP 1] Creating life outline...")
-    outline = generate_outline(person_of_interest, landmark_events=landmarks)
+    outline = generate_outline(person_of_interest, landmark_events=landmarks, video_questions=video_questions)
     chapters = outline.get("chapters", [])
     
     if config.generate_main and len(chapters) < config.chapters:
@@ -898,7 +958,10 @@ def generate_script(person_of_interest: str, output_path: str):
     print("\n[STEP 2] Generating initial metadata...")
     
     import prompt_builders
-    initial_metadata_prompt = script_type_instance.get_metadata_prompt(person_of_interest, outline.get('tagline', ''), config.total_scenes)
+    initial_metadata_prompt = script_type_instance.get_metadata_prompt(
+        person_of_interest, outline.get('tagline', ''), config.total_scenes,
+        video_questions=outline.get("video_questions")
+    )
 
     content = llm_utils.generate_text(
         messages=[
@@ -989,6 +1052,7 @@ def generate_script(person_of_interest: str, output_path: str):
                     overarching_plots=overarching_plots,
                     sub_plots=sub_plots,
                     landmarks=landmarks,
+                    video_questions=video_questions if i == 0 else None,  # Only for hook chapter
                 )
                 
                 if len(scenes) != chapter_scene_budget:
@@ -1064,7 +1128,7 @@ def generate_script(person_of_interest: str, output_path: str):
             end = cumulative + n
             chapter_boundaries.append((start, end))
             cumulative += n
-        all_scenes, refinement_diff = build_scripts_utils.refine_scenes(all_scenes, person_of_interest, is_short=False, chapter_context=chapter_summaries, diff_output_path=diff_path, subject_type="person", skip_significance_scenes=True, chapter_boundaries=chapter_boundaries, script_type="biopic")
+        all_scenes, refinement_diff = build_scripts_utils.refine_scenes(all_scenes, person_of_interest, is_short=False, chapter_context=chapter_summaries, diff_output_path=diff_path, subject_type="person", skip_significance_scenes=True, chapter_boundaries=chapter_boundaries, script_type="biopic", video_questions=outline.get("video_questions"))
         
         # Save progress after refinement (metadata and shorts not yet generated)
         _save_biopic_script(
@@ -1155,6 +1219,7 @@ Generate JSON:
     
     output_data = {
         "metadata": {
+            "video_questions": outline.get("video_questions", []),
             "title": title,
             "tag_line": tag_line,
             "video_description": video_description,

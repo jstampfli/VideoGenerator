@@ -4,6 +4,7 @@ Makes it easy to add new script types by creating a new class that inherits from
 """
 from abc import ABC, abstractmethod
 from typing import Optional
+
 import prompt_builders
 
 
@@ -32,13 +33,15 @@ class ScriptType(ABC):
         pass
     
     @abstractmethod
-    def get_metadata_prompt(self, subject: str, tagline: str, total_scenes: int) -> str:
+    def get_metadata_prompt(self, subject: str, tagline: str, total_scenes: int,
+                           video_questions: list[str] | None = None) -> str:
         """Generate the metadata prompt for this script type.
         
         Args:
             subject: Generic subject (person name for biopics, story concept for horror, etc.)
             tagline: One-line tagline
             total_scenes: Total number of scenes
+            video_questions: Optional list of questions the video will answer (biopic main video only)
         """
         pass
 
@@ -68,9 +71,10 @@ class MainVideoScript(ScriptType):
         """Main videos go through all refinement passes."""
         return ['storyline', 'pivotal', 'final']
     
-    def get_metadata_prompt(self, subject: str, tagline: str, total_scenes: int) -> str:
+    def get_metadata_prompt(self, subject: str, tagline: str, total_scenes: int,
+                           video_questions: list[str] | None = None) -> str:
         """Use the standard metadata prompt builder. Subject is person name for biopics."""
-        return prompt_builders.build_metadata_prompt(subject, tagline, total_scenes)
+        return prompt_builders.build_metadata_prompt(subject, tagline, total_scenes, video_questions)
 
 
 class ShortScript(ScriptType):
@@ -94,7 +98,8 @@ class ShortScript(ScriptType):
         """Shorts only go through final refinement (skip storyline and pivotal)."""
         return ['final']
     
-    def get_metadata_prompt(self, subject: str, tagline: str, total_scenes: int) -> str:
+    def get_metadata_prompt(self, subject: str, tagline: str, total_scenes: int,
+                           video_questions: list[str] | None = None) -> str:
         """Shorts don't use this - they have their own metadata in the outline."""
         raise NotImplementedError("Shorts generate metadata in generate_short_outline()")
 
@@ -123,6 +128,7 @@ class HorrorStoryScript(ScriptType):
         """Horror stories go through all refinement passes with horror focus."""
         return ['storyline', 'pivotal', 'final']
     
-    def get_metadata_prompt(self, subject: str, tagline: str, total_scenes: int) -> str:
+    def get_metadata_prompt(self, subject: str, tagline: str, total_scenes: int,
+                           video_questions: list[str] | None = None) -> str:
         """Use horror-specific metadata prompt builder. Subject is story concept."""
         return prompt_builders.build_horror_metadata_prompt(subject, tagline, total_scenes)

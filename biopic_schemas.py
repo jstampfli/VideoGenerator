@@ -5,6 +5,21 @@ Pass these to llm_utils.generate_text(response_json_schema=...) for structured o
 
 from kenburns_config import KENBURNS_PATTERNS
 
+# --- Video questions (FIRST step - frames everything else) ---
+VIDEO_QUESTIONS_SCHEMA = {
+    "type": "object",
+    "title": "video_questions",
+    "properties": {
+        "video_questions": {
+            "type": "array",
+            "items": {"type": "string"},
+            "minItems": 1,
+            "description": "1-3 questions this documentary will answer. If multiple, each must ask something functionally different.",
+        },
+    },
+    "required": ["video_questions"],
+}
+
 # --- Landmark events (pre-outline: most important moments to give deep focus) ---
 LANDMARK_EVENTS_SCHEMA = {
     "type": "object",
@@ -167,10 +182,11 @@ SHORT_OUTLINE_SCHEMA = {
         "tags": {"type": "string"},
         "music_mood": {"type": "string"},
         "thumbnail_prompt": {"type": "string"},
+        "video_question": {"type": "string", "description": "The question this short will answer - MUST be asked at the very start of scene 1."},
         "hook_expansion": {"type": "string"},
         "key_facts": {"type": "array", "items": {"type": "string"}},
     },
-    "required": ["short_title", "short_description", "tags", "music_mood", "thumbnail_prompt", "hook_expansion", "key_facts"],
+    "required": ["short_title", "short_description", "tags", "music_mood", "thumbnail_prompt", "video_question", "hook_expansion", "key_facts"],
 }
 
 # --- Final metadata (video_description, tags, pinned_comment) ---
@@ -196,6 +212,24 @@ PIVOTAL_MOMENTS_SCHEMA = {
             "justification": {"type": "string"},
         },
         "required": ["scene_id", "justification"],
+    },
+}
+
+# --- Historian depth additions (gaps a historian would fill for depth) ---
+HISTORIAN_DEPTH_ADDITIONS_SCHEMA = {
+    "type": "array",
+    "title": "historian_depth_additions",
+    "items": {
+        "type": "object",
+        "properties": {
+            "gap_description": {"type": "string"},
+            "what_to_add": {"type": "string"},
+            "insert_after_scene_id": {"type": "integer"},
+            "year": {"type": ["string", "integer"]},
+            "scene_type": {"type": "string"},
+            "rationale": {"type": "string"},
+        },
+        "required": ["gap_description", "what_to_add", "insert_after_scene_id", "year", "scene_type", "rationale"],
     },
 }
 

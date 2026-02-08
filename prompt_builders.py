@@ -8,13 +8,15 @@ from typing import Optional
 def get_biopic_audience_profile() -> str:
     """
     Audience profile for biopic documentaries.
-    Primary audience: 65-year-old American men.
+    Primary audience: 65-year-old American men. Tilts toward conservative, traditional American rhetoric.
     """
     return """TARGET AUDIENCE - CRITICAL (65-year-old American men):
 - TONE: Authoritative, substantive, and respectful - like a PBS documentary or Ken Burns. They appreciate depth over flash.
 - PACING: Deliberate and clear. Give events room to breathe. Avoid rapid-fire cuts or TikTok-style urgency - they prefer stories that unfold.
 - THEMES THAT RESONATE: Legacy, perseverance, American values, leadership, what it means to build something lasting. Military history, political leadership, inventors, business titans - figures who shaped the world they grew up in.
 - LANGUAGE: Clear, straightforward, no slang or Gen Z references. Let facts speak for themselves—avoid sensationalist phrasing, gimmicky rhetorical hooks, or repeated dramatic framing in the narration. No "shocking", "incredible", "what nobody expected", or similar hype.
+- VOICE & RHETORIC: Use conservative, traditional American rhetoric—the language of their generation. Avoid politically correct or liberal academic terminology. Use factual, neutral descriptors instead of loaded terms.
+- AVOID (liberal/PC terms that alienate this audience): "privilege", "privileged", "born into privilege", "marginalized", "oppressed", "colonization", "toxic", "problematic", "privileged upbringing". Instead use: "wealthy family", "family of means", "from a prominent family", "born to wealth", "advantage", "family fortune"—factual alternatives that describe the same reality without the political framing.
 - AVOID: Overly casual tone, flashy editing language, references that would confuse someone who didn't grow up with social media."""
 
 
@@ -242,6 +244,46 @@ def get_trailer_structure_prompt() -> str:
 4. SCENE 4: ANSWER the question posed at the end of scene 3. This is a WHAT scene - deliver the payoff. Give the viewer the resolution so they feel satisfied: what actually happened, how it worked, or why it mattered. Use clear, punchy facts. End with a soft CTA to watch the full documentary for the complete story (e.g. "Watch the full documentary for the full story.")."""
 
 
+def build_video_questions_prompt(person_of_interest: str) -> str:
+    """
+    Build the prompt for generating the question(s) this documentary will answer.
+    This is the FIRST step - the questions frame everything else.
+    These questions are the PRIMARY HOOK that gets users to click and watch.
+    """
+    return f"""Identify 1-3 questions that this documentary about {person_of_interest} will answer.
+
+{get_biopic_audience_profile()}
+
+CRITICAL - THESE QUESTIONS ARE YOUR #1 HOOK:
+These questions appear at the very start of the video. They are what make viewers stop scrolling and click. They must be as engaging and interesting as possible—framed specifically for this audience. A great question makes someone think "I need to know the answer."
+
+MAKE THEM COMPELLING:
+- Tap into themes that resonate: legacy, perseverance, leadership, American values, what it means to build something lasting, how individuals shaped the world
+- Create genuine curiosity—not clickbait, but substantive questions that promise a satisfying answer
+- Each question should feel like the opening of a story you can't ignore
+- Prefer questions that hint at struggle, triumph, sacrifice, or unexpected turns
+- Avoid dry or academic phrasing; make them human and gripping
+
+QUESTION PARADIGMS (use when they naturally fit):
+The most engaging questions often follow one of these paradigms—but ONLY if it naturally fits the person's story AND the documentary can deliver a satisfying answer. Do not force a paradigm if it doesn't fit or if we can't answer it well.
+- Counterintuitive: Something that defies expectations (e.g., "Why did the man who preached peace ultimately embrace war?")
+- Somewhat secret or unknown: A lesser-known angle, detail, or truth (e.g., "What secret did he take to his grave that shaped his decisions?")
+- Well known but misunderstood: A familiar moment or fact that most people get wrong (e.g., "What did everyone get wrong about his greatest speech?")
+If none of these fit naturally, a strong substantive question is better than forcing a paradigm.
+
+CRITICAL RULES:
+- If you provide multiple questions, each MUST ask something FUNCTIONALLY DIFFERENT. Do NOT ask variations of the same question.
+  - BAD: "How did X become who they were?" and "How did a sickly child become successful?" (same question, rephrased)
+  - GOOD: "How did X overcome their physical limitations?" and "What drove X to break from convention?" and "Why did X's greatest achievement almost fail?"
+- Each question should be substantive—something the documentary will spend real time answering.
+- Tone: Authoritative and substantive (PBS/Ken Burns), not sensationalist. No "shocking" or "incredible"—create interest through substance and stakes.
+
+Return JSON:
+{{
+  "video_questions": ["Question 1", "Question 2 (optional)", "Question 3 (optional)"]
+}}"""
+
+
 def build_landmark_events_prompt(person_of_interest: str, num_landmarks: int = 4) -> str:
     """
     Build the prompt for identifying the most important landmark events in a person's life.
@@ -281,7 +323,8 @@ Return JSON:
 
 
 def build_outline_prompt(person_of_interest: str, chapters: int, target_total_scenes: int, min_scenes: int = 2, max_scenes: int = 10,
-                        available_moods: list[str] | None = None, landmark_events: list[dict] | None = None) -> str:
+                        available_moods: list[str] | None = None, landmark_events: list[dict] | None = None,
+                        video_questions: list[str] | None = None) -> str:
     """
     Build the outline generation prompt with flexible chapter structure.
 
@@ -293,9 +336,20 @@ def build_outline_prompt(person_of_interest: str, chapters: int, target_total_sc
         max_scenes: Maximum scenes per chapter
         available_moods: List of music mood folder names (e.g., ["relaxing", "passionate", "happy"]) for LLM to pick per chapter
         landmark_events: Optional list of landmark event dicts; when provided, each becomes its own chapter with 6-10 scenes
+        video_questions: The question(s) this documentary will answer - the outline MUST be structured to answer each one
     """
     moods_str = ", ".join(available_moods) if available_moods else "relaxing, passionate, happy"
 
+    questions_section = ""
+    if video_questions:
+        q_list = "\n".join(f"- {q}" for q in video_questions)
+        questions_section = f"""
+THE QUESTIONS THIS DOCUMENTARY WILL ANSWER (CRITICAL - FRAME EVERYTHING):
+These questions were generated first. Your outline MUST be structured so the documentary answers each one. Every chapter should advance toward answering at least one of these. Chapter 1 must explicitly ask all of them.
+
+{q_list}
+
+"""
     landmark_section = ""
     if landmark_events:
         lines = []
@@ -316,7 +370,7 @@ Landmarks can share a chapter with context (e.g. "Milan and the Last Supper") or
 {get_biopic_audience_profile()}
 
 This will be a documentary with EXACTLY {chapters} chapters and approximately {target_total_scenes} total scenes. Think of this as a FEATURE FILM with continuous story arcs, not disconnected episodes.
-{landmark_section}
+{questions_section}{landmark_section}
 FLEXIBLE CHAPTER STRUCTURE (CRITICAL):
 Chapters can be different types - not just chronological time chunks:
 - "chronological": Covers a time period (e.g., "Early Years 1879-1900", "The Berlin Years 1914-1933")
@@ -467,7 +521,8 @@ For chronological chapters, blocks typically map to key_events with variable all
 Sum of num_scenes must equal {scene_budget}."""
 
 
-def build_metadata_prompt(person_of_interest: str, tagline: str, total_scenes: int) -> str:
+def build_metadata_prompt(person_of_interest: str, tagline: str, total_scenes: int,
+                         video_questions: list[str] | None = None) -> str:
     """
     Build the initial metadata generation prompt.
     
@@ -475,20 +530,31 @@ def build_metadata_prompt(person_of_interest: str, tagline: str, total_scenes: i
         person_of_interest: Name of the person
         tagline: One-line tagline
         total_scenes: Total number of scenes
+        video_questions: Optional list of questions the documentary will answer (drives title and thumbnail)
     """
+    video_questions_section = ""
+    if video_questions:
+        q_list = "\n".join(f"- {q}" for q in video_questions)
+        video_questions_section = f"""
+VIDEO QUESTIONS (the documentary will answer these):
+{q_list}
+
+CRITICAL: The title and thumbnail must BOTH be driven by these video questions. Either reflect all questions (if feasible) or anchor on the most important/compelling one. The thumbnail MUST visually reflect the questions the video answers—incorporate visual elements that hint at all questions, or focus on the most important one. The thumbnail should make viewers ask the SAME question(s) the video will answer.
+"""
+
     return f"""Create initial metadata for a documentary about: {person_of_interest}
 
 Their story in one line: {tagline}
 
 {get_biopic_audience_profile()}
-
+{video_questions_section}
 CRITICAL: TITLE AND THUMBNAIL MUST BE COHESIVE AND SYNCED - They must create the SAME curiosity gap and work together to maximize CTR. The thumbnail should visually represent the same mystery/question/secret that the title frames. For this audience, prefer substantive power words (UNTOLD, REVEALED, LEGACY, SECRET) over flashy ones (INSANE, CRAZY).
 
 Generate JSON:
 {{
   "title": "WHY SCENE PARADIGM TITLE - MAXIMIZE CTR (60-80 chars): The title must function as a WHY scene that creates curiosity and makes viewers NEED to click. Frame a MYSTERY, PROBLEM, QUESTION, SECRET, or COUNTERINTUITIVE element that the video will reveal. Use power words: SHOCKING, SECRET, REVEALED, EXPOSED, DARK, UNTOLD, UNBELIEVABLE, INCREDIBLE, INSANE, CRAZY, MIND-BLOWING, BANNED, FORBIDDEN, HIDDEN, IMPOSSIBLE. Create CURIOSITY GAPS - ask questions, hint at secrets, suggest something unexpected. The title should make viewers think: 'What secret is this?', 'How did this happen?', 'What problem is being solved?', 'What mystery will be revealed?'. Examples following WHY paradigm: 'The SHOCKING Secret [Person] Kept Hidden', 'How [Person] Did the IMPOSSIBLE (You Won't Believe How)', 'The Dark Truth They DON'T Want You to Know About [Person]', '[Person]: The Forbidden Discovery That Changed Everything', 'This ONE Decision Changed History FOREVER (Here's Why)', 'The Secret [Person] Took to the Grave', 'What Nobody Knows About [Person]'s Greatest Discovery'. Must create a curiosity gap that makes viewers NEED to click to get the answer, while staying factually accurate.",
   "tag_line": "Short, succinct, catchy tagline (5-10 words) that captures who they are. Examples: 'the man who changed the world', 'the codebreaker who saved millions', 'the mind that rewrote physics', 'the naturalist who explained life'. Should be memorable and accurate.",
-  "thumbnail_description": "WHY SCENE THUMBNAIL - MAXIMIZE CTR (MUST BE COHESIVE WITH TITLE): The thumbnail must function as a WHY scene that creates the SAME curiosity gap as the title. Visually frame the SAME MYSTERY, PROBLEM, QUESTION, or SECRET that the title frames. If the title asks 'What secret?', the thumbnail should visually hint at that secret. If the title asks 'How did this happen?', the thumbnail should show the moment of discovery or the problem. If the title mentions 'The Dark Truth', the thumbnail should show visual elements suggesting hidden truth or revelation. Show counterintuitive elements, hidden truths, or something unexpected that matches the title's curiosity gap. Use visual storytelling to ask the SAME questions the title asks: 'What secret is being revealed?', 'What problem is being solved?', 'What mystery will be uncovered?', 'What unexpected truth is hidden here?'. Composition: intense close-ups, dramatic expressions showing realization/shock/conflict, extreme lighting (chiaroscuro), bold colors (red/yellow for urgency/danger), symbolic elements that suggest hidden meaning or secrets matching the title's theme. Subject in MOMENT OF DISCOVERY or CONFRONTATION - not passive. Show visual hints of the mystery/problem/secret without revealing the answer. Think: 'What question does this image make me ask?' It should be the SAME question the title asks. The viewer should look at this and think 'I NEED to know what this is about' - create visual curiosity gaps that sync with the title. NO TEXT in image, but visually SCREAM mystery, urgency, and the promise of revelation that matches the title's promise.",
+  "thumbnail_description": "WHY SCENE THUMBNAIL - MAXIMIZE CTR (MUST BE COHESIVE WITH TITLE): The thumbnail must function as a WHY scene that creates the SAME curiosity gap as the title. The thumbnail MUST visually reflect the video questions the documentary answers—either incorporate visual elements that hint at all questions, or focus on the most important/compelling question. The thumbnail should make viewers ask the SAME question(s) the video will answer. Visually frame the SAME MYSTERY, PROBLEM, QUESTION, or SECRET that the title frames. If the title asks 'What secret?', the thumbnail should visually hint at that secret. If the title asks 'How did this happen?', the thumbnail should show the moment of discovery or the problem. If the title mentions 'The Dark Truth', the thumbnail should show visual elements suggesting hidden truth or revelation. Show counterintuitive elements, hidden truths, or something unexpected that matches the title's curiosity gap. Use visual storytelling to ask the SAME questions the title asks. Composition: intense close-ups, dramatic expressions showing realization/shock/conflict, extreme lighting (chiaroscuro), bold colors (red/yellow for urgency/danger), symbolic elements that suggest hidden meaning or secrets matching the title's theme. Subject in MOMENT OF DISCOVERY or CONFRONTATION - not passive. Show visual hints of the mystery/problem/secret without revealing the answer. Think: 'What question does this image make me ask?' It should be the SAME question the title asks. The viewer should look at this and think 'I NEED to know what this is about' - create visual curiosity gaps that sync with the title. NO TEXT in image, but visually SCREAM mystery, urgency, and the promise of revelation that matches the title's promise.",
   "global_block": "Visual style guide (300-400 words): semi-realistic digital painting style, color palette, dramatic lighting, how {person_of_interest} should appear consistently across {total_scenes} scenes."
 }}"""
 
@@ -567,13 +633,16 @@ CRITICAL RULES:
 
 CRITICAL: TITLE AND THUMBNAIL MUST BE COHESIVE AND SYNCED - They must create the SAME curiosity gap and work together to maximize CTR. The thumbnail should visually represent the same mystery/question/secret that the title frames.
 
+CRITICAL: The short_title MUST be derived from the video_question. It should frame the SAME question the short will answer. The title is the clickable promise; the video_question is what the short delivers—they must align. Consider the video_question first, then craft a title that reflects it.
+
 Provide JSON:
 {{
-  "short_title": "WHY SCENE PARADIGM TITLE - MAXIMIZE CTR (max 50 chars): The title must function as a WHY scene that creates curiosity and makes viewers NEED to click. Frame a MYSTERY, PROBLEM, QUESTION, or SECRET that the short will reveal. Use power words: SHOCKING, SECRET, EXPOSED, INSANE, UNBELIEVABLE, MIND-BLOWING, CRAZY, BANNED, FORBIDDEN, IMPOSSIBLE. Create CURIOSITY GAPS - ask questions, hint at secrets, suggest something unexpected. The title should make viewers think: 'What secret is this?', 'How did this happen?', 'What problem is being solved?', 'What mystery will be revealed?'. Examples following WHY paradigm: 'The SHOCKING Secret Nobody Knows (You Won't Believe It)', 'How He Did the IMPOSSIBLE (Here's How)', 'This Changed EVERYTHING (Here's Why)', 'The Dark Truth Exposed (What They Hid)', 'You WON'T Believe This (Wait Until You See)'. Must create a curiosity gap that makes viewers NEED to click to get the answer, while staying accurate.",
+  "short_title": "WHY SCENE PARADIGM TITLE - MAXIMIZE CTR (max 50 chars): CRITICAL - Must be derived from the video_question. The title must frame the SAME question the short will answer. It should function as a WHY scene that creates curiosity and makes viewers NEED to click. Frame a MYSTERY, PROBLEM, QUESTION, or SECRET that the short will reveal. Use power words: SHOCKING, SECRET, EXPOSED, INSANE, UNBELIEVABLE, MIND-BLOWING, CRAZY, BANNED, FORBIDDEN, IMPOSSIBLE. Create CURIOSITY GAPS - ask questions, hint at secrets, suggest something unexpected. The title should make viewers think the SAME question the video_question asks. Examples: if video_question is 'How did he survive?', title could be 'How He Survived the IMPOSSIBLE (True Story)'; if video_question is 'How did they stop the killer?', title could be 'The IMPOSSIBLE Task That Saved Thousands'. Must create a curiosity gap that makes viewers NEED to click to get the answer, while staying accurate.",
   "short_description": "YouTube description (100 words) with hashtags. Should drive viewers to watch the full documentary.",
   "tags": "10-15 SEO tags comma-separated",
   "music_mood": "Exactly one of: {moods_str}. Pick the music mood that best fits this high-energy trailer.",
   "thumbnail_prompt": "WHY SCENE THUMBNAIL - MAXIMIZE CTR (MUST BE COHESIVE WITH TITLE): The thumbnail must function as a WHY scene that creates the SAME curiosity gap as the title. Visually frame the SAME MYSTERY, PROBLEM, QUESTION, or SECRET that the title frames. If the title asks 'What secret?', the thumbnail should visually hint at that secret. If the title asks 'How did this happen?', the thumbnail should show the moment of discovery or the problem. If the title mentions 'The Dark Truth', the thumbnail should show visual elements suggesting hidden truth or revelation. Show counterintuitive elements, hidden truths, or something unexpected that matches the title's curiosity gap. Use visual storytelling to ask the SAME questions the title asks. Composition: intense close-ups, dramatic expressions showing realization/shock/conflict, extreme lighting (chiaroscuro), bold colors (red/yellow for urgency/danger), symbolic elements that suggest hidden meaning or secrets matching the title's theme. Subject in MOMENT OF DISCOVERY or CONFRONTATION - not passive. Show visual hints of the mystery/problem/secret without revealing the answer. Think: 'What question does this image make me ask?' It should be the SAME question the title asks. The viewer should look at this and think 'I NEED to know what this is about' - create visual curiosity gaps that sync with the title. NO TEXT in image, but visually SCREAM mystery, urgency, and the promise of revelation that matches the title's promise. Optimized for mobile scrolling - must instantly create curiosity when tiny in feed.",
+  "video_question": "The question this short will answer - MUST be asked at the very start of scene 1. Must be specific to this short's chosen topic (not the broad documentary questions). Example: 'How did Roosevelt survive a point-blank shot to the chest?' or 'How did they stop the invisible killer at the Panama Canal?'",
   "hook_expansion": "How to expand the chosen topic into a 4-scene short - what story/mystery to tease, and what question scene 3 should pose for scene 4 to answer",
   "key_facts": ["3-5 specific facts to include across the 4 scenes: use in scenes 1-3 for curiosity, and in scene 4 for the payoff answer"]
 }}"""

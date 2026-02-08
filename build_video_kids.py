@@ -177,6 +177,7 @@ Story: {story_title}{character_section}{style_section}"""
             output_path=img_path,
             size=IMAGE_RESOLUTION,  # Vertical format for Shorts
             output_format="png",
+            moderation="auto",  # Kids content: use auto moderation, not low
         )
         
         if save_assets:

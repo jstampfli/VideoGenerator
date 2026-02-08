@@ -15,6 +15,7 @@ from biopic_schemas import (
     PIVOTAL_MOMENTS_SCHEMA,
     SCENE_SCHEMA,
     HANGING_STORYLINES_SCHEMA,
+    HISTORIAN_DEPTH_ADDITIONS_SCHEMA,
     SCENES_ARRAY_SCHEMA,
 )
 
@@ -900,10 +901,248 @@ This scene should:
         return scenes
 
 
+def check_and_add_historian_depth_scenes(scenes: list[dict], subject_name: str, chapter_context: str = None,
+                                        max_scenes: int = None, script_type: str = "biopic") -> list[dict]:
+    """
+    From the perspective of a well-studied professional historian, identify gaps in the documentary
+    and add scenes to fill in missing details, context, significance, or additional meaning.
+    Only runs for biopic scripts.
+    """
+    if script_type != "biopic":
+        return scenes
+
+    if max_scenes is not None and len(scenes) >= max_scenes:
+        return scenes
+
+    scenes_json = json.dumps(scenes, indent=2, ensure_ascii=False)
+
+    context_info = ""
+    if chapter_context:
+        context_info = f"\nCHAPTER CONTEXT: {chapter_context}\n"
+
+    historian_prompt = f"""You are a well-studied professional historian who has dedicated years to the life and era of {subject_name}. You are reviewing a documentary script and identifying where it could use MORE DEPTH.
+
+CURRENT SCENES (JSON):
+{scenes_json}
+{context_info}
+
+Your task: Identify gaps where the documentary would benefit from additional scenes. Consider:
+- Important missing details that historians would expect to see (key facts, dates, figures, decisions)
+- Missing context (background events, political climate, cultural factors that shaped the moment)
+- Unexplored significance (why a moment mattered more than is shown, long-term impact, historiographical debate)
+- Additional meaning (human dimension, emotional weight, what it meant for those involved)
+- Connections or parallels that would deepen understanding
+- Moments that feel rushed or glossed over when they deserve more attention
+
+Only suggest additions that:
+1. Naturally fit the narrative flow
+2. Can be answered/satisfied by the documentary with real historical content
+3. Add genuine depth—not filler or repetition
+4. Would make a fellow historian nod in approval
+
+For each gap you identify, provide:
+- "gap_description": Brief description of what's missing
+- "what_to_add": What the new scene should cover (the specific content to add)
+- "insert_after_scene_id": After which scene ID to insert (chronologically appropriate)
+- "year": When this addition takes place
+- "scene_type": "WHY" or "WHAT" - typically "WHAT" for factual depth, "WHY" for significance/meaning
+- "rationale": Why a historian would consider this addition valuable
+
+Return a JSON array. If there are no meaningful gaps to fill, return an empty array [].
+
+[
+  {{
+    "gap_description": "Brief description of the gap",
+    "what_to_add": "Specific content the new scene should cover",
+    "insert_after_scene_id": 12,
+    "year": 1905,
+    "scene_type": "WHAT",
+    "rationale": "Why this adds depth from a historian's perspective"
+  }},
+  ...
+]"""
+
+    try:
+        audience_note = f" {prompt_builders.get_biopic_audience_profile()}" if script_type == "biopic" else ""
+        content = llm_utils.generate_text(
+            messages=[
+                {"role": "system", "content": f"You are a well-studied professional historian with deep expertise in your subject. You identify where narratives need more depth, context, and significance. You add value through substance—never filler. Your additions would make a documentary feel more authoritative and satisfying to a knowledgeable viewer.{audience_note}"},
+                {"role": "user", "content": historian_prompt}
+            ],
+            temperature=0.5,
+            response_json_schema=HISTORIAN_DEPTH_ADDITIONS_SCHEMA,
+        )
+        historian_additions = json.loads(clean_json_response(content))
+
+        if not isinstance(historian_additions, list):
+            print(f"[HISTORIAN DEPTH] WARNING: Expected array, got {type(historian_additions)}. Skipping.")
+            return scenes
+
+        if not historian_additions:
+            print(f"[HISTORIAN DEPTH] ✓ No depth additions suggested")
+            for scene in scenes:
+                if 'is_historian_scene' not in scene:
+                    scene['is_historian_scene'] = False
+            return scenes
+
+        print(f"[HISTORIAN DEPTH] Found {len(historian_additions)} addition(s) to add depth")
+
+        # Sort by insert_after_scene_id (descending) so we insert from end to start
+        historian_additions.sort(key=lambda x: x.get('insert_after_scene_id', 0), reverse=True)
+
+        updated_scenes = [scene.copy() for scene in scenes]
+        inserted_count = 0
+
+        for addition in historian_additions:
+            insert_after_id = addition.get('insert_after_scene_id')
+            what_to_add = addition.get('what_to_add', '')
+            year = addition.get('year', '')
+            scene_type = addition.get('scene_type', 'WHAT')
+
+            scene_id_to_index = {scene.get('id'): i for i, scene in enumerate(updated_scenes)}
+            if insert_after_id not in scene_id_to_index:
+                print(f"[HISTORIAN DEPTH]   WARNING: Scene ID {insert_after_id} not found, skipping: {addition.get('gap_description', '')[:50]}...")
+                continue
+
+            insert_index = scene_id_to_index[insert_after_id]
+            scene_after = updated_scenes[insert_index]
+            scene_before = updated_scenes[insert_index - 1] if insert_index > 0 else None
+
+            # Build full script context (compact: id, title, narration, year)
+            script_lines = []
+            for s in updated_scenes:
+                script_lines.append(f"Scene {s.get('id')}: \"{s.get('title', '')}\" ({s.get('year', '')}) — {s.get('narration', '')}")
+
+            # Full content of adjacent scenes for flow
+            prev_block = ""
+            if scene_before:
+                prev_block = f"""
+PREVIOUS SCENE (your new scene must flow FROM this—your first sentence must connect to its ending):
+  ID: {scene_before.get('id')}
+  Title: {scene_before.get('title', '')}
+  Year: {scene_before.get('year', '')}
+  Emotion: {scene_before.get('emotion', '')}
+  Narration: {scene_before.get('narration', '')}
+"""
+            next_block = f"""
+NEXT SCENE (your new scene must flow INTO this—set up or connect to what follows):
+  ID: {scene_after.get('id')}
+  Title: {scene_after.get('title', '')}
+  Year: {scene_after.get('year', '')}
+  Emotion: {scene_after.get('emotion', '')}
+  Narration: {scene_after.get('narration', '')}
+"""
+
+            prev_emotion = scene_before.get('emotion', '') if scene_before else ''
+            next_emotion = scene_after.get('emotion', '')
+            if prev_emotion and next_emotion:
+                emotion_note = f"Your emotion should fall between previous ({prev_emotion}) and next ({next_emotion}) for gradual progression."
+            elif next_emotion:
+                emotion_note = f"Your emotion should transition smoothly toward the next scene's emotion ({next_emotion})."
+            else:
+                emotion_note = ""
+
+            depth_prompt = f"""Generate a scene to add depth to a documentary about {subject_name}.
+
+HISTORIAN'S ADDITION:
+{addition.get('gap_description', '')}
+
+WHAT TO ADD:
+{what_to_add}
+
+RATIONALE: {addition.get('rationale', '')}
+
+BRIDGE REQUIREMENTS (CRITICAL):
+- Your first sentence MUST connect to or reference the last sentence/idea of the previous scene. Do not start with a standalone topic—bridge from what came before.
+- Your last sentence MUST set up or lead into the first sentence of the next scene. Tee up the topic, theme, or transition that the next scene will pick up.
+- {emotion_note}
+
+{get_shared_scene_flow_instructions()}
+
+FULL SCRIPT CONTEXT (for narrative flow):
+{chr(10).join(script_lines)}
+{prev_block}
+{next_block}
+---
+
+Your new scene will be inserted BETWEEN the previous and next scenes above. Create a scene that adds this depth naturally—flowing from the previous scene and into the next. Be substantive and authoritative. 1-3 sentences.
+
+{{
+  "title": "2-5 word title",
+  "narration": "1-3 sentences adding the missing depth",
+  "scene_type": "{scene_type}",
+  "image_prompt": "Visual description, including {subject_name}'s age at this time ({year}), 16:9 cinematic",
+  "emotion": "Appropriate emotion between previous and next for gradual progression",
+  "narration_instructions": "Focus on [emotion from above].",
+  "year": {json.dumps(year)}
+}}"""
+
+            try:
+                completion_content = llm_utils.generate_text(
+                    messages=[
+                        {"role": "system", "content": f"You create scenes that add historical depth to documentaries. Substantive, authoritative, and flowing naturally. {prompt_builders.get_biopic_audience_profile()}"},
+                        {"role": "user", "content": depth_prompt}
+                    ],
+                    temperature=0.6,
+                    response_json_schema=SCENE_SCHEMA,
+                )
+                new_scene = json.loads(clean_json_response(completion_content))
+
+                if not isinstance(new_scene, dict):
+                    continue
+
+                if 'scene_type' not in new_scene:
+                    new_scene['scene_type'] = scene_type
+                if new_scene.get('scene_type') not in ['WHY', 'WHAT']:
+                    new_scene['scene_type'] = 'WHAT'
+                if 'year' not in new_scene:
+                    new_scene['year'] = year
+                if 'emotion' not in new_scene:
+                    new_scene['emotion'] = "contemplative"
+                if 'narration_instructions' not in new_scene or not new_scene.get('narration_instructions'):
+                    new_scene['narration_instructions'] = f"Focus on {new_scene.get('emotion', 'contemplative')}."
+
+                new_scene['is_historian_scene'] = True
+                new_scene['chapter_num'] = scene_after.get('chapter_num', 1)
+                new_scene['id'] = insert_after_id + 0.5
+
+                if max_scenes is not None and len(updated_scenes) >= max_scenes:
+                    break
+
+                updated_scenes.insert(insert_index + 1, new_scene)
+                inserted_count += 1
+                print(f"[HISTORIAN DEPTH]   • Added: {addition.get('gap_description', '')[:55]}...")
+
+            except Exception as e:
+                print(f"[HISTORIAN DEPTH]   WARNING: Failed to generate scene ({e}). Skipping.")
+                continue
+
+        for i, scene in enumerate(updated_scenes):
+            scene['id'] = i + 1
+            if 'is_historian_scene' not in scene:
+                scene['is_historian_scene'] = False
+
+        if max_scenes is not None and len(updated_scenes) > max_scenes:
+            updated_scenes = updated_scenes[:max_scenes]
+            for i, scene in enumerate(updated_scenes):
+                scene['id'] = i + 1
+
+        print(f"[HISTORIAN DEPTH] ✓ Added {inserted_count} scene(s) for depth (total: {len(updated_scenes)} scenes)")
+        return updated_scenes
+
+    except Exception as e:
+        print(f"[HISTORIAN DEPTH] WARNING: Failed ({e}). Continuing without historian additions.")
+        for scene in scenes:
+            if 'is_historian_scene' not in scene:
+                scene['is_historian_scene'] = False
+        return scenes
+
+
 def refine_scenes(scenes: list[dict], subject_name: str, is_short: bool = False, chapter_context: str = None, 
                   diff_output_path: Path | None = None, subject_type: str = "person", skip_significance_scenes: bool = False,
                   scenes_per_chapter: int = None, chapter_boundaries: list[tuple[int, int]] = None,
-                  script_type: str = "biopic") -> tuple[list[dict], dict]:
+                  script_type: str = "biopic", video_questions: list[str] | None = None,
+                  short_video_question: str | None = None) -> tuple[list[dict], dict]:
     """
     Refine generated scenes through THREE PASSES:
     1. Check for hanging storylines and add scenes to complete them
@@ -942,10 +1181,22 @@ def refine_scenes(scenes: list[dict], subject_name: str, is_short: bool = False,
             print(f"\n[REFINEMENT PASS 1] Checking for hanging storylines...")
         scenes_after_storyline_check = check_and_add_missing_storyline_scenes(scenes, subject_name, chapter_context, max_scenes=None, script_type=script_type)
     
+    # PASS 1.5: For biopic main videos, historian depth pass - add scenes for missing details, context, significance
+    scenes_after_historian = [scene.copy() for scene in scenes_after_storyline_check]
+    if is_short:
+        pass  # No historian pass for shorts
+    elif script_type == "biopic":
+        print(f"\n[REFINEMENT PASS 1.5] Historian depth: identifying gaps for missing details, context, significance...")
+        scenes_after_historian = check_and_add_historian_depth_scenes(
+            scenes_after_storyline_check, subject_name, chapter_context, max_scenes=None, script_type=script_type
+        )
+    else:
+        pass  # Only biopic gets historian pass
+
     # PASS 2: For main videos (not shorts), identify pivotal moments and insert significance scenes
     # SKIP for shorts (trailers don't need significance scenes)
     # UNLESS skip_significance_scenes is True (e.g., for top 10 list videos)
-    scenes_after_pivotal = [scene.copy() for scene in scenes_after_storyline_check]
+    scenes_after_pivotal = [scene.copy() for scene in scenes_after_historian]
     if is_short:
         print(f"\n[REFINEMENT PASS 2] Skipped for shorts (trailers don't need significance scenes)")
     elif not skip_significance_scenes:
@@ -1043,7 +1294,7 @@ def refine_scenes(scenes: list[dict], subject_name: str, is_short: bool = False,
             print(f"[REFINEMENT PASS 2]   • Inserted {inserted_scenes_count} significance scene(s)")
             print(f"[REFINEMENT PASS 2]   • Scene count after pivotal scenes: {len(scenes_after_pivotal)} (was {len(original_scenes)})")
     else:
-        scenes_after_pivotal = scenes_after_storyline_check
+        scenes_after_pivotal = scenes_after_historian
     
     # PASS 3: Final refinement for transitions, storytelling, and polish
     # For shorts, cap at 5 scenes maximum before final refinement
@@ -1058,8 +1309,9 @@ def refine_scenes(scenes: list[dict], subject_name: str, is_short: bool = False,
     scenes_before_refinement = [scene.copy() for scene in scenes_after_pivotal]
     print(f"[REFINEMENT PASS 3] Refining {len(scenes_before_refinement)} scenes (including any storyline completion and significance scenes)...")
     
-    # Identify significance scenes and scenes that follow them for transition checking
+    # Identify significance scenes and historian scenes for transition checking
     significance_scene_info = ""
+    historian_scene_info = ""
     if not is_short:
         # Find scenes that are significance scenes (marked with is_significance_scene: true)
         # Also check for scenes that follow significance scenes
@@ -1082,6 +1334,25 @@ The following scenes are significance scenes (explaining why pivotal moments mat
 {significance_context}
 
 IMPORTANT: Scenes that come IMMEDIATELY AFTER significance scenes must transition FROM the significance scene, not from the original pivotal scene. The significance scene creates a bridge - scenes after it should flow from that bridge, not skip over it."""
+        
+        # Build historian scene info (parallel to significance scene)
+        historian_context = ""
+        for i, scene in enumerate(scenes_before_refinement):
+            is_historian = scene.get('is_historian_scene', False)
+            if is_historian and i + 1 < len(scenes_before_refinement):
+                scene_id = scene.get('id', i + 1)
+                next_scene_id = scenes_before_refinement[i + 1].get('id', i + 2)
+                next_scene_title = scenes_before_refinement[i + 1].get('title', '')
+                historian_context += f"\n  - Scene {scene_id} is a historian scene (added for depth). Scene {next_scene_id} (\"{next_scene_title}\") immediately follows it - ensure Scene {next_scene_id}'s beginning transitions FROM Scene {scene_id}, not from the scene before Scene {scene_id}.\n"
+        
+        historian_scene_info = ""
+        if historian_context:
+            historian_scene_info = f"""
+CRITICAL TRANSITION CHECK - HISTORIAN SCENES:
+The following scenes are historian scenes (added for depth) that were inserted between existing scenes:
+{historian_context}
+
+IMPORTANT: Scenes that come IMMEDIATELY AFTER historian scenes must transition FROM the historian scene, not from the original scene that preceded it. Historian scenes must flow FROM the previous scene (their opening should connect) and INTO the next scene (their closing should set up what follows). If a historian scene reads like a standalone insertion, refine it to bridge."""
     
     # Prepare scene context for the LLM
     scenes_json = json.dumps(scenes_before_refinement, indent=2, ensure_ascii=False)
@@ -1136,18 +1407,44 @@ HORROR-SPECIFIC REFINEMENT FOCUS:
         horror_focus = ""
     
     biopic_audience_note = ""
+    why_before_what_note = ""
+    biopic_language_note = ""
+    short_video_question_note = ""
+    if is_short and short_video_question:
+        short_video_question_note = f"""
+CRITICAL - SHORT SCENE 1 MUST START WITH THE VIDEO QUESTION: Scene 1's narration MUST begin with the video_question. The question comes FIRST, before any facts or context. If Scene 1 does not start with the question, rewrite it so that it does. Video question: "{short_video_question}"
+"""
     if script_type == "biopic":
         import prompt_builders
         biopic_audience_note = f"\n\n{prompt_builders.get_biopic_audience_profile()}\n"
+        if video_questions:
+            if chapter_boundaries:
+                ch1_start, ch1_end = chapter_boundaries[0]
+            elif scenes_per_chapter:
+                ch1_start, ch1_end = 1, scenes_per_chapter
+            else:
+                ch1_start, ch1_end = 1, 10  # fallback
+            why_before_what_note = f"""
+CRITICAL - QUESTION BEFORE ITS FACTS (chapter 1 scenes, IDs {ch1_start}-{ch1_end}): Each question must come BEFORE any facts that help answer that particular question. When refining, NEVER reorder so that facts that answer a question appear before that question. Example of WRONG: "By 1943, his genius was undeniable... How did Patton nearly destroy his career?" Example of CORRECT: "How did Patton nearly destroy his career before his greatest triumph? By 1943, his genius was undeniable..."
+"""
+        biopic_language_note = """
+2.5. LIBERAL/PC TERMINOLOGY (CRITICAL for this audience) - Replace terms that alienate conservative 65-year-old American men:
+   * AVOID: "privilege", "privileged", "born into privilege", "privileged upbringing", "marginalized", "oppressed", "colonization", "toxic", "problematic"
+   * REPLACE WITH: "wealthy family", "family of means", "from a prominent family", "born to wealth", "family fortune", "advantage"—factual alternatives that describe the same reality without liberal political framing
+   * Example: "Born into privilege" → "Born to a wealthy California family" or "From a family of means"
+"""
     
     refinement_prompt = f"""You are reviewing and refining scenes for {subject_descriptor} {subject_name}.
 {biopic_audience_note}
+{why_before_what_note}
+{short_video_question_note}
 
 CURRENT SCENES (JSON):
 {scenes_json}
 {scene_type_summary}
 {context_info}
 {significance_scene_info}
+{historian_scene_info}
 
 CRITICAL: For scenes that contain requests to "like", "subscribe", and "comment" in the narration, you can refine and improve them (clarity, flow, naturalness) BUT you MUST preserve the like/subscribe/comment call-to-action. The CTA is essential and must remain in the narration - refine around it, don't remove it.
 
@@ -1182,6 +1479,7 @@ YOUR TASK: Review these scenes and improve them. Look for:
    * Remove or replace gimmicky phrases: "shocking", "incredible", "unbelievable", "what nobody expected", "the secret that would change everything", "mind-blowing"
    * Let facts speak for themselves—don't oversell with hype or repeated dramatic framing
    * Prefer direct, straightforward statements over theatrical buildup
+{biopic_language_note}
 3. META REFERENCES (CRITICAL) - Remove ANY references to:
    * "Chapter" or "chapters" - viewers don't know about chapters
    * "In this video" or "In this documentary" or "In this story"
@@ -1225,6 +1523,8 @@ YOUR TASK: Review these scenes and improve them. Look for:
    * CRITICAL: If significance scenes were inserted after pivotal moments, ensure scenes immediately AFTER significance scenes transition FROM the significance scene, not from the original pivotal scene
    * Example: If Scene 17 is pivotal, Scene 18 is a significance scene (inserted), and Scene 19 follows - Scene 19's beginning should reference/flow from Scene 18, not Scene 17
    * Significance scenes bridge pivotal moments and their consequences - scenes after them should acknowledge this bridge
+   * CRITICAL: Similarly, scenes immediately AFTER historian scenes must transition FROM the historian scene, not from the original scene that preceded it
+   * Historian scenes must flow FROM the previous scene (their opening should connect) and INTO the next scene (their closing should set up what follows). If a historian scene reads like a standalone insertion, refine it to bridge.
 11. WEIRD OR UNNATURAL SENTENCES - phrases that sound odd when spoken, overly flowery language, vague statements
 12. REPETITIVE LANGUAGE - same words or phrases used too frequently
 13. CLARITY ISSUES - sentences that are confusing or hard to understand when spoken aloud
@@ -1289,7 +1589,14 @@ Each scene object must include: id, title, narration, image_prompt, emotion, yea
                 scene['id'] = i + 1
          
         # Validate all required fields are present and fix missing narration_instructions
+        # Preserve is_significance_scene and is_historian_scene from original (LLM may omit them)
         for i, scene in enumerate(refined_scenes):
+            original = scenes_before_refinement[i] if i < len(scenes_before_refinement) else {}
+            if 'is_significance_scene' not in scene:
+                scene['is_significance_scene'] = original.get('is_significance_scene', False)
+            if 'is_historian_scene' not in scene:
+                scene['is_historian_scene'] = original.get('is_historian_scene', False)
+
             # Check for missing required fields
             missing_fields = []
             for field in ["id", "title", "narration", "image_prompt", "emotion", "year", "scene_type"]:

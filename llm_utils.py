@@ -318,6 +318,7 @@ def generate_image(
     Returns:
         Path if output_path was set, else raw image bytes.
     """
+    kwargs.setdefault("moderation", "low")
     prov = (provider or IMAGE_PROVIDER).lower()
     if prov not in ("openai", "google"):
         raise ValueError(
