@@ -2,7 +2,10 @@
 Modular prompt builders for script generation.
 Extracts shared prompt components to avoid duplication and enable easy customization.
 """
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
+
+if TYPE_CHECKING:
+    from research_utils import ResearchContext
 
 
 def get_biopic_audience_profile() -> str:
@@ -241,17 +244,19 @@ def get_trailer_structure_prompt() -> str:
    - "What did he do next that saved the day?"
    - "How did something so simple resolve the crisis?"
    Scene 3 must END with a clear question that scene 4 will answer.
-4. SCENE 4: ANSWER the question posed at the end of scene 3. This is a WHAT scene - deliver the payoff. Give the viewer the resolution so they feel satisfied: what actually happened, how it worked, or why it mattered. Use clear, punchy facts. End with a soft CTA to watch the full documentary for the complete story (e.g. "Watch the full documentary for the full story.")."""
+4. SCENE 4: ANSWER the question posed at the end of scene 3. This is a WHAT scene - deliver the payoff. Give the viewer the resolution so they feel satisfied: what actually happened, how it worked, or why it mattered. Use clear, punchy facts. Do NOT end with a CTA to watch the full documentary—it hurts view duration; end with a satisfying resolution only."""
 
 
-def build_video_questions_prompt(person_of_interest: str) -> str:
+def build_video_questions_prompt(person_of_interest: str, research_context: "ResearchContext | None" = None) -> str:
     """
     Build the prompt for generating the question(s) this documentary will answer.
     This is the FIRST step - the questions frame everything else.
     These questions are the PRIMARY HOOK that gets users to click and watch.
     """
+    from research_utils import get_research_context_block
+    research_block = get_research_context_block(research_context) if research_context else ""
     return f"""Identify 1-3 questions that this documentary about {person_of_interest} will answer.
-
+{research_block}
 {get_biopic_audience_profile()}
 
 CRITICAL - THESE QUESTIONS ARE YOUR #1 HOOK:
@@ -284,7 +289,8 @@ Return JSON:
 }}"""
 
 
-def build_landmark_events_prompt(person_of_interest: str, num_landmarks: int = 4) -> str:
+def build_landmark_events_prompt(person_of_interest: str, num_landmarks: int = 4,
+                                  research_context: "ResearchContext | None" = None) -> str:
     """
     Build the prompt for identifying the most important landmark events in a person's life.
     These will become their own chapters with deep, in-depth coverage.
@@ -293,8 +299,10 @@ def build_landmark_events_prompt(person_of_interest: str, num_landmarks: int = 4
         person_of_interest: Name of the person
         num_landmarks: Number of landmark events to identify (3-6)
     """
+    from research_utils import get_research_context_block
+    research_block = get_research_context_block(research_context) if research_context else ""
     return f"""Identify the {num_landmarks} most iconic, pivotal moments in the life of {person_of_interest}.
-
+{research_block}
 These are the moments that define their legacy—major works, breakthroughs, critical decisions, or events that changed history. They deserve DEEP, DETAILED treatment in a documentary—not a single scene, but multiple scenes exploring technical details, significance, and impact.
 
 For each landmark event, provide:
@@ -324,7 +332,7 @@ Return JSON:
 
 def build_outline_prompt(person_of_interest: str, chapters: int, target_total_scenes: int, min_scenes: int = 2, max_scenes: int = 10,
                         available_moods: list[str] | None = None, landmark_events: list[dict] | None = None,
-                        video_questions: list[str] | None = None) -> str:
+                        video_questions: list[str] | None = None, research_context: "ResearchContext | None" = None) -> str:
     """
     Build the outline generation prompt with flexible chapter structure.
 
@@ -364,9 +372,10 @@ LANDMARK EVENTS - When your story reaches these events, assign 6-8 num_scenes to
 
 Landmarks can share a chapter with context (e.g. "Milan and the Last Supper") or be their own chapter—choose what serves the narrative flow. Total chapters = {chapters}.
 """
-
+    from research_utils import get_research_context_block
+    research_block = get_research_context_block(research_context) if research_context else ""
     return f"""You are a master documentary filmmaker. Create a compelling narrative outline for a ~20 minute documentary about: {person_of_interest}
-
+{research_block}
 {get_biopic_audience_profile()}
 
 This will be a documentary with EXACTLY {chapters} chapters and approximately {target_total_scenes} total scenes. Think of this as a FEATURE FILM with continuous story arcs, not disconnected episodes.
@@ -467,7 +476,8 @@ CRITICAL:
 }}"""
 
 
-def build_scene_outline_prompt(chapter: dict, person: str, scene_budget: int, landmarks: list[dict] | None = None) -> str:
+def build_scene_outline_prompt(chapter: dict, person: str, scene_budget: int, landmarks: list[dict] | None = None,
+                               research_context: "ResearchContext | None" = None) -> str:
     """
     Build the scene outline prompt for allocating scenes within a chapter.
     
@@ -495,9 +505,10 @@ LANDMARK EVENTS (if this chapter covers one or more of these, allocate at least 
 
 Decide based on chapter title, summary, and key_events. Structure landmark blocks: setup, event with key details, reactions, significance.
 """
-
+    from research_utils import get_research_context_block
+    research_block = get_research_context_block(research_context) if research_context else ""
     return f"""Allocate {scene_budget} scenes for this chapter of a documentary about {person}.
-
+{research_block}
 CHAPTER: "{chapter.get('title', '')}"
 Type: {chapter_type}
 Summary: {chapter.get('summary', '')}
@@ -522,7 +533,8 @@ Sum of num_scenes must equal {scene_budget}."""
 
 
 def build_metadata_prompt(person_of_interest: str, tagline: str, total_scenes: int,
-                         video_questions: list[str] | None = None) -> str:
+                         video_questions: list[str] | None = None,
+                         research_context: "ResearchContext | None" = None) -> str:
     """
     Build the initial metadata generation prompt.
     
@@ -541,26 +553,91 @@ VIDEO QUESTIONS (the documentary will answer these):
 
 CRITICAL: The title and thumbnail must BOTH be driven by these video questions. Either reflect all questions (if feasible) or anchor on the most important/compelling one. The thumbnail MUST visually reflect the questions the video answers—incorporate visual elements that hint at all questions, or focus on the most important one. The thumbnail should make viewers ask the SAME question(s) the video will answer.
 """
-
+    from research_utils import get_research_context_block
+    research_block = get_research_context_block(research_context) if research_context else ""
     return f"""Create initial metadata for a documentary about: {person_of_interest}
 
 Their story in one line: {tagline}
-
+{research_block}
 {get_biopic_audience_profile()}
 {video_questions_section}
-CRITICAL: TITLE AND THUMBNAIL MUST BE COHESIVE AND SYNCED - They must create the SAME curiosity gap and work together to maximize CTR. The thumbnail should visually represent the same mystery/question/secret that the title frames. For this audience, prefer substantive power words (UNTOLD, REVEALED, LEGACY, SECRET) over flashy ones (INSANE, CRAZY).
+TITLE AND THUMBNAIL - SAME WHY TYPE, MAXIMUM SYNERGY:
+1. Choose ONE primary WHY type for this documentary (thumbnail_why_type). Only three options: counterintuitive, secret_mystery, known_but_misunderstood.
+2. The TITLE must use that SAME WHY type—same paradigm, same curiosity. The thumbnail (description + thumbnail_text) must also use that SAME type. Title and thumbnail are one package; they must match and reinforce each other.
+3. SYNERGY: Title and thumbnail should play off each other to maximize CTR. If the title asks a question, the thumbnail visual should hint at that question or its stakes. If the thumbnail shows a peak moment, the title should name the mystery or promise the revelation. Use complementary angles—not redundant, not conflicting. For this audience, prefer substantive power words (UNTOLD, REVEALED, LEGACY, SECRET) over flashy ones (INSANE, CRAZY).
 
-Generate JSON:
+THE THREE WHY TYPES (pick one; then align title + thumbnail to it):
+- counterintuitive: Something that defies expectations. Title frames the twist or the unexpected; thumbnail suggests the same. E.g. "Why [Person] Did the UNTHINKABLE", "The Decision Nobody Saw Coming".
+- secret_mystery: Hidden or little-known truth. Title hints at the secret; thumbnail hints at revelation or hidden thing. E.g. "The Secret [Person] Took to the Grave", "What [Person] Never Wanted You to Know".
+- known_but_misunderstood: Familiar story most people get wrong. Title promises the real story; thumbnail can show the moment everyone misremembers. E.g. "What Everyone Gets WRONG About [Person]", "The Real [Person] (Not the Myth)".
+
+THUMBNAIL RULES: ONE focal subject only. Clean solid dark background—no figures, letters, or half-visible elements. Subject lit; natural contrast (not extreme). RULE OF THIRDS. Bold text in LOWER third only (never at top). REPRESENT FULL VIDEO, ACCURATE.
+
+Generate JSON (choose thumbnail_why_type FIRST; then write title and thumbnail_description + thumbnail_text to match that type):
 {{
-  "title": "WHY SCENE PARADIGM TITLE - MAXIMIZE CTR (60-80 chars): The title must function as a WHY scene that creates curiosity and makes viewers NEED to click. Frame a MYSTERY, PROBLEM, QUESTION, SECRET, or COUNTERINTUITIVE element that the video will reveal. Use power words: SHOCKING, SECRET, REVEALED, EXPOSED, DARK, UNTOLD, UNBELIEVABLE, INCREDIBLE, INSANE, CRAZY, MIND-BLOWING, BANNED, FORBIDDEN, HIDDEN, IMPOSSIBLE. Create CURIOSITY GAPS - ask questions, hint at secrets, suggest something unexpected. The title should make viewers think: 'What secret is this?', 'How did this happen?', 'What problem is being solved?', 'What mystery will be revealed?'. Examples following WHY paradigm: 'The SHOCKING Secret [Person] Kept Hidden', 'How [Person] Did the IMPOSSIBLE (You Won't Believe How)', 'The Dark Truth They DON'T Want You to Know About [Person]', '[Person]: The Forbidden Discovery That Changed Everything', 'This ONE Decision Changed History FOREVER (Here's Why)', 'The Secret [Person] Took to the Grave', 'What Nobody Knows About [Person]'s Greatest Discovery'. Must create a curiosity gap that makes viewers NEED to click to get the answer, while staying factually accurate.",
-  "tag_line": "Short, succinct, catchy tagline (5-10 words) that captures who they are. Examples: 'the man who changed the world', 'the codebreaker who saved millions', 'the mind that rewrote physics', 'the naturalist who explained life'. Should be memorable and accurate.",
-  "thumbnail_description": "WHY SCENE THUMBNAIL - MAXIMIZE CTR (MUST BE COHESIVE WITH TITLE): The thumbnail must function as a WHY scene that creates the SAME curiosity gap as the title. The thumbnail MUST visually reflect the video questions the documentary answers—either incorporate visual elements that hint at all questions, or focus on the most important/compelling question. The thumbnail should make viewers ask the SAME question(s) the video will answer. Visually frame the SAME MYSTERY, PROBLEM, QUESTION, or SECRET that the title frames. If the title asks 'What secret?', the thumbnail should visually hint at that secret. If the title asks 'How did this happen?', the thumbnail should show the moment of discovery or the problem. If the title mentions 'The Dark Truth', the thumbnail should show visual elements suggesting hidden truth or revelation. Show counterintuitive elements, hidden truths, or something unexpected that matches the title's curiosity gap. Use visual storytelling to ask the SAME questions the title asks. Composition: intense close-ups, dramatic expressions showing realization/shock/conflict, extreme lighting (chiaroscuro), bold colors (red/yellow for urgency/danger), symbolic elements that suggest hidden meaning or secrets matching the title's theme. Subject in MOMENT OF DISCOVERY or CONFRONTATION - not passive. Show visual hints of the mystery/problem/secret without revealing the answer. Think: 'What question does this image make me ask?' It should be the SAME question the title asks. The viewer should look at this and think 'I NEED to know what this is about' - create visual curiosity gaps that sync with the title. NO TEXT in image, but visually SCREAM mystery, urgency, and the promise of revelation that matches the title's promise.",
+  "thumbnail_why_type": "Exactly one of: counterintuitive, secret_mystery, known_but_misunderstood. Choose the primary WHY paradigm that best fits this documentary. Title and thumbnail MUST both use this type.",
+  "title": "WHY SCENE TITLE (60-80 chars) - MUST match thumbnail_why_type. Create one curiosity gap that synergizes with the thumbnail. counterintuitive: frame the twist/unexpected (e.g. Why [Person] Did the UNTHINKABLE, The Decision That Defied Everyone); secret_mystery: frame the hidden truth (e.g. The Secret [Person] Kept Hidden, What [Person] Never Told Anyone); known_but_misunderstood: frame the real story (e.g. What Everyone Gets WRONG About [Person], The Real Story of [Person]'s Greatest Moment). Use power words: UNTOLD, REVEALED, SECRET, HIDDEN, REAL, WRONG, UNTHINKABLE. Title and thumbnail together = one package for CTR.",
+  "tag_line": "Short, succinct, catchy tagline (5-10 words) that captures who they are. Examples: 'the man who changed the world', 'the codebreaker who saved millions'. Memorable and accurate.",
+  "thumbnail_description": "Describe the ONE PEAK MOMENT. MUST match thumbnail_why_type and synergize with the title—same curiosity, same WHY. ONE subject only. Clean solid dark background (no figures, no letters, no half-visible elements). Subject lit so they stand out; natural contrast, not extreme or weird colors. Rule of thirds. Bold text will be placed in lower third. REPRESENT FULL VIDEO, ACCURATE.",
+  "thumbnail_text": "Short phrase (2-5 words) for thumbnail overlay. MUST match thumbnail_why_type: counterintuitive -> NOT WHAT YOU THINK, DEFIED EXPECTATIONS; secret_mystery -> THE SECRET, HIDDEN TRUTH; known_but_misunderstood -> EVERYONE GETS THIS WRONG, THE REAL STORY. Omit for default.",
   "global_block": "Visual style guide (300-400 words): semi-realistic digital painting style, color palette, dramatic lighting, how {person_of_interest} should appear consistently across {total_scenes} scenes."
 }}"""
 
 
+def build_metadata_prompt_3_options(person_of_interest: str, tagline: str, total_scenes: int,
+                                   video_questions: list[str] | None = None,
+                                   research_context: "ResearchContext | None" = None) -> str:
+    """
+    Build the initial metadata prompt that returns 3 title+thumbnail pairs.
+    User picks the best pair when uploading.
+    """
+    video_questions_section = ""
+    if video_questions:
+        q_list = "\n".join(f"- {q}" for q in video_questions)
+        video_questions_section = f"""
+VIDEO QUESTIONS (the documentary will answer these):
+{q_list}
+
+CRITICAL: Each title and thumbnail pair must be driven by these video questions.
+"""
+    from research_utils import get_research_context_block
+    research_block = get_research_context_block(research_context) if research_context else ""
+    return f"""Create initial metadata for a documentary about: {person_of_interest}
+
+Their story in one line: {tagline}
+{research_block}
+{get_biopic_audience_profile()}
+{video_questions_section}
+Generate EXACTLY 3 different title+thumbnail pairs. The user will pick the best when uploading. Each pair must be self-contained and maximally symbiotic.
+
+FOR EACH PAIR - TITLE AND THUMBNAIL MUST BE SYMBIOTIC:
+1. Choose ONE WHY type for that pair (counterintuitive, secret_mystery, or known_but_misunderstood). Use a different WHY type for at least 2 of the 3 options to give variety.
+2. TITLE: Frame the curiosity using that WHY type. Power words: UNTOLD, REVEALED, SECRET, HIDDEN, REAL, WRONG, UNTHINKABLE.
+3. THUMBNAIL_TEXT: Must DIRECTLY reinforce the title. This is the short phrase that appears on the thumbnail. If title says "The Secret X Kept", thumbnail_text = "THE SECRET". If title says "What Everyone Gets WRONG", thumbnail_text = "EVERYONE GETS THIS WRONG" or "THE REAL STORY". If title says "Why X Did the UNTHINKABLE", thumbnail_text = "NOT WHAT YOU THINK" or "DEFIED EXPECTATIONS". Title and thumbnail_text are ONE symbiotic pair—they must say the same thing in different words.
+4. THUMBNAIL_DESCRIPTION: Describe the ONE peak moment. Same WHY type. Clean solid dark background. RULE OF THIRDS: Subject on intersection of thirds (left or right third), text in lower third band. REPRESENT FULL VIDEO, ACCURATE.
+
+THE THREE WHY TYPES (use different ones across the 3 options):
+- counterintuitive: Defies expectations. Title: "Why [Person] Did the UNTHINKABLE", "The Decision Nobody Saw Coming". thumbnail_text: "NOT WHAT YOU THINK", "DEFIED EXPECTATIONS".
+- secret_mystery: Hidden truth. Title: "The Secret [Person] Took to the Grave", "What [Person] Never Wanted You to Know". thumbnail_text: "THE SECRET", "HIDDEN TRUTH".
+- known_but_misunderstood: Familiar story most get wrong. Title: "What Everyone Gets WRONG About [Person]", "The Real [Person] (Not the Myth)". thumbnail_text: "EVERYONE GETS THIS WRONG", "THE REAL STORY".
+
+RULE OF THIRDS (CRITICAL for thumbnail_description): Describe composition using the 9-part grid. Subject must be on a THIRD (left third line or right third line, or at an intersection). NOT centered. Text goes in the LOWER third band only. The composition must follow this grid.
+
+Generate JSON with exactly 3 thumbnail_options (each has title, thumbnail_description, thumbnail_why_type, thumbnail_text):
+{{
+  "tag_line": "Short tagline (5-10 words) for this documentary.",
+  "global_block": "Visual style guide (300-400 words): semi-realistic digital painting style, color palette, dramatic lighting, how {person_of_interest} should appear consistently across {total_scenes} scenes.",
+  "thumbnail_options": [
+    {{"title": "Option 1 title (60-80 chars)", "thumbnail_description": "Peak moment. Subject on left or right third. Text in lower third. Clean background.", "thumbnail_why_type": "counterintuitive|secret_mystery|known_but_misunderstood", "thumbnail_text": "2-5 words that DIRECTLY reinforce the title"}},
+    {{"title": "Option 2 title (different angle)", "thumbnail_description": "...", "thumbnail_why_type": "...", "thumbnail_text": "..."}},
+    {{"title": "Option 3 title (different angle)", "thumbnail_description": "...", "thumbnail_why_type": "...", "thumbnail_text": "..."}}
+  ]
+}}"""
+
+
 def build_short_outline_prompt(person: str, outline: dict, short_num: int = 1, total_shorts: int = 3,
-                              available_moods: list[str] | None = None, previously_used_topics: list[str] | None = None) -> str:
+                              available_moods: list[str] | None = None, previously_used_topics: list[str] | None = None,
+                              research_context: "ResearchContext | None" = None) -> str:
     """
     Build a shared prompt for generating short outlines (trailer style).
     LLM picks the best topic from the full documentary outline.
@@ -595,16 +672,17 @@ Choose a different moment, work, or aspect of {person}'s life that is NOT listed
     outline_context = "\n\n".join(outline_lines) if outline_lines else f"Full documentary about {person} - pick any compelling moment from their life."
     if not outline_lines:
         outline_context = f"Documentary about {person}. Pick whatever moment, work, or story would make the best short."
-    
+    from research_utils import get_research_context_block
+    research_block = get_research_context_block(research_context) if research_context else ""
     return f"""Create a HIGH-ENERGY TRAILER for a YouTube Short about {person}.
-
+{research_block}
 Short #{short_num} of {total_shorts}
 {no_repeat_section}
 
 FULL DOCUMENTARY OUTLINE - Pick whatever you think will make the BEST short form video from these events:
 {outline_context}
 
-YOUR TASK: Choose ONE moment, work, or story from the outline above that would make a compelling 4-scene short. Expand it into a high-energy trailer: scenes 1-3 build the hook and end with a clear question; scene 4 answers that question (payoff), then invites viewers to watch the full documentary.
+YOUR TASK: Choose ONE moment, work, or story from the outline above that would make a compelling 4-scene short. Expand it into a high-energy trailer: scenes 1-3 build the hook and end with a clear question; scene 4 answers that question (payoff). Do not instruct the short to end with a CTA to watch the full documentary in the narration—that hurts view duration.
 
 {get_biopic_audience_profile()}
 
@@ -612,14 +690,14 @@ CRITICAL: This is a TRAILER, not a complete story. The short should:
 - Be HIGH ENERGY and attention-grabbing
 - Create CURIOSITY and make viewers NEED to watch the full documentary
 - Expand the hook into 4 scenes: scenes 1-3 build the hook and end with a clear question; scene 4 answers that question (payoff)
-- Scene 4 gives viewers a satisfying answer so they feel the short is complete, then drives them to the full documentary for more
-- Drive viewers to watch the main video to see the full story
+- Scene 4 gives viewers a satisfying answer so they feel the short is complete. Do not add a spoken CTA to watch the full documentary at the end of scene 4—it hurts view duration and causes users to leave before the short finishes.
+- Drive viewers to the main video via title/description only; never via end-of-narration CTA.
 
 This Short has EXACTLY 4 scenes (scenes 1-3 WHY, scene 4 WHAT):
 1. SCENE 1: Expand the hook - create high energy, grab attention immediately. Set up the mystery, problem, or question from the hook.
 2. SCENE 2: Build the hook - escalate the curiosity, add more intrigue, deepen the mystery or stakes.
 3. SCENE 3: Create anticipation - end with a compelling QUESTION that scene 4 will answer (e.g. "How did he do it?" "What happened next?" "Why did this work?").
-4. SCENE 4: ANSWER the question from scene 3. This is a WHAT scene - deliver the payoff with clear facts. End with a soft CTA to watch the full documentary.
+4. SCENE 4: ANSWER the question from scene 3. This is a WHAT scene - deliver the payoff with clear facts. Do NOT end with a CTA to watch the full documentary; end with a satisfying resolution only.
 
 CRITICAL RULES:
 - HIGH ENERGY throughout - every scene should be attention-grabbing
@@ -631,18 +709,22 @@ CRITICAL RULES:
 - NO vague statements or filler
 - Scenes 1-3 must be WHY scenes (trailer format); scene 4 must be a WHAT scene (payoff/answer)
 
-CRITICAL: TITLE AND THUMBNAIL MUST BE COHESIVE AND SYNCED - They must create the SAME curiosity gap and work together to maximize CTR. The thumbnail should visually represent the same mystery/question/secret that the title frames.
+TITLE AND THUMBNAIL - SAME WHY TYPE, SYNERGY: Choose ONE WHY type (thumbnail_why_type) for this short. short_title and thumbnail (thumbnail_prompt + thumbnail_text) MUST both use that SAME type and play off each other—one curiosity gap, complementary angles. short_title must also reflect the video_question.
 
-CRITICAL: The short_title MUST be derived from the video_question. It should frame the SAME question the short will answer. The title is the clickable promise; the video_question is what the short delivers—they must align. Consider the video_question first, then craft a title that reflects it.
+THUMBNAIL RULES: ONE subject, two colors, subject lit brighter than background. Peak moment, rule of thirds, high contrast. Set thumbnail_why_type and thumbnail_text to match the title.
 
-Provide JSON:
+THE THREE WHY TYPES (pick one; align short_title + thumbnail): counterintuitive (twist/unexpected), secret_mystery (hidden truth), known_but_misunderstood (what everyone gets wrong).
+
+Provide JSON (choose thumbnail_why_type FIRST; then short_title and thumbnail_prompt + thumbnail_text to match):
 {{
-  "short_title": "WHY SCENE PARADIGM TITLE - MAXIMIZE CTR (max 50 chars): CRITICAL - Must be derived from the video_question. The title must frame the SAME question the short will answer. It should function as a WHY scene that creates curiosity and makes viewers NEED to click. Frame a MYSTERY, PROBLEM, QUESTION, or SECRET that the short will reveal. Use power words: SHOCKING, SECRET, EXPOSED, INSANE, UNBELIEVABLE, MIND-BLOWING, CRAZY, BANNED, FORBIDDEN, IMPOSSIBLE. Create CURIOSITY GAPS - ask questions, hint at secrets, suggest something unexpected. The title should make viewers think the SAME question the video_question asks. Examples: if video_question is 'How did he survive?', title could be 'How He Survived the IMPOSSIBLE (True Story)'; if video_question is 'How did they stop the killer?', title could be 'The IMPOSSIBLE Task That Saved Thousands'. Must create a curiosity gap that makes viewers NEED to click to get the answer, while staying accurate.",
+  "thumbnail_why_type": "Exactly one of: counterintuitive, secret_mystery, known_but_misunderstood. Primary WHY type for this short. short_title and thumbnail MUST match this type.",
+  "short_title": "WHY SCENE TITLE (max 50 chars) - MUST match thumbnail_why_type AND reflect video_question. Same curiosity as thumbnail. counterintuitive: frame the twist (e.g. How He Survived the IMPOSSIBLE); secret_mystery: frame the secret (e.g. The Secret That Saved His Life); known_but_misunderstood: frame the real story (e.g. What Everyone Gets WRONG About That Day). Title + thumbnail = one package for CTR.",
   "short_description": "YouTube description (100 words) with hashtags. Should drive viewers to watch the full documentary.",
   "tags": "10-15 SEO tags comma-separated",
   "music_mood": "Exactly one of: {moods_str}. Pick the music mood that best fits this high-energy trailer.",
-  "thumbnail_prompt": "WHY SCENE THUMBNAIL - MAXIMIZE CTR (MUST BE COHESIVE WITH TITLE): The thumbnail must function as a WHY scene that creates the SAME curiosity gap as the title. Visually frame the SAME MYSTERY, PROBLEM, QUESTION, or SECRET that the title frames. If the title asks 'What secret?', the thumbnail should visually hint at that secret. If the title asks 'How did this happen?', the thumbnail should show the moment of discovery or the problem. If the title mentions 'The Dark Truth', the thumbnail should show visual elements suggesting hidden truth or revelation. Show counterintuitive elements, hidden truths, or something unexpected that matches the title's curiosity gap. Use visual storytelling to ask the SAME questions the title asks. Composition: intense close-ups, dramatic expressions showing realization/shock/conflict, extreme lighting (chiaroscuro), bold colors (red/yellow for urgency/danger), symbolic elements that suggest hidden meaning or secrets matching the title's theme. Subject in MOMENT OF DISCOVERY or CONFRONTATION - not passive. Show visual hints of the mystery/problem/secret without revealing the answer. Think: 'What question does this image make me ask?' It should be the SAME question the title asks. The viewer should look at this and think 'I NEED to know what this is about' - create visual curiosity gaps that sync with the title. NO TEXT in image, but visually SCREAM mystery, urgency, and the promise of revelation that matches the title's promise. Optimized for mobile scrolling - must instantly create curiosity when tiny in feed.",
-  "video_question": "The question this short will answer - MUST be asked at the very start of scene 1. Must be specific to this short's chosen topic (not the broad documentary questions). Example: 'How did Roosevelt survive a point-blank shot to the chest?' or 'How did they stop the invisible killer at the Panama Canal?'",
+  "thumbnail_prompt": "ONE subject, ONE peak moment. MUST match thumbnail_why_type and synergize with short_title. Clean solid dark background—no figures, no letters, no half-visible elements. Subject lit; natural contrast (not extreme). Rule of thirds. Bold text in lower third only. ACCURATE to short's story. Mobile-friendly.",
+  "thumbnail_text": "Short phrase (2-5 words) for thumbnail. MUST match thumbnail_why_type: counterintuitive -> NOT WHAT YOU THINK; secret_mystery -> THE SECRET; known_but_misunderstood -> EVERYONE GETS THIS WRONG. Omit for default.",
+  "video_question": "The question this short will answer - MUST be asked at the very start of scene 1. Must be specific to this short's chosen topic. Example: 'How did Roosevelt survive a point-blank shot to the chest?'",
   "hook_expansion": "How to expand the chosen topic into a 4-scene short - what story/mystery to tease, and what question scene 3 should pose for scene 4 to answer",
   "key_facts": ["3-5 specific facts to include across the 4 scenes: use in scenes 1-3 for curiosity, and in scene 4 for the payoff answer"]
 }}"""
@@ -667,36 +749,30 @@ def get_thumbnail_prompt_why_scene(aspect_ratio: str = "16:9") -> str:
     size_note = "optimized for small sizes - subject and key mystery elements must be CLEARLY visible even when tiny" if aspect_ratio == "16:9" else "optimized for mobile scrolling - must instantly create curiosity when tiny in feed"
     vertical_note = "Vertical 9:16," if aspect_ratio == "9:16" else ""
     
-    return f"""WHY SCENE THUMBNAIL - MAXIMIZE CTR THROUGH CURIOSITY:
-The thumbnail must function as a WHY scene - it should visually frame a MYSTERY, PROBLEM, QUESTION, SECRET, or COUNTERINTUITIVE ELEMENT that makes viewers NEED to watch to find the answer.
+    return f"""WHY SCENE THUMBNAIL - MAXIMIZE CTR:
 
-CRITICAL WHY SCENE ELEMENTS TO INCLUDE:
-- MYSTERY: Visual hints of a secret or hidden truth being revealed (e.g., subject looking at something hidden, shadowy elements suggesting secrets, objects that raise questions)
-- PROBLEM/OBSTACLE: Show conflict, tension, or challenge (e.g., subject facing opposition, confronting difficulty, in a moment of crisis)
-- QUESTION: Visual composition that makes viewers ask "What is happening here?" or "Why is this significant?" (e.g., unexpected juxtaposition, surprising elements, counterintuitive details)
-- SECRET: Suggest something hidden or unknown (e.g., subject discovering something, revealing a hidden truth, uncovering a secret)
-- COUNTERINTUITIVE: Show something unexpected or that defies expectations (e.g., subject in unexpected situation, surprising visual elements)
+CRITICAL - TEXT PLACEMENT: The thumbnail MUST include bold text (exact phrase given in instruction above—counterintuitive, secret/mystery, or known but misunderstood). Place the text in the LOWER third or bottom of the image only—NEVER at the top or near the top edge. Keep text fully INSIDE the frame with clear margin from all edges so it is never cut off or clipped. Text must be readable at small sizes.
+
+MAXIMUM SIMPLICITY - ONE FOCUS:
+- ONE focal subject only. No extra figures, objects, or background detail. If the scene needs one prop or symbol, that is the absolute maximum—otherwise subject only.
+- NO clutter, NO busy backgrounds. Think: one person, one moment, one idea.
+
+CLEAN BACKGROUND (CRITICAL): The background must be CLEAN and simple. Use only: solid dark (black or dark gray), or a very soft simple gradient. NO figures, NO faces, NO characters, NO letters, NO symbols, and NO half-visible or partially visible elements in the background. Nothing creeping in from the edges. The background should be empty of any detail—no ghostly shapes, no faint text, no extra people.
+
+COLOR - NATURAL, NOT EXTREME:
+- Use a limited palette: one accent (e.g. gold, warm red, or soft warm light) and a dark background. Keep contrast strong enough that the subject is clearly separate from the background, but avoid EXTREME contrast that makes colors look weird, oversaturated, or harsh. Natural skin tones where visible. No harsh color grading or unnatural color casts.
+
+SUBJECT AND BACKGROUND: Light the subject so they stand out from the background, but keep the look natural. Background stays dark and empty. Do not let the subject blend in; do not use such extreme contrast that colors look strange.
+
+RULE OF THIRDS (MANDATORY): Use the 9-part grid. (1) Place the main subject on a THIRD—either the left third line or the right third line, or at one of the four intersection points. Do NOT center the subject. (2) Place the text in the LOWER third band only, fully inside the frame with margin. The composition must follow this grid exactly.
+
+EMOTION: Show the PEAK CONFLICT, EXCITEMENT, or MOST ENGAGING MOMENT from the video. One moment only. Represent the WHOLE VIDEO accurately—no misleading or generic imagery.
 
 VISUAL COMPOSITION:
-- {vertical_note} EXTREME close-up or dramatic wide shot with strong composition
-- Intense emotional expression showing REALIZATION, SHOCK, CONFLICT, or DISCOVERY - not neutral, show the moment of "wait, what?" or "this changes everything"
-- Dramatic lighting with HIGH CONTRAST (chiaroscuro) - bright highlights, deep shadows that suggest hidden meaning
-- Bold, eye-catching colors (reds, yellows, oranges for urgency/danger/mystery) against darker backgrounds
-- Subject in MOMENT OF DISCOVERY, CONFRONTATION, or REVELATION - not passive pose
-- Symbolic elements that suggest MYSTERY, SECRETS, or HIDDEN TRUTHS (e.g., shadows, hidden objects, revealing moments)
-- Visual elements that create CURIOSITY GAPS - show enough to intrigue but not enough to answer the question
-- Cinematic, movie-poster quality - think thriller/mystery poster energy, not biography portrait
-- {size_note}
-- Background should be dramatic and suggest hidden meaning or secrets, not just decorative
-
-OVERALL FEELING: The viewer should look at this and think:
-- "What secret is being revealed here?"
-- "What problem is this solving?"
-- "What mystery will I discover?"
-- "Why is this moment so significant?"
-- "I NEED to watch to find out what this is about"
-
-The thumbnail should create a VISUAL QUESTION that only watching the video can answer."""
+- {vertical_note} Strong composition, rule of thirds
+- Intense emotional expression—conflict, shock, determination, or revelation
+- Cinematic, documentary-quality—PBS/Ken Burns gravitas
+- {size_note}"""
 
 
 def get_horror_narration_style() -> str:

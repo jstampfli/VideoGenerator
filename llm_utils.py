@@ -15,8 +15,13 @@ Dispatches to OpenAI or Google (Gemini) based on .env TEXT_PROVIDER / IMAGE_PROV
 
 import os
 import base64
+import time
 from pathlib import Path
 from typing import Any
+
+# Retry config for transient API errors (500, 502, 503, 429, etc.)
+_LLM_MAX_RETRIES = int(os.getenv("LLM_MAX_RETRIES", "4"))
+_LLM_BASE_DELAY = float(os.getenv("LLM_BASE_DELAY", "2.0"))
 
 from dotenv import load_dotenv
 
@@ -136,8 +141,21 @@ def generate_text(
             }
         elif response_format is not None:
             req["response_format"] = response_format
-        response = client.chat.completions.create(**req)
-        return response.choices[0].message.content or ""
+        last_error = None
+        for attempt in range(1, _LLM_MAX_RETRIES + 1):
+            try:
+                response = client.chat.completions.create(**req)
+                return response.choices[0].message.content or ""
+            except Exception as e:
+                last_error = e
+                status = getattr(e, "status_code", None) or getattr(e, "code", None)
+                retryable = status in (429, 500, 502, 503) or "connection" in str(type(e).__name__).lower()
+                if not retryable or attempt >= _LLM_MAX_RETRIES:
+                    raise
+                delay = _LLM_BASE_DELAY * (2 ** (attempt - 1))
+                print(f"[LLM] Attempt {attempt}/{_LLM_MAX_RETRIES} failed ({e}). Retrying in {delay:.1f}s...")
+                time.sleep(delay)
+        raise last_error
 
     # Google Gemini (google.genai SDK)
     api_key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
@@ -192,11 +210,39 @@ def generate_text(
             label = "User" if role == "user" else "Assistant"
             parts_str.append(f"{label}: {content}")
         contents = "\n\n".join(parts_str)
-    response = client.models.generate_content(
-        model=model_name,
-        contents=contents,
-        config=config,
-    )
+    from google.genai import errors as genai_errors
+    response = None
+    last_error = None
+    for attempt in range(1, _LLM_MAX_RETRIES + 1):
+        try:
+            response = client.models.generate_content(
+                model=model_name,
+                contents=contents,
+                config=config,
+            )
+            break
+        except genai_errors.ServerError as e:
+            last_error = e
+            if attempt >= _LLM_MAX_RETRIES:
+                raise
+            delay = _LLM_BASE_DELAY * (2 ** (attempt - 1))
+            print(f"[LLM] Attempt {attempt}/{_LLM_MAX_RETRIES} failed (500/server error). Retrying in {delay:.1f}s...")
+            time.sleep(delay)
+        except Exception as e:
+            # Retry on other transient-looking errors (e.g. 429, 503 from different wrapper)
+            status = getattr(e, "status_code", None) or getattr(e, "code", None)
+            if status in (429, 502, 503):
+                last_error = e
+                if attempt >= _LLM_MAX_RETRIES:
+                    raise
+                delay = _LLM_BASE_DELAY * (2 ** (attempt - 1))
+                print(f"[LLM] Attempt {attempt}/{_LLM_MAX_RETRIES} failed ({e}). Retrying in {delay:.1f}s...")
+                time.sleep(delay)
+            else:
+                raise
+    else:
+        if last_error is not None:
+            raise last_error
     if not response:
         raise RuntimeError("Google Gemini returned no response.")
     text = getattr(response, "text", None) or ""

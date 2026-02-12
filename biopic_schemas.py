@@ -167,9 +167,38 @@ INITIAL_METADATA_SCHEMA = {
         "title": {"type": "string"},
         "tag_line": {"type": "string"},
         "thumbnail_description": {"type": "string"},
+        "thumbnail_why_type": {"type": "string", "description": "One of: counterintuitive, secret_mystery, known_but_misunderstood"},
+        "thumbnail_text": {"type": "string", "description": "Optional short phrase (2-5 words) for thumbnail text overlay"},
         "global_block": {"type": "string"},
     },
     "required": ["title", "tag_line", "thumbnail_description", "global_block"],
+}
+
+# --- Initial metadata with 3 thumbnail/title options (user picks best when uploading) ---
+INITIAL_METADATA_3_OPTIONS_SCHEMA = {
+    "type": "object",
+    "title": "initial_metadata_3_options",
+    "properties": {
+        "tag_line": {"type": "string"},
+        "global_block": {"type": "string"},
+        "thumbnail_options": {
+            "type": "array",
+            "description": "Exactly 3 title+thumbnail pairs; user picks best when uploading",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string"},
+                    "thumbnail_description": {"type": "string"},
+                    "thumbnail_why_type": {"type": "string"},
+                    "thumbnail_text": {"type": "string"},
+                },
+                "required": ["title", "thumbnail_description", "thumbnail_why_type", "thumbnail_text"],
+            },
+            "minItems": 3,
+            "maxItems": 3,
+        },
+    },
+    "required": ["tag_line", "global_block", "thumbnail_options"],
 }
 
 # --- Short outline ---
@@ -182,6 +211,8 @@ SHORT_OUTLINE_SCHEMA = {
         "tags": {"type": "string"},
         "music_mood": {"type": "string"},
         "thumbnail_prompt": {"type": "string"},
+        "thumbnail_why_type": {"type": "string", "description": "One of: counterintuitive, secret_mystery, known_but_misunderstood"},
+        "thumbnail_text": {"type": "string", "description": "Optional short phrase (2-5 words) for thumbnail text overlay"},
         "video_question": {"type": "string", "description": "The question this short will answer - MUST be asked at the very start of scene 1."},
         "hook_expansion": {"type": "string"},
         "key_facts": {"type": "array", "items": {"type": "string"}},

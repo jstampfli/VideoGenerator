@@ -33,6 +33,7 @@ class Config:
     generate_thumbnails = True  # Whether to generate thumbnail images (main video)
     generate_short_thumbnails = False  # Whether to generate thumbnails for shorts (usually not needed)
     generate_refinement_diffs = False  # Whether to generate refinement diff JSON files
+    use_research = True  # Whether to fetch Wikipedia research for script depth (--no-research to disable)
     
     @property
     def total_scenes(self):

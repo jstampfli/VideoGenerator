@@ -10,7 +10,7 @@ from pathlib import Path
 BIOPIC_MUSIC_DEFAULT_MOODS = ["relaxing", "passionate", "happy"]
 
 # Music volume in dB (under narration)
-BIOPIC_MUSIC_VOLUME_DB = float(os.getenv("BIOPIC_MUSIC_VOLUME", "-23.5"))
+BIOPIC_MUSIC_VOLUME_DB = float(os.getenv("BIOPIC_MUSIC_VOLUME", "-24.5"))
 
 # Crossfade duration in seconds between chapter segments
 BIOPIC_MUSIC_CROSSFADE_SEC = float(os.getenv("BIOPIC_MUSIC_CROSSFADE", "1.5"))
