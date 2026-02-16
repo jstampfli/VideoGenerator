@@ -12,6 +12,11 @@ BIOPIC_MUSIC_DEFAULT_MOODS = ["relaxing", "passionate", "happy"]
 # Music volume in dB (under narration)
 BIOPIC_MUSIC_VOLUME_DB = float(os.getenv("BIOPIC_MUSIC_VOLUME", "-24.5"))
 
+# Per-scene volume levels (used by film composer pass)
+BIOPIC_MUSIC_VOLUME_LOW_DB = -26.0
+BIOPIC_MUSIC_VOLUME_MEDIUM_DB = -24.0
+BIOPIC_MUSIC_VOLUME_LOUD_DB = -22.0
+
 # Crossfade duration in seconds between chapter segments
 BIOPIC_MUSIC_CROSSFADE_SEC = float(os.getenv("BIOPIC_MUSIC_CROSSFADE", "1.5"))
 
@@ -23,6 +28,13 @@ BIOPIC_END_TAIL_FADEOUT_SEC = float(os.getenv("BIOPIC_END_TAIL_FADEOUT", "1.5"))
 
 # Base directory for mood-categorized MP3 files
 BIOPIC_MUSIC_DIR = Path(os.getenv("BIOPIC_MUSIC_DIR", "biopic_music"))
+
+# Normalize music to this LUFS before applying per-scene volume. Set to 0 to disable.
+# When enabled, all songs are brought to the same baseline loudness so low/medium/loud sound consistent.
+BIOPIC_MUSIC_NORMALIZE_LUFS = float(os.getenv("BIOPIC_MUSIC_NORMALIZE_LUFS", "-18"))
+
+# Use two-pass loudnorm for more accurate normalization (recommended for music). Set to 0 to use single-pass.
+BIOPIC_MUSIC_NORMALIZE_TWO_PASS = os.getenv("BIOPIC_MUSIC_NORMALIZE_TWO_PASS", "1").lower() in ("1", "true", "yes")
 
 
 def get_available_moods() -> list[str]:
@@ -39,3 +51,30 @@ def get_available_moods() -> list[str]:
             moods.append(subdir.name)
 
     return moods if moods else BIOPIC_MUSIC_DEFAULT_MOODS.copy()
+
+
+def get_all_songs() -> list[str]:
+    """
+    Return list of relative paths like 'relaxing/song1.mp3', 'passionate/track2.mp3'
+    for all MP3s under BIOPIC_MUSIC_DIR. Returns empty list if directory missing or no MP3s.
+    """
+    if not BIOPIC_MUSIC_DIR.exists() or not BIOPIC_MUSIC_DIR.is_dir():
+        return []
+
+    songs = []
+    for subdir in sorted(BIOPIC_MUSIC_DIR.iterdir()):
+        if subdir.is_dir():
+            for mp3 in sorted(subdir.glob("*.mp3")):
+                songs.append(f"{subdir.name}/{mp3.name}")
+
+    return sorted(songs)
+
+
+def volume_label_to_db(label: str) -> float:
+    """Map volume label (low/medium/loud) to dB. Defaults to medium for unknown labels."""
+    label = (label or "").strip().lower()
+    if label == "low":
+        return BIOPIC_MUSIC_VOLUME_LOW_DB
+    if label == "loud":
+        return BIOPIC_MUSIC_VOLUME_LOUD_DB
+    return BIOPIC_MUSIC_VOLUME_MEDIUM_DB

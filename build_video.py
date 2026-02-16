@@ -12,9 +12,8 @@ import numpy as np
 from pathlib import Path
 
 from dotenv import load_dotenv
-from openai import OpenAI
 from moviepy import ImageClip, AudioFileClip, concatenate_videoclips, AudioClip, CompositeAudioClip, concatenate_audioclips
-from moviepy.video.fx import CrossFadeIn, CrossFadeOut
+from moviepy.video.fx import CrossFadeIn, CrossFadeOut, SlideIn, SlideOut
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import llm_utils
@@ -23,65 +22,30 @@ import llm_utils
 # ------------- CONFIG -------------
 
 load_dotenv()  # Load API keys from .env file
-client = OpenAI()  # Used for TTS (OpenAI audio) only; images use llm_utils
 
-# TTS Provider: "openai", "elevenlabs", or "google"
+# TTS provider and Google voice type (used for --female logic and narration instructions print)
 TTS_PROVIDER = os.getenv("TTS_PROVIDER", "google").lower()
+GOOGLE_VOICE_TYPE = os.getenv("GOOGLE_VOICE_TYPE", "").lower()
 
-# OpenAI TTS settings
-OPENAI_TTS_MODEL = "gpt-4o-mini-tts-2025-12-15"
-OPENAI_TTS_VOICE = "marin"
+# Google Cloud TTS settings (used for --female voice override; llm_utils handles actual TTS)
+GOOGLE_TTS_VOICE = os.getenv("GOOGLE_TTS_VOICE", "en-US-Studio-Q")
+GOOGLE_GEMINI_MALE_SPEAKER = os.getenv("GOOGLE_GEMINI_MALE_SPEAKER", "Charon")
+GOOGLE_GEMINI_FEMALE_SPEAKER = os.getenv("GOOGLE_GEMINI_FEMALE_SPEAKER", "")
 
-# ElevenLabs TTS settings
-ELEVENLABS_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID", "JBFqnCBsd6RMkjVDRZzb")  # Default: George (narrative)
-ELEVENLABS_MODEL = os.getenv("ELEVENLABS_MODEL", "eleven_multilingual_v2")
-
-# Google Cloud TTS settings
-# Voice options: en-US-Wavenet-D (male), en-US-Wavenet-F (female), en-US-Neural2-D (male), en-US-Neural2-F (female)
-# See full list: https://cloud.google.com/text-to-speech/docs/voices
-GOOGLE_TTS_VOICE = os.getenv("GOOGLE_TTS_VOICE", "en-US-Studio-Q")  # High quality studio voice
-GOOGLE_TTS_LANGUAGE = os.getenv("GOOGLE_TTS_LANGUAGE", "en-US")
-GOOGLE_TTS_SPEAKING_RATE = float(os.getenv("GOOGLE_TTS_SPEAKING_RATE", "0.92"))  # 0.25 to 4.0 (slightly slower for clarity)
-GOOGLE_TTS_PITCH = float(os.getenv("GOOGLE_TTS_PITCH", "-1.0"))  # -20.0 to 20.0 semitones (slightly deeper)
-GOOGLE_VOICE_TYPE = os.getenv("GOOGLE_VOICE_TYPE", "").lower()  # "chirp", "gemini", or empty - chirp voices don't support SSML/prosody, gemini uses new API with prompt parameter
-GOOGLE_GEMINI_MALE_SPEAKER = os.getenv("GOOGLE_GEMINI_MALE_SPEAKER", "Charon")  # Default Gemini male voice
-GOOGLE_GEMINI_FEMALE_SPEAKER = os.getenv("GOOGLE_GEMINI_FEMALE_SPEAKER", "")  # Gemini female voice
-# Trailing padding for Gemini TTS so the last word is fully pronounced (avoids end cut-off)
-GEMINI_TTS_TEXT_PADDING = "   "
-
-# Narration instructions for Gemini/OpenAI TTS (from .env): biopic vs horror mode
+# Narration instructions for Gemini/OpenAI TTS (from .env)
 # BIOPIC_NARRATION_INSTRUCTIONS = os.getenv("BIOPIC_NARRATION_INSTRUCTIONS", "")
 BIOPIC_NARRATION_INSTRUCTIONS = ""
-HORROR_NARRATION_INSTRUCTIONS = os.getenv("HORROR_NARRATION_INSTRUCTIONS", "")
-# Set at start of build_video based on --horror: which instructions to use for this run
 NARRATION_INSTRUCTIONS_FOR_TTS = ""
-
-# Horror background audio volume settings (from .env or defaults)
-# More impactful defaults: room tone louder, drone more prominent
-DRONE_BASE_VOLUME_DB = float(os.getenv("DRONE_BASE", "-20.0"))  # Base drone volume (default: -20 dB, was -25)
-DRONE_MAX_VOLUME_DB = float(os.getenv("DRONE_MAX", "-15.0"))  # Max drone volume for swell (default: -15 dB, was -20)
-ROOM_SOUND_BASE_VOLUME_DB = float(os.getenv("ROOM_SOUND_BASE", "-35.0"))  # Room tone volume (default: -35 dB, was -45)
-ENV_AUDIO_VOLUME_DB = float(os.getenv("ENV_AUDIO_VOLUME", "-28.0"))  # Environment audio volume (default: -28 dB)
-
-# Environment audio file paths (from .env)
-ENV_BLIZZARD_AUDIO = os.getenv("ENV_BLIZZARD_AUDIO", None)
-ENV_SNOW_AUDIO = os.getenv("ENV_SNOW_AUDIO", None)
-ENV_FOREST_AUDIO = os.getenv("ENV_FOREST_AUDIO", None)
-ENV_RAIN_AUDIO = os.getenv("ENV_RAIN_AUDIO", None)
-ENV_INDOORS_AUDIO = os.getenv("ENV_INDOORS_AUDIO", None)
-ENV_JUNGLE_AUDIO = os.getenv("ENV_JUNGLE_AUDIO", None)
 
 # Global flag to track if female voice should be used (set by --female flag)
 USE_FEMALE_VOICE = False
 
 # Scene pause settings
 END_SCENE_PAUSE_LENGTH = float(os.getenv("END_SCENE_PAUSE_LENGTH", "0.15"))  # Pause length in seconds at end of each scene (default: 150ms)
+# Pause before narration starts in each scene (gives breathing room after scene change; should be >= crossfade to avoid overlapping narration)
+START_SCENE_PAUSE_LENGTH = float(os.getenv("START_SCENE_PAUSE_LENGTH", "0.4"))  # Default 400ms
 
-# Horror disclaimer: first scene for horror videos (fixed image + env/room noise, no narration)
-HORROR_DISCLAIMER_DURATION = 3.0  # seconds
 FIXED_IMAGES_DIR = Path("fixed_images")
-HORROR_DISCLAIMER_TALL = FIXED_IMAGES_DIR / "tall_horror_disclaimer.jpg"   # 9:16 shorts
-HORROR_DISCLAIMER_WIDE = FIXED_IMAGES_DIR / "wide_horror_disclaimer.jpg"   # 16:9 main
 
 # Ken Burns motion settings
 KENBURNS_ENABLED = os.getenv("KENBURNS_ENABLED", "true").lower() in ("1", "true", "yes")
@@ -91,221 +55,16 @@ KENBURNS_FPS = int(os.getenv("KENBURNS_FPS", "24"))  # Motion clip FPS (24 = cin
 # Crossfade transition settings
 CROSSFADE_DURATION = float(os.getenv("CROSSFADE_DURATION", "0.4"))  # Dissolve between scenes in seconds (0 = disabled)
 
-# Ken Burns motion patterns (shared constant from kenburns_config)
-from kenburns_config import KENBURNS_PATTERNS, KENBURNS_PATTERN_DESCRIPTIONS
+# Ken Burns motion patterns and transition types (from kenburns_config)
+from kenburns_config import (
+    KENBURNS_PATTERNS,
+    KENBURNS_PATTERN_DESCRIPTIONS,
+    KENBURNS_INTENSITY_VALUES,
+    TRANSITION_TYPES,
+    get_transition_duration,
+    normalize_transition,
+)
 
-
-def get_horror_disclaimer_image_path(is_vertical: bool) -> Path | None:
-    """
-    Return the path to the horror disclaimer image for the given format, or None if not found.
-    - is_vertical True (shorts): tall_horror_disclaimer.jpg
-    - is_vertical False (main): wide_horror_disclaimer.jpg
-    """
-    path = HORROR_DISCLAIMER_TALL if is_vertical else HORROR_DISCLAIMER_WIDE
-    return path if path.exists() else None
-
-
-def get_emotion_prosody(emotion: str | None) -> dict:
-    """
-    Map emotion strings to subtle SSML prosody settings (rate, pitch, volume).
-    Returns a dict with 'rate', 'pitch', and 'volume' strings for use in SSML prosody tags.
-    Uses subtle adjustments (5-10% rate, 1-2 semitones pitch, 2-3dB volume) to maintain documentary style.
-    """
-    if not emotion:
-        # Default: no adjustment
-        return {"rate": "100%", "pitch": "0st", "volume": "0dB"}
-    
-    emotion_lower = emotion.lower().strip()
-    
-    # Check for compound emotions first (e.g., "triumphant, foreboding" or "urgent dread")
-    # For compound emotions, use the primary emotion
-    
-    # Urgent/desperate emotions - slightly faster, slightly higher, slightly louder
-    if any(word in emotion_lower for word in ["urgent", "desperate"]):
-        if "dread" in emotion_lower:
-            return {"rate": "103%", "pitch": "+0.5st", "volume": "+1dB"}  # urgent dread: tense but darker
-        return {"rate": "105%", "pitch": "+1st", "volume": "+2dB"}
-    
-    # Tense/anxious emotions
-    if emotion_lower in ["tense", "claustrophobic", "uneasy"]:
-        if emotion_lower == "claustrophobic":
-            return {"rate": "104%", "pitch": "+0.5st", "volume": "+1dB"}  # tighter, more compressed
-        return {"rate": "105%", "pitch": "+1st", "volume": "+2dB"}
-    
-    # Dread/fear emotions - slower, lower, quieter (but still tense)
-    if emotion_lower in ["dread", "menacing"]:
-        return {"rate": "95%", "pitch": "-1st", "volume": "-1dB"}
-    
-    # Triumphant/positive emotions - faster, higher, louder
-    if any(word in emotion_lower for word in ["triumphant", "exhilarating"]):
-        if "foreboding" in emotion_lower:
-            return {"rate": "102%", "pitch": "+1st", "volume": "+2dB"}  # triumphant but with tension
-        return {"rate": "105%", "pitch": "+2st", "volume": "+3dB"}
-    
-    # Defiant/determined emotions - normal to slightly faster, higher, louder
-    if any(word in emotion_lower for word in ["defiant", "daring", "ominous resolve"]):
-        if "quietly" in emotion_lower:
-            return {"rate": "98%", "pitch": "+0.5st", "volume": "+1dB"}  # quietly defiant: subdued strength
-        return {"rate": "100%", "pitch": "+1st", "volume": "+2dB"}
-    
-    # Sad/somber emotions - slower, lower, softer
-    if emotion_lower in ["somber", "elegiac"]:
-        return {"rate": "90%", "pitch": "-2st", "volume": "-3dB"}
-    
-    # Shattered/devastated emotions - slower, lower, much quieter
-    if emotion_lower in ["shattered", "devastated"]:
-        return {"rate": "88%", "pitch": "-2.5st", "volume": "-4dB"}
-    
-    # Contemplative/reflective - slower, lower, softer (subtle)
-    if emotion_lower in ["contemplative", "watchful", "controlled"]:
-        if emotion_lower == "controlled":
-            return {"rate": "95%", "pitch": "0st", "volume": "0dB"}  # controlled: measured and neutral
-        return {"rate": "92%", "pitch": "-1st", "volume": "-2dB"}
-    
-    # Calculating/strategic - slightly slower, neutral pitch, slightly softer
-    if emotion_lower in ["calculating"]:
-        return {"rate": "96%", "pitch": "0st", "volume": "-1dB"}
-    
-    # Humiliated - slower, lower, quieter
-    if emotion_lower in ["humiliated"]:
-        return {"rate": "93%", "pitch": "-1.5st", "volume": "-2dB"}
-    
-    # Sensuous/romantic - slightly slower, slightly higher, softer
-    if "sensuous" in emotion_lower or "intimacy" in emotion_lower:
-        if "ambitious" in emotion_lower:
-            return {"rate": "98%", "pitch": "+0.5st", "volume": "+1dB"}  # ambitious intimacy: subtle intensity
-        return {"rate": "94%", "pitch": "+0.5st", "volume": "-1dB"}
-    
-    # Relief (ruthless relief) - normal speed, slight variation
-    if "relief" in emotion_lower:
-        return {"rate": "97%", "pitch": "+0.5st", "volume": "+1dB"}
-    
-    # Default: no adjustment for unknown emotions
-    return {"rate": "100%", "pitch": "0st", "volume": "0dB"}
-
-
-def text_to_ssml(text: str, emotion: str | None = None) -> str:
-    """
-    Convert plain text to SSML with natural pauses and pacing.
-    This makes Google Cloud TTS sound more natural and documentary-like.
-    
-    Args:
-        text: The text to convert to SSML
-        emotion: Optional emotion string (e.g., "tense", "triumphant", "contemplative")
-                 to apply subtle prosody adjustments matching the scene's emotional tone
-    """
-    import re
-    
-    # If using Chirp or Gemini voice, skip SSML and return plain text
-    # Chirp doesn't support SSML, Gemini uses prompt parameter instead
-    if TTS_PROVIDER == "google" and GOOGLE_VOICE_TYPE in ["chirp", "gemini"]:
-        return text
-    
-    # Get emotion-based prosody settings
-    prosody = get_emotion_prosody(emotion)
-    
-    # Escape special XML characters
-    text = text.replace("&", "&amp;")
-    text = text.replace("<", "&lt;")
-    text = text.replace(">", "&gt;")
-    text = text.replace('"', "&quot;")
-    text = text.replace("'", "&apos;")
-    
-    # IMPORTANT: Handle ellipsis FIRST, before processing individual periods
-    # Replace ellipsis with dramatic pause (don't keep the dots - TTS will read them otherwise)
-    # Handle both three-dot ellipsis (...) and Unicode ellipsis character (…)
-    text = re.sub(r'\.\.\.(\s+)', r'<break time="600ms"/>\1', text)  # Mid-text with space after
-    text = re.sub(r'\.\.\.$', r'<break time="600ms"/>', text)  # End of text
-    text = re.sub(r'…(\s+)', r'<break time="600ms"/>\1', text)  # Unicode ellipsis mid-text
-    text = re.sub(r'…$', r'<break time="600ms"/>', text)  # Unicode ellipsis end of text
-    
-    # Add pauses after sentences (periods, exclamation, question marks)
-    # Handle both mid-text (followed by space) and end-of-text cases
-    # Note: This won't match periods that are part of ellipsis since we handled those above
-    text = re.sub(r'\.(\s+)', r'.<break time="400ms"/>\1', text)
-    text = re.sub(r'\.$', r'.<break time="400ms"/>', text)  # End of text
-    text = re.sub(r'\!(\s+)', r'!<break time="350ms"/>\1', text)
-    text = re.sub(r'\!$', r'!<break time="350ms"/>', text)  # End of text
-    text = re.sub(r'\?(\s+)', r'?<break time="350ms"/>\1', text)
-    text = re.sub(r'\?$', r'?<break time="350ms"/>', text)  # End of text
-    
-    # Add shorter pauses after commas
-    text = re.sub(r',(\s+)', r',<break time="200ms"/>\1', text)
-    text = re.sub(r',$', r',<break time="200ms"/>', text)  # End of text (rare but possible)
-    
-    # Add pauses after colons and semicolons
-    text = re.sub(r':(\s+)', r':<break time="300ms"/>\1', text)
-    text = re.sub(r';(\s+)', r';<break time="250ms"/>\1', text)
-    
-    # Handle dashes/hyphens as pauses (remove the dash, add pause)
-    # Em-dash (—) - dramatic pause, remove the dash character completely
-    text = re.sub(r'—', r'<break time="400ms"/>', text)
-    
-    # Regular hyphen/dash - replace with pause when used as separator (with spaces)
-    # This handles: "word - word" or "word -word" or "word- word" patterns
-    text = re.sub(r'(\s+)-(\s+)', r'\1<break time="300ms"/>\2', text)  # Space-dash-space
-    text = re.sub(r'(\s+)-(\w)', r'\1<break time="300ms"/>\2', text)  # Space-dash-word
-    text = re.sub(r'(\w)-(\s+)', r'\1<break time="300ms"/>\2', text)  # Word-dash-space
-    text = re.sub(r'(\s+)-$', r'\1<break time="300ms"/>', text)  # Space-dash at end
-    text = re.sub(r'^-(\s+)', r'<break time="300ms"/>\1', text)  # Dash-space at start
-    
-    # Emphasize numbers/years (slightly slower)
-    text = re.sub(r'\b(1[89]\d{2}|20\d{2})\b', r'<prosody rate="95%">\1</prosody>', text)
-    
-    # Wrap in prosody tag if emotion is provided and prosody has adjustments
-    if emotion and (prosody["rate"] != "100%" or prosody["pitch"] != "0st" or prosody["volume"] != "0dB"):
-        # Studio voices don't support pitch attribute - exclude it if using Studio voice
-        is_studio_voice = "Studio" in GOOGLE_TTS_VOICE if TTS_PROVIDER == "google" else False
-        
-        # Build prosody attributes - exclude pitch for Studio voices
-        prosody_attrs_parts = [f'rate="{prosody["rate"]}"']
-        if not is_studio_voice:
-            prosody_attrs_parts.append(f'pitch="{prosody["pitch"]}"')
-        prosody_attrs_parts.append(f'volume="{prosody["volume"]}"')
-        
-        prosody_attrs = " ".join(prosody_attrs_parts)
-        text = f'<prosody {prosody_attrs}>{text}</prosody>'
-    
-    # Wrap in speak tags
-    ssml = f'<speak>{text}</speak>'
-    
-    return ssml
-
-# Initialize TTS clients
-elevenlabs_client = None
-google_tts_client = None
-
-if TTS_PROVIDER == "elevenlabs":
-    try:
-        from elevenlabs import ElevenLabs
-        elevenlabs_client = ElevenLabs(api_key=os.getenv("ELEVENLABS_API_KEY"))
-        print(f"[TTS] Using ElevenLabs (voice: {ELEVENLABS_VOICE_ID})")
-    except ImportError:
-        print("[WARNING] elevenlabs not installed. Run: py -m pip install elevenlabs")
-        print("[WARNING] Falling back to OpenAI TTS")
-        TTS_PROVIDER = "openai"
-    except Exception as e:
-        print(f"[WARNING] ElevenLabs init failed: {e}")
-        print("[WARNING] Falling back to OpenAI TTS")
-        TTS_PROVIDER = "openai"
-
-elif TTS_PROVIDER == "google":
-    try:
-        from google.cloud import texttospeech
-        google_tts_client = texttospeech.TextToSpeechClient()
-        print(f"[TTS] Using Google Cloud TTS (voice: {GOOGLE_TTS_VOICE})")
-    except ImportError:
-        print("[WARNING] google-cloud-texttospeech not installed. Run: py -m pip install google-cloud-texttospeech")
-        print("[WARNING] Falling back to OpenAI TTS")
-        TTS_PROVIDER = "openai"
-    except Exception as e:
-        print(f"[WARNING] Google Cloud TTS init failed: {e}")
-        print("[WARNING] Make sure GOOGLE_APPLICATION_CREDENTIALS is set to your service account key JSON file")
-        print("[WARNING] Falling back to OpenAI TTS")
-        TTS_PROVIDER = "openai"
-
-if TTS_PROVIDER == "openai":
-    print(f"[TTS] Using OpenAI ({OPENAI_TTS_MODEL}, voice: {OPENAI_TTS_VOICE})")
 
 # Final video resolution (we'll crop/scale images to this)
 OUTPUT_RESOLUTION_LANDSCAPE = (1920, 1080)  # 16:9 for main videos
@@ -324,6 +83,7 @@ class Config:
     is_vertical = False  # True for shorts (9:16), False for main videos (16:9)
     biopic_music_enabled = True
     biopic_music_volume = None  # dB; None = use default from biopic_music_config
+    log_image_prompts = False  # If True, print full image prompts (set by --log-image-prompts)
     
     @property
     def output_resolution(self):
@@ -336,13 +96,7 @@ class Config:
 
 config = Config()
 
-MAX_PREV_SUMMARY_CHARS = 300  # keep it short so prompts don't blow up
-
-OPENAI_TTS_STYLE_PROMPT = (
-    "Read the following text in a calm, neutral, and consistent tone. "
-    "Maintain stable volume and pitch throughout. Do not add emotional "
-    "inflection, dramatic emphasis, or noticeable changes in speaking speed. "
-)
+# No truncation of prev-scene context for length/cost. Include full context for visual continuity.
 
 
 def build_image_prompt(scene: dict, prev_scene: dict | None, global_block_override: str | None = None, exclude_title_narration: bool = False, include_safety_instructions: bool = False, story_context: str | None = None) -> str:
@@ -378,8 +132,6 @@ def build_image_prompt(scene: dict, prev_scene: dict | None, global_block_overri
         prev_text = " ".join(
             x for x in [prev_title, prev_narr, prev_img_prompt] if x
         ).strip()
-        if len(prev_text) > MAX_PREV_SUMMARY_CHARS:
-            prev_text = prev_text[:MAX_PREV_SUMMARY_CHARS].rsplit(" ", 1)[0] + "..."
 
         prev_block = (
             "Maintain visual continuity with the previous scene, which showed: "
@@ -415,13 +167,26 @@ def build_image_prompt(scene: dict, prev_scene: dict | None, global_block_overri
             "when appropriate to the period of his life."
         )
 
-    # --- No text / cleanliness constraints ---
-    constraints_block = (
-        "Do NOT include any text, titles, captions, subtitles, numbers, letters, labels, watermarks, logos, "
-        "user interface elements, or graphic overlays in the image. The frame must be completely text-free.\n\n"
-        "Keep the visual style, color palette, and overall mood strictly consistent with the rest of the video. "
-        "This should look like one continuous documentary, not a mix of different art styles."
-    )
+    # --- Constraints block: text-free for normal scenes, TITLE CARD for chapter transitions ---
+    if scene.get("scene_type") == "TRANSITION" or scene.get("is_chapter_transition"):
+        constraints_block = (
+            "TITLE CARD: Display the chapter title text prominently as the main visual element. "
+            "Use clean, elegant typography consistent with documentary style. "
+            "The frame should be a title card with the chapter title as the focal point.\n\n"
+            "CRITICAL - FILL THE ENTIRE FRAME: No empty black areas, gaps, or unrendered space. "
+            "The background must extend to all edges with continuous color, gradient, or texture "
+            "consistent with the documentary's palette (e.g. warm sepia, muted golds, deep browns). "
+            "Every part of the image must be intentionally rendered.\n\n"
+            "Keep the visual style, color palette, and overall mood strictly consistent with the rest of the video. "
+            "This should look like one continuous documentary, not a mix of different art styles."
+        )
+    else:
+        constraints_block = (
+            "Do NOT include any text, titles, captions, subtitles, numbers, letters, labels, watermarks, logos, "
+            "user interface elements, or graphic overlays in the image. The frame must be completely text-free.\n\n"
+            "Keep the visual style, color palette, and overall mood strictly consistent with the rest of the video. "
+            "This should look like one continuous documentary, not a mix of different art styles."
+        )
 
     # --- Safety constraints (only include after first attempt fails) ---
     safety_block = ""
@@ -709,17 +474,25 @@ def generate_image_for_scene(scene: dict, prev_scene: dict | None, global_block_
     
     prompt = build_image_prompt(scene, prev_scene, global_block_override, exclude_title_narration=exclude_title_narration, include_safety_instructions=include_safety_instructions, story_context=story_context)
     
+    # Log the image prompt for debugging (only when --log-image-prompts is set)
+    if getattr(config, "log_image_prompts", False):
+        print(f"[IMAGE] Scene {scene['id']}: PROMPT (length={len(prompt)} chars):")
+        print("-" * 80)
+        print(prompt)
+        print("-" * 80)
+    
     # Sanitize prompt if this is a retry after safety violation
     if sanitize_attempt > 0:
         print(f"[IMAGE] Scene {scene['id']}: sanitizing prompt (attempt {sanitize_attempt})...")
         prompt = sanitize_prompt_for_safety(prompt, violation_type=violation_type, sanitize_attempt=sanitize_attempt, exclude_title_narration=exclude_title_narration)
-        # Log the full sanitized prompt for debugging
-        print(f"[IMAGE] Scene {scene['id']}: SANITIZED PROMPT (length={len(prompt)} chars):")
-        print("-" * 80)
-        print(prompt[:2000])  # Print first 2000 chars
-        if len(prompt) > 2000:
-            print(f"... (truncated, full length: {len(prompt)} chars)")
-        print("-" * 80)
+        # Log the full sanitized prompt for debugging (only when --log-image-prompts is set)
+        if getattr(config, "log_image_prompts", False):
+            print(f"[IMAGE] Scene {scene['id']}: SANITIZED PROMPT (length={len(prompt)} chars):")
+            print("-" * 80)
+            print(prompt[:2000])  # Print first 2000 chars
+            if len(prompt) > 2000:
+                print(f"... (truncated, full length: {len(prompt)} chars)")
+            print("-" * 80)
     
     print(f"[IMAGE] Scene {scene['id']}: generating image...")
 
@@ -762,8 +535,7 @@ def generate_image_for_scene(scene: dict, prev_scene: dict | None, global_block_
 
 def generate_audio_for_scene(scene: dict) -> Path:
     """
-    Generate TTS audio for the given scene's narration.
-    Uses ElevenLabs or OpenAI based on TTS_PROVIDER setting.
+    Generate TTS audio for the given scene's narration via llm_utils.generate_speech.
     If config.save_assets is True, caches to generated_audio/. Otherwise uses temp directory.
     """
     if config.save_assets:
@@ -773,129 +545,24 @@ def generate_audio_for_scene(scene: dict) -> Path:
             print(f"[AUDIO] Scene {scene['id']}: using cached {audio_path.name}")
             return audio_path
     else:
-        # Use temp directory
         audio_path = Path(config.temp_dir) / f"scene_{scene['id']:02d}.mp3"
 
     text = scene["narration"]
     emotion = scene.get("emotion")
+    tts_provider = os.getenv("TTS_PROVIDER", "google").lower()
     if emotion:
-        print(f"[AUDIO] Scene {scene['id']}: generating audio ({TTS_PROVIDER}) with emotion={emotion}...")
+        print(f"[AUDIO] Scene {scene['id']}: generating audio ({tts_provider}) with emotion={emotion}...")
     else:
-        print(f"[AUDIO] Scene {scene['id']}: generating audio ({TTS_PROVIDER})...")
+        print(f"[AUDIO] Scene {scene['id']}: generating audio ({tts_provider})...")
 
-    if TTS_PROVIDER == "elevenlabs" and elevenlabs_client:
-        # ElevenLabs TTS
-        audio_generator = elevenlabs_client.text_to_speech.convert(
-            voice_id=ELEVENLABS_VOICE_ID,
-            text=text,
-            model_id=ELEVENLABS_MODEL,
-            voice_settings={
-                "stability": 0.75,
-                "similarity_boost": 0.75,
-                "style": 0.5,
-                "use_speaker_boost": False,
-                "speed": 1.0,
-            },
-        )
-        # Write the audio chunks to file
-        with open(audio_path, "wb") as f:
-            for chunk in audio_generator:
-                f.write(chunk)
-    elif TTS_PROVIDER == "google" and google_tts_client:
-        # Google Cloud TTS with SSML for natural pacing and emotion-based prosody
-        from google.cloud import texttospeech
-        
-        # Check voice type
-        is_chirp_voice = GOOGLE_VOICE_TYPE == "chirp"
-        is_gemini_voice = GOOGLE_VOICE_TYPE == "gemini"
-        
-        if is_gemini_voice:
-            # Gemini TTS uses new API with prompt parameter and model_name
-            # Use BIOPIC_NARRATION_INSTRUCTIONS or HORROR_NARRATION_INSTRUCTIONS from env (set by --horror)
-            if NARRATION_INSTRUCTIONS_FOR_TTS:
-                prompt_text = NARRATION_INSTRUCTIONS_FOR_TTS
-                print(f"[AUDIO] Scene {scene['id']}: using narration instructions from env for Gemini TTS")
-            else:
-                # Fall back to emotion-based prompt
-                emotion_desc = f"with {emotion} emotion" if emotion else ""
-                prompt_text = f"Read this text {emotion_desc}, matching the scene's emotional tone."
-            
-            # Gemini uses text input (not SSML) with prompt parameter.
-            # Add trailing spaces so Gemini TTS fully pronounces the last word (avoids end cut-off).
-            text_for_gemini = (text or "").rstrip() + GEMINI_TTS_TEXT_PADDING
-            # synthesis_input = texttospeech.SynthesisInput(text=text_for_gemini, prompt=prompt_text)
-            synthesis_input = texttospeech.SynthesisInput(text=text_for_gemini)
-            
-            # Select Gemini voice based on female flag
-            if USE_FEMALE_VOICE:
-                gemini_voice_name = GOOGLE_GEMINI_FEMALE_SPEAKER if GOOGLE_GEMINI_FEMALE_SPEAKER else GOOGLE_TTS_VOICE
-            else:
-                gemini_voice_name = GOOGLE_GEMINI_MALE_SPEAKER
-            
-            # Gemini voices use model_name instead of just name
-            voice = texttospeech.VoiceSelectionParams(
-                language_code=GOOGLE_TTS_LANGUAGE,
-                name=gemini_voice_name,  # Voice name from GOOGLE_GEMINI_MALE_SPEAKER or GOOGLE_GEMINI_FEMALE_SPEAKER
-                model_name="gemini-2.5-pro-tts"
-            )
-            
-            audio_config = texttospeech.AudioConfig(
-                audio_encoding=texttospeech.AudioEncoding.MP3
-            )
-        elif is_chirp_voice:
-            # Chirp voices don't support SSML or prosody - use plain text
-            synthesis_input = texttospeech.SynthesisInput(text=text)
-            
-            voice = texttospeech.VoiceSelectionParams(
-                language_code=GOOGLE_TTS_LANGUAGE,
-                name=GOOGLE_TTS_VOICE,
-            )
-            
-            # Chirp voices don't support pitch parameter
-            audio_config = texttospeech.AudioConfig(
-                audio_encoding=texttospeech.AudioEncoding.MP3,
-            )
-        else:
-            # Standard Google TTS with SSML for natural pauses and emotion-based prosody adjustments
-            ssml_text = text_to_ssml(text, emotion=emotion)
-            synthesis_input = texttospeech.SynthesisInput(ssml=ssml_text)
-            
-            voice = texttospeech.VoiceSelectionParams(
-                language_code=GOOGLE_TTS_LANGUAGE,
-                name=GOOGLE_TTS_VOICE,
-            )
-            
-            audio_config_params = {
-                "audio_encoding": texttospeech.AudioEncoding.MP3,
-                "pitch": GOOGLE_TTS_PITCH,
-            }
-            audio_config = texttospeech.AudioConfig(**audio_config_params)
-        
-        response = google_tts_client.synthesize_speech(
-            input=synthesis_input,
-            voice=voice,
-            audio_config=audio_config,
-        )
-        
-        with open(audio_path, "wb") as f:
-            f.write(response.audio_content)
-    else:
-        # OpenAI TTS (fallback)
-        # Use BIOPIC_NARRATION_INSTRUCTIONS or HORROR_NARRATION_INSTRUCTIONS from env (set by --horror)
-        if NARRATION_INSTRUCTIONS_FOR_TTS:
-            tts_instructions = NARRATION_INSTRUCTIONS_FOR_TTS
-            print(f"[AUDIO] Scene {scene['id']}: using narration instructions from env")
-        else:
-            # Fall back to default style prompt
-            tts_instructions = OPENAI_TTS_STYLE_PROMPT
-        
-        with client.audio.speech.with_streaming_response.create(
-            model=OPENAI_TTS_MODEL,
-            voice=OPENAI_TTS_VOICE,
-            input=text,
-            instructions=tts_instructions,
-        ) as response:
-            response.stream_to_file(str(audio_path))
+    narration_instructions = NARRATION_INSTRUCTIONS_FOR_TTS or scene.get("narration_instructions") or None
+    llm_utils.generate_speech(
+        text=text,
+        output_path=audio_path,
+        emotion=emotion,
+        narration_instructions=narration_instructions,
+        use_female_voice=USE_FEMALE_VOICE,
+    )
 
     if config.save_assets:
         print(f"[AUDIO] Scene {scene['id']}: saved {audio_path.name}")
@@ -910,11 +577,12 @@ def make_static_clip_with_audio(image_path: Path, audio_clip: AudioFileClip):
     - Scale image to cover output resolution.
     - Center & crop.
     - Match duration to audio.
-    - Add pause at the end (no audio, image continues).
+    - Add start pause (breathing room before narration) and end pause.
     """
     audio_duration = audio_clip.duration
-    pause_length = END_SCENE_PAUSE_LENGTH
-    total_duration = audio_duration + pause_length
+    start_pause = START_SCENE_PAUSE_LENGTH
+    end_pause = END_SCENE_PAUSE_LENGTH
+    total_duration = start_pause + audio_duration + end_pause
     output_res = config.output_resolution
 
     # Create image clip with total duration (audio + pause)
@@ -938,31 +606,26 @@ def make_static_clip_with_audio(image_path: Path, audio_clip: AudioFileClip):
         height=output_res[1],
     )
 
-    # Create silent audio clip for the pause
-    # Use the same fps as the original audio
+    # Create silent audio clips for start and end pauses
     fps = audio_clip.fps
     nchannels = audio_clip.nchannels if hasattr(audio_clip, 'nchannels') else 2
-    
-    # Create a function that returns silence (zeros)
+
     def make_silence(t):
-        # Return array of zeros matching the number of channels
         if nchannels == 1:
             return [0.0]
-        else:
-            return [0.0, 0.0]
-    
-    silent_audio = AudioClip(make_silence, duration=pause_length, fps=fps)
-    
-    # Concatenate original audio with silent pause
-    # Use concatenate_audioclips for audio clips (not concatenate_videoclips)
-    extended_audio = concatenate_audioclips([audio_clip, silent_audio])
+        return [0.0, 0.0]
+
+    silent_start = AudioClip(make_silence, duration=start_pause, fps=fps)
+    silent_end = AudioClip(make_silence, duration=end_pause, fps=fps)
+    extended_audio = concatenate_audioclips([silent_start, audio_clip, silent_end])
 
     return clip.with_audio(extended_audio).with_duration(total_duration)
 
 
 
 def make_motion_clip_with_audio(image_path: Path, audio_clip: AudioFileClip,
-                                pattern: str | None = None):
+                                pattern: str | None = None,
+                                intensity: str | None = None):
     """
     Create a scene clip with smooth Ken Burns motion using OpenCV warpAffine.
 
@@ -982,6 +645,9 @@ def make_motion_clip_with_audio(image_path: Path, audio_clip: AudioFileClip,
         Narration audio for this scene.
     pattern : str or None
         Motion pattern name (from KENBURNS_PATTERNS). If None, one is chosen at random.
+    intensity : str or None
+        Per-scene intensity (subtle/medium/pronounced). Uses KENBURNS_INTENSITY_VALUES.
+        If None, uses global KENBURNS_INTENSITY.
     """
     import math
     import cv2
@@ -989,8 +655,9 @@ def make_motion_clip_with_audio(image_path: Path, audio_clip: AudioFileClip,
     from moviepy import VideoClip
 
     audio_duration = audio_clip.duration
-    pause_length = END_SCENE_PAUSE_LENGTH
-    total_duration = audio_duration + pause_length
+    start_pause = START_SCENE_PAUSE_LENGTH
+    end_pause = END_SCENE_PAUSE_LENGTH
+    total_duration = start_pause + audio_duration + end_pause
     output_res = config.output_resolution
     out_w, out_h = output_res
 
@@ -1002,9 +669,12 @@ def make_motion_clip_with_audio(image_path: Path, audio_clip: AudioFileClip,
     pil_img.close()
 
     # Zoom range: min_zoom makes the image exactly cover the output frame;
-    # max_zoom adds KENBURNS_INTENSITY (default 4%) extra zoom.
+    # max_zoom adds intensity-based extra zoom (per-scene or global).
     min_zoom = max(out_w / in_w, out_h / in_h)
-    max_zoom = min_zoom * (1 + KENBURNS_INTENSITY)
+    intensity_val = KENBURNS_INTENSITY_VALUES.get((intensity or "").strip().lower()) if intensity else None
+    if intensity_val is None:
+        intensity_val = KENBURNS_INTENSITY
+    max_zoom = min_zoom * (1 + intensity_val)
 
     # Pick motion pattern
     if pattern is None:
@@ -1098,18 +768,18 @@ def make_motion_clip_with_audio(image_path: Path, audio_clip: AudioFileClip,
 
     clip = VideoClip(make_frame, duration=total_duration).with_fps(kb_fps)
 
-    # Build extended audio (narration + silence pause) — same logic as static clips
+    # Build extended audio (start pause + narration + end pause) — same logic as static clips
     fps = audio_clip.fps
     nchannels = audio_clip.nchannels if hasattr(audio_clip, 'nchannels') else 2
 
     def make_silence(t):
         if nchannels == 1:
             return [0.0]
-        else:
-            return [0.0, 0.0]
+        return [0.0, 0.0]
 
-    silent_audio = AudioClip(make_silence, duration=pause_length, fps=fps)
-    extended_audio = concatenate_audioclips([audio_clip, silent_audio])
+    silent_start = AudioClip(make_silence, duration=start_pause, fps=fps)
+    silent_end = AudioClip(make_silence, duration=end_pause, fps=fps)
+    extended_audio = concatenate_audioclips([silent_start, audio_clip, silent_end])
 
     total_frames = int(total_duration * kb_fps)
     print(f"[KENBURNS] Scene {image_path.stem}: {pattern} ({total_duration:.1f}s, {total_frames} frames @ {kb_fps}fps)")
@@ -1147,1460 +817,6 @@ def load_audio_with_accurate_duration(audio_path: Path) -> AudioFileClip:
             return AudioFileClip(str(path))
         return AudioFileClip(str(wav_path))
     return AudioFileClip(str(path))
-
-
-def generate_room_tone(
-    duration: float,
-    sample_rate: int = 44100,
-    gain: float = 0.008,          # start low; room tone should be subtle
-    fade_in: float = 0.05,        # 50 ms
-    fade_out: float = 0.05,       # 50 ms
-    seed: int | None = None
-) -> AudioClip:
-    """
-    Generate barely audible room tone (pink-ish noise).
-    """
-
-    num_samples = int(duration * sample_rate)
-    if num_samples <= 0:
-        return AudioClip(lambda t: np.array([0.0, 0.0], dtype=np.float32), duration=duration, fps=sample_rate)
-
-    rng = np.random.default_rng(seed)
-
-    # --- FFT-based pink noise approximation ---
-    # Generate random complex spectrum and scale by 1/sqrt(f) (pink ~ 1/f power)
-    freqs = np.fft.rfftfreq(num_samples, d=1.0 / sample_rate)
-    spectrum = rng.normal(size=len(freqs)) + 1j * rng.normal(size=len(freqs))
-
-    # Avoid division by zero at DC; keep DC very small (we'll remove mean anyway)
-    scale = np.ones_like(freqs)
-    scale[1:] = 1.0 / np.sqrt(freqs[1:])  # ~1/sqrt(f) amplitude => ~1/f power
-
-    spectrum *= scale
-    noise = np.fft.irfft(spectrum, n=num_samples)
-
-    # Remove DC / center
-    noise = noise - np.mean(noise)
-
-    # Normalize to a reasonable RMS (not peak=1), then apply gain
-    rms = np.sqrt(np.mean(noise**2)) + 1e-9
-    noise = (noise / rms) * gain
-
-    # Tiny fades to prevent clicks when spliced
-    env = np.ones(num_samples, dtype=np.float32)
-
-    fi = int(min(fade_in, duration) * sample_rate)
-    fo = int(min(fade_out, duration) * sample_rate)
-
-    if fi > 0:
-        x = np.linspace(0, 1, fi, endpoint=False)
-        env[:fi] *= 0.5 - 0.5 * np.cos(np.pi * x)
-
-    if fo > 0:
-        x = np.linspace(0, 1, fo, endpoint=False)
-        env[-fo:] *= 0.5 + 0.5 * np.cos(np.pi * x)
-
-    tone = (noise * env).astype(np.float32)
-
-    def make_audio(tt):
-        if np.isscalar(tt):
-            idx = int(tt * sample_rate)
-            if 0 <= idx < len(tone):
-                v = float(tone[idx])
-                return np.array([v, v], dtype=np.float32)
-            return np.array([0.0, 0.0], dtype=np.float32)
-        else:
-            indices = (tt * sample_rate).astype(int)
-            indices = np.clip(indices, 0, len(tone) - 1)
-            mono = tone[indices]
-            return np.column_stack([mono, mono]).astype(np.float32)
-
-    return AudioClip(make_audio, duration=duration, fps=sample_rate)
-
-
-def generate_low_frequency_drone_with_transition(duration: float, frequency: float = 50.0, 
-                                                  transition_type: str = "none", 
-                                                  start_volume: float = 1.0,
-                                                  end_volume: float = 1.0,
-                                                  transition_duration: float = 5.0,
-                                                  sample_rate: int = 44100) -> AudioClip:
-    """
-    Generate low-frequency drone with volume transitions.
-    
-    Args:
-        duration: Total duration in seconds
-        frequency: Frequency in Hz (default: 50, range: 30-80)
-        transition_type: Type of transition - "fade_in", "fade_out", "swell", "shrink", "hold", "hard_cut", or "none"
-        start_volume: Starting volume (0.0 to 1.0) - used for fade_in, swell, shrink, hold
-        end_volume: Ending volume (0.0 to 1.0) - used for fade_out, swell, shrink
-        transition_duration: Duration of transition in seconds (default: 5.0 for fade_in/fade_out, 3-8 for swell/shrink)
-        sample_rate: Sample rate in Hz (default: 44100)
-    
-    Returns:
-        AudioClip with low-frequency sine wave and volume transition
-    """
-    # Clamp frequency to 30-80 Hz range
-    frequency = max(30.0, min(80.0, frequency))
-    
-    # Generate sine wave
-    num_samples = int(duration * sample_rate)
-    t = np.linspace(0, duration, num_samples, False)
-    sine_wave = np.sin(2 * np.pi * frequency * t)
-    
-    # Apply volume envelope based on transition type
-    if transition_type == "fade_in":
-        # Fade in from 0 to end_volume over transition_duration (3-10 seconds)
-        transition_samples = int(transition_duration * sample_rate)
-        fade_envelope = np.linspace(0.0, end_volume, min(transition_samples, num_samples))
-        if len(fade_envelope) < num_samples:
-            fade_envelope = np.pad(fade_envelope, (0, num_samples - len(fade_envelope)), mode='constant', constant_values=end_volume)
-        sine_wave = sine_wave * fade_envelope
-    elif transition_type == "fade_out":
-        # Fade out from start_volume to minimum (not zero - room tone remains)
-        min_volume = 0.0
-        transition_samples = int(transition_duration * sample_rate)
-        fade_start = max(0, num_samples - transition_samples)
-        fade_envelope = np.ones(num_samples) * start_volume
-        fade_portion = np.linspace(start_volume, min_volume, num_samples - fade_start)
-        fade_envelope[fade_start:] = fade_portion
-        sine_wave = sine_wave * fade_envelope
-    elif transition_type == "swell":
-        # Increase volume from start_volume to end_volume over transition_duration (3-8 seconds)
-        transition_samples = int(transition_duration * sample_rate)
-        swell_envelope = np.ones(num_samples) * start_volume
-        swell_portion = np.linspace(start_volume, end_volume, min(transition_samples, num_samples))
-        if len(swell_portion) <= num_samples:
-            swell_envelope[:len(swell_portion)] = swell_portion
-            if len(swell_portion) < num_samples:
-                swell_envelope[len(swell_portion):] = end_volume
-        sine_wave = sine_wave * swell_envelope
-    elif transition_type == "shrink":
-        # Decrease volume from start_volume to end_volume over transition_duration (3-8 seconds)
-        min_volume = 0.1  # Never shrink completely
-        end_volume = max(min_volume, end_volume)
-        transition_samples = int(transition_duration * sample_rate)
-        shrink_envelope = np.ones(num_samples) * start_volume
-        shrink_portion = np.linspace(start_volume, end_volume, min(transition_samples, num_samples))
-        if len(shrink_portion) <= num_samples:
-            shrink_envelope[:len(shrink_portion)] = shrink_portion
-            if len(shrink_portion) < num_samples:
-                shrink_envelope[len(shrink_portion):] = end_volume
-        sine_wave = sine_wave * shrink_envelope
-    elif transition_type == "hard_cut":
-        # Instant cut to silence (or very low volume)
-        sine_wave = np.zeros_like(sine_wave)
-    elif transition_type == "hold":
-        # Hold at start_volume throughout
-        sine_wave = sine_wave * start_volume
-    else:  # "none" or default
-        # Constant volume
-        sine_wave = sine_wave * start_volume
-    
-    # Create audio function for MoviePy
-    # Return stereo (2 channels) for compatibility
-    def make_audio(t):
-        # t can be a scalar or array
-        if np.isscalar(t):
-            idx = int(t * sample_rate)
-            if 0 <= idx < len(sine_wave):
-                # Return stereo: [left, right] with same value
-                return np.array([sine_wave[idx], sine_wave[idx]])
-            return np.array([0.0, 0.0])
-        else:
-            # Array of times - return stereo array
-            indices = (t * sample_rate).astype(int)
-            indices = np.clip(indices, 0, len(sine_wave) - 1)
-            mono_samples = sine_wave[indices]
-            # Convert to stereo by duplicating the channel
-            if mono_samples.ndim == 0:
-                return np.array([mono_samples, mono_samples])
-            else:
-                return np.column_stack([mono_samples, mono_samples])
-    
-    return AudioClip(make_audio, duration=duration, fps=sample_rate)
-
-
-def generate_low_frequency_drone(duration: float, frequency: float = 90.0, sample_rate: int = 44100) -> AudioClip:
-    """
-    Generate low-frequency drone (30-80 Hz).
-    Feels like pressure, not sound - you should feel it more than hear it.
-    
-    Args:
-        duration: Duration in seconds
-        frequency: Frequency in Hz (default: 50, range: 30-80)
-        sample_rate: Sample rate in Hz (default: 44100)
-    
-    Returns:
-        AudioClip with low-frequency sine wave
-    """
-    # Clamp frequency to 30-80 Hz range
-    frequency = max(60.0, min(120.0, frequency))
-    
-    # Generate sine wave
-    num_samples = int(duration * sample_rate)
-    t = np.linspace(0, duration, num_samples, False)
-    sine_wave = np.sin(2 * np.pi * frequency * t)
-    
-    # Create audio function for MoviePy
-    # MoviePy's AudioClip expects a function that takes a time array and returns audio samples
-    # Return stereo (2 channels) for compatibility with CompositeAudioClip
-    def make_audio(t):
-        # t can be a scalar or array
-        if np.isscalar(t):
-            idx = int(t * sample_rate)
-            if 0 <= idx < len(sine_wave):
-                # Return stereo: [left, right] with same value
-                return np.array([sine_wave[idx], sine_wave[idx]])
-            return np.array([0.0, 0.0])
-        else:
-            # Array of times - return stereo array
-            indices = (t * sample_rate).astype(int)
-            indices = np.clip(indices, 0, len(sine_wave) - 1)
-            mono_samples = sine_wave[indices]
-            # Convert to stereo by duplicating the channel
-            if mono_samples.ndim == 0:
-                return np.array([mono_samples, mono_samples])
-            else:
-                return np.column_stack([mono_samples, mono_samples])
-    
-    return AudioClip(make_audio, duration=duration, fps=sample_rate)
-
-
-def generate_detail_sounds(duration: float, sound_type: str = "random", sample_rate: int = 44100) -> AudioClip:
-    """
-    Generate occasional detail sounds (creaks, wind, hum, whispers).
-    Randomly places 3-8 sounds throughout the duration.
-    
-    Args:
-        duration: Duration in seconds
-        sound_type: Type of sound ("creak", "wind", "hum", "whisper", "random")
-        sample_rate: Sample rate in Hz (default: 44100)
-    
-    Returns:
-        AudioClip with occasional detail sounds
-    """
-    HORROR_AUDIO_DIR = Path("horror_audio")
-    
-    # Try to load audio files first
-    sound_files = {
-        "creak": list((HORROR_AUDIO_DIR / "creaks").glob("*.mp3")) + list((HORROR_AUDIO_DIR / "creaks").glob("*.wav")),
-        "wind": list((HORROR_AUDIO_DIR / "wind").glob("*.mp3")) + list((HORROR_AUDIO_DIR / "wind").glob("*.wav")),
-        "hum": list((HORROR_AUDIO_DIR / "hum").glob("*.mp3")) + list((HORROR_AUDIO_DIR / "hum").glob("*.wav")),
-        "whisper": list((HORROR_AUDIO_DIR / "whispers").glob("*.mp3")) + list((HORROR_AUDIO_DIR / "whispers").glob("*.wav")),
-    }
-    
-    # Create silent audio clip (stereo)
-    def make_silence(t):
-        # Handle both scalar and array inputs
-        # Return stereo (2 channels) for compatibility
-        if np.isscalar(t):
-            return np.array([0.0, 0.0])
-        else:
-            # Return stereo array
-            return np.zeros((len(t), 2))
-    
-    result_audio = AudioClip(make_silence, duration=duration, fps=sample_rate)
-    
-    # Determine number of sounds (3-8)
-    num_sounds = random.randint(3, 8)
-    
-    # Generate sound positions (avoid overlapping)
-    min_gap = duration / (num_sounds + 1)
-    positions = []
-    for _ in range(num_sounds):
-        pos = random.uniform(min_gap, duration - min_gap)
-        # Ensure minimum gap between sounds
-        if not positions or all(abs(pos - p) >= min_gap for p in positions):
-            positions.append(pos)
-    
-    # Sort positions
-    positions.sort()
-    
-    # Add sounds at each position
-    for pos in positions:
-        # Select sound type
-        if sound_type == "random":
-            selected_type = random.choice(["creak", "wind", "hum", "whisper"])
-        else:
-            selected_type = sound_type
-        
-        # Try to use audio file if available
-        if sound_files[selected_type]:
-            try:
-                sound_file = random.choice(sound_files[selected_type])
-                sound_clip = AudioFileClip(str(sound_file))
-                # Place sound at position
-                sound_clip = sound_clip.with_start(pos)
-                # Composite with existing audio
-                result_audio = CompositeAudioClip([result_audio, sound_clip])
-                continue
-            except Exception as e:
-                print(f"[HORROR AUDIO] Failed to load {sound_file}: {e}, using programmatic fallback")
-        
-        # Fallback: generate programmatic sound
-        sound_duration = random.uniform(0.5, 2.0)  # 0.5-2 seconds
-        
-        if selected_type == "creak":
-            # Creak: short burst of noise with frequency sweep
-            num_samples = int(sound_duration * sample_rate)
-            t = np.linspace(0, sound_duration, num_samples, False)
-            # Frequency sweep from high to low
-            freq_sweep = np.linspace(800, 200, num_samples)
-            creak = np.sin(2 * np.pi * freq_sweep * t) * np.exp(-t * 2)  # Decay envelope
-            creak = creak / np.max(np.abs(creak)) if np.max(np.abs(creak)) > 0 else creak
-            sound_data = creak
-        elif selected_type == "wind":
-            # Wind: low-frequency noise with modulation
-            num_samples = int(sound_duration * sample_rate)
-            t = np.linspace(0, sound_duration, num_samples, False)
-            wind = np.random.randn(num_samples) * 0.3
-            # Low-pass filter effect (simple)
-            for i in range(1, len(wind)):
-                wind[i] = 0.7 * wind[i-1] + 0.3 * wind[i]
-            wind = wind / np.max(np.abs(wind)) if np.max(np.abs(wind)) > 0 else wind
-            sound_data = wind
-        elif selected_type == "hum":
-            # Hum: low-frequency sine wave with slight variation
-            num_samples = int(sound_duration * sample_rate)
-            t = np.linspace(0, sound_duration, num_samples, False)
-            base_freq = 60.0 + random.uniform(-10, 10)
-            hum = np.sin(2 * np.pi * base_freq * t) * (0.5 + 0.5 * np.sin(2 * np.pi * 0.5 * t))
-            hum = hum / np.max(np.abs(hum)) if np.max(np.abs(hum)) > 0 else hum
-            sound_data = hum
-        else:  # whisper
-            # Whisper: high-frequency filtered noise
-            num_samples = int(sound_duration * sample_rate)
-            t = np.linspace(0, sound_duration, num_samples, False)
-            whisper = np.random.randn(num_samples) * 0.2
-            # High-pass filter effect (simple)
-            for i in range(1, len(whisper)):
-                whisper[i] = 0.3 * whisper[i-1] + 0.7 * whisper[i]
-            whisper = whisper / np.max(np.abs(whisper)) if np.max(np.abs(whisper)) > 0 else whisper
-            sound_data = whisper
-        
-        # Create audio clip for this sound (stereo)
-        def make_sound_audio(t_local):
-            # t_local is relative to the clip start (0 to sound_duration)
-            # t can be a scalar or array
-            # Return stereo (2 channels) for compatibility
-            if np.isscalar(t_local):
-                idx = int(t_local * sample_rate)
-                if 0 <= idx < len(sound_data):
-                    # Return stereo: [left, right] with same value
-                    return np.array([sound_data[idx], sound_data[idx]])
-                return np.array([0.0, 0.0])
-            else:
-                # Array of times - return stereo array
-                indices = (t_local * sample_rate).astype(int)
-                indices = np.clip(indices, 0, len(sound_data) - 1)
-                mono_samples = sound_data[indices]
-                # Convert to stereo by duplicating the channel
-                if mono_samples.ndim == 0:
-                    return np.array([mono_samples, mono_samples])
-                else:
-                    return np.column_stack([mono_samples, mono_samples])
-        
-        sound_clip = AudioClip(make_sound_audio, duration=sound_duration, fps=sample_rate)
-        sound_clip = sound_clip.with_start(pos)
-        result_audio = CompositeAudioClip([result_audio, sound_clip])
-    
-    return result_audio
-
-
-def generate_drone_with_scene_transitions(scenes: list[dict], scene_audio_clips: list[AudioFileClip], 
-                                         base_drone_volume_db: float = None,
-                                         max_drone_volume_db: float = None) -> AudioClip:
-    """
-    Generate low-frequency drone with transitions based on scene drone_change values.
-    Tracks drone state across scenes to ensure smooth transitions.
-    
-    Args:
-        scenes: List of scene dictionaries with drone_change field
-        scene_audio_clips: List of audio clips for each scene (used to get scene durations)
-        base_drone_volume_db: Base drone volume in dB (default: from DRONE_BASE env var or -20)
-        max_drone_volume_db: Maximum drone volume in dB (default: from DRONE_MAX env var or -15, used to clip swell)
-    
-    Returns:
-        AudioClip with drone that transitions based on scene instructions
-    """
-    # Use environment variable defaults if not provided
-    if base_drone_volume_db is None:
-        base_drone_volume_db = DRONE_BASE_VOLUME_DB
-    if max_drone_volume_db is None:
-        max_drone_volume_db = DRONE_MAX_VOLUME_DB
-    
-    # Convert dB to linear volume multiplier
-    def db_to_linear(db):
-        return 10 ** (db / 20.0)
-    
-    base_volume_linear = db_to_linear(base_drone_volume_db)
-    max_volume_linear = db_to_linear(max_drone_volume_db)
-    
-    # Calculate total duration for continuous generation (prevents pops)
-    total_duration = sum(clip.duration + END_SCENE_PAUSE_LENGTH for clip in scene_audio_clips)
-    sample_rate = 44100
-    num_samples = int(total_duration * sample_rate)
-    
-    # Generate continuous sine wave for entire duration
-    t = np.arange(num_samples) / sample_rate
-    sine_wave = np.sin(2 * np.pi * 50.0 * t)
-    
-    # Build volume envelope for entire duration
-    volume_envelope = np.zeros(num_samples)
-    current_time = 0.0
-    current_drone_volume = 0.0  # Start with no drone
-    
-    # Process each scene to build the volume envelope
-    for i, (scene, audio_clip) in enumerate(zip(scenes, scene_audio_clips)):
-        scene_id = scene.get('id', i + 1)
-        scene_duration = audio_clip.duration + END_SCENE_PAUSE_LENGTH  # Include pause
-        drone_change = scene.get('drone_change', 'none')
-
-        if current_drone_volume == 0.0 and drone_change == "swell":
-            drone_change = "fade_in"
-        
-        # Determine transition parameters based on drone_change
-        if drone_change == "fade_in":
-            # Fade in from 0 to base volume (3-10 seconds)
-            start_volume = 0.0
-            end_volume = min(max_volume_linear, base_volume_linear)
-            transition_duration = min(10.0, max(3.0, scene_duration * 0.3))  # 3-10 seconds, adaptive to scene length
-            transition_type = "fade_in"
-            current_drone_volume = end_volume  # Update state
-        elif drone_change == "hold":
-            # Hold at current volume (no transition)
-            start_volume = current_drone_volume
-            end_volume = start_volume
-            transition_duration = 0.0  # No transition
-            transition_type = "hold"
-            current_drone_volume = start_volume  # Maintain state
-        elif drone_change == "swell":
-            # Increase from current to higher volume (3-8 seconds)
-            # Clip by max volume, not base volume
-            start_volume = current_drone_volume
-            end_volume = min(max_volume_linear, start_volume * 1.4)  # Increase by up to 40%, but clip at max
-            transition_duration = min(8.0, max(3.0, scene_duration * 0.3))  # 3-8 seconds
-            transition_type = "swell"
-            current_drone_volume = end_volume  # Update state
-        elif drone_change == "shrink":
-            # Decrease from current volume (but not to zero) (3-8 seconds)
-            min_volume = base_volume_linear * 0.1  # Minimum 10% of base
-            start_volume = current_drone_volume
-            end_volume = max(min_volume, start_volume * 0.6)  # Decrease to 60% of start
-            transition_duration = min(8.0, max(3.0, scene_duration * 0.3))  # 3-8 seconds
-            transition_type = "shrink"
-            current_drone_volume = end_volume  # Update state
-        elif drone_change == "fade_out":
-            # Fade out from current to minimum (3-10 seconds, but never completely)
-            min_volume = 0.0 
-            start_volume = current_drone_volume
-            end_volume = min_volume
-            transition_duration = min(10.0, max(3.0, scene_duration * 0.3))  # 3-10 seconds
-            transition_type = "fade_out"
-            current_drone_volume = end_volume  # Update state
-        elif drone_change == "hard_cut":
-            # Instant cut to silence
-            start_volume = current_drone_volume
-            end_volume = 0.0
-            transition_duration = 0.0  # Instant
-            transition_type = "hard_cut"
-            current_drone_volume = 0.0  # Update state
-        else:  # "none" or unknown
-            # No change - hold at current volume (or default to base if no previous state)
-            start_volume = current_drone_volume
-            end_volume = start_volume
-            transition_duration = 0.0
-            transition_type = "hold"
-            current_drone_volume = start_volume  # Maintain state
-        
-        transition_duration = min(transition_duration, scene_duration)
-        
-        # Calculate sample indices for this scene
-        start_sample = int(current_time * sample_rate)
-        end_sample = int((current_time + scene_duration) * sample_rate)
-        transition_samples = int(transition_duration * sample_rate)
-        
-        # Apply volume envelope for this scene (continuous, no cuts = no pops)
-        if transition_duration > 0 and transition_samples > 0:
-            # Transition portion
-            transition_end_sample = min(start_sample + transition_samples, end_sample)
-            transition_indices = np.arange(start_sample, transition_end_sample)
-            if len(transition_indices) > 0:
-                transition_volumes = np.linspace(start_volume, end_volume, len(transition_indices))
-                volume_envelope[transition_indices] = transition_volumes
-            
-            # Rest of scene at end_volume
-            if transition_end_sample < end_sample:
-                volume_envelope[transition_end_sample:end_sample] = end_volume
-        else:
-            # No transition - constant volume
-            volume_envelope[start_sample:end_sample] = end_volume
-        
-        print(f"[HORROR AUDIO] Scene {scene_id}: drone_change={drone_change}, volume={start_volume:.3f}->{end_volume:.3f}")
-        
-        current_time += scene_duration
-    
-    # Apply volume envelope to sine wave (ensure it's a contiguous array)
-    sine_wave = (sine_wave * volume_envelope).copy()
-    
-    # Create audio function for MoviePy (stereo)
-    def make_audio(t):
-        if np.isscalar(t):
-            idx = int(t * sample_rate)
-            if 0 <= idx < len(sine_wave):
-                return np.array([sine_wave[idx], sine_wave[idx]])
-            else:
-                return np.array([0.0, 0.0])
-        else:
-            indices = (t * sample_rate).astype(int)
-            indices = np.clip(indices, 0, len(sine_wave) - 1)
-            samples = sine_wave[indices]
-            # Return stereo: [left, right] with same values
-            return np.column_stack([samples, samples])
-    
-    # Create AudioClip (continuous, no concatenation = no pops)
-    drone = AudioClip(make_audio, duration=total_duration, fps=sample_rate)
-    
-    return drone
-
-
-def apply_volume_to_audioclip(clip: AudioClip, volume_factor: float) -> AudioClip:
-    """
-    Apply volume to an AudioClip by wrapping its audio function.
-    
-    Args:
-        clip: The AudioClip to modify
-        volume_factor: Volume multiplier (1.0 = no change, 0.5 = half volume, etc.)
-    
-    Returns:
-        New AudioClip with volume applied
-    """
-    # Access the original audio function
-    # AudioClip stores the function - we'll use get_frame which should work
-    original_get_frame = clip.get_frame
-    
-    # Create a new function that wraps the original and applies volume
-    def volume_adjusted_audio(t):
-        audio = original_get_frame(t)
-        # Handle both scalar and array returns
-        return audio * volume_factor
-    
-    # Create new AudioClip with volume-adjusted function
-    return AudioClip(volume_adjusted_audio, duration=clip.duration, fps=clip.fps)
-
-
-def _fit_song_to_duration(song_path: Path, required_duration: float) -> AudioFileClip | None:
-    """
-    Load an MP3 and fit it to required_duration by looping (if shorter) or trimming (if longer).
-    Returns AudioFileClip or None on failure.
-    """
-    try:
-        song = AudioFileClip(str(song_path))
-    except Exception as e:
-        print(f"[BIOPIC MUSIC] Warning: Could not load {song_path}: {e}")
-        return None
-
-    # MoviePy 2.x uses subclipped(), 1.x uses subclip()
-    subclip_fn = getattr(song, "subclipped", getattr(song, "subclip", None))
-    if subclip_fn is None:
-        try:
-            song.close()
-        except Exception:
-            pass
-        print("[BIOPIC MUSIC] Warning: Could not fit song to duration: clip has no subclip/subclipped method")
-        return None
-
-    try:
-        if song.duration < required_duration:
-            loops_needed = int(np.ceil(required_duration / song.duration))
-            clips = [song] * loops_needed
-            combined = concatenate_audioclips(clips)
-            if combined.duration > required_duration:
-                combined_subclip = getattr(combined, "subclipped", getattr(combined, "subclip", None))
-                if combined_subclip:
-                    combined = combined_subclip(0, required_duration)
-            # Don't close song: combined clip still reads from it
-            return combined
-        elif song.duration > required_duration:
-            trimmed = subclip_fn(0, required_duration)
-            # Don't close song: trimmed clip shares the reader
-            return trimmed
-        return song
-    except Exception as e:
-        print(f"[BIOPIC MUSIC] Warning: Could not fit song to duration: {e}")
-        try:
-            song.close()
-        except Exception:
-            pass
-        return None
-
-
-def build_biopic_music_track(metadata: dict | None, scene_audio_clips: list, total_duration: float,
-                            scenes: list[dict] | None = None, music_volume_db: float = None,
-                            tail_sec: float = 0.0, fadeout_sec: float = 0.0,
-                            crossfade_overlap: float = 0.0) -> AudioClip | None:
-    """
-    Build a continuous music track from biopic_music/ mood folders, one song per chapter.
-    Uses chapter.music_mood from outline (LLM-picked). Loops or trims songs to fit chapter duration.
-    Stitches chapters with crossfade.
-    When scenes have chapter_num (including significance and storyline completion scenes), groups by
-    chapter_num for correct alignment. Falls back to num_scenes-based boundaries for legacy scripts.
-    Returns AudioClip or None if music cannot be built (e.g., biopic_music/ missing).
-    """
-    try:
-        from collections import defaultdict
-        from biopic_music_config import (
-            BIOPIC_MUSIC_DIR,
-            BIOPIC_MUSIC_VOLUME_DB,
-            BIOPIC_MUSIC_CROSSFADE_SEC,
-            BIOPIC_MUSIC_DEFAULT_MOODS,
-        )
-    except ImportError:
-        print("[BIOPIC MUSIC] biopic_music_config not found, skipping")
-        return None
-
-    if not BIOPIC_MUSIC_DIR.exists() or not BIOPIC_MUSIC_DIR.is_dir():
-        print(f"[BIOPIC MUSIC] Directory {BIOPIC_MUSIC_DIR} not found, skipping")
-        return None
-
-    vol_db = music_volume_db if music_volume_db is not None else BIOPIC_MUSIC_VOLUME_DB
-    crossfade = BIOPIC_MUSIC_CROSSFADE_SEC
-
-    chapters = (metadata or {}).get("outline", {}).get("chapters") or (metadata or {}).get("chapters") or []
-    total_scenes_from_chapters = sum(ch.get("num_scenes", 0) for ch in chapters)
-    num_clips = len(scene_audio_clips)
-
-    # Scene-based mode: use chapter_num on scenes (handles significance + storyline completion)
-    use_scene_based = (
-        scenes is not None
-        and len(scenes) == num_clips
-        and any(s.get("chapter_num") for s in scenes)
-    )
-
-    # Single segment mode: no chapters, or scene count mismatch (e.g., --scene-id), or shorts
-    # Used for shorts (1 song) and --scene-id (filtered scenes). Shorts have metadata.outline.music_mood.
-    if not use_scene_based and (not chapters or num_clips != total_scenes_from_chapters):
-        outline = (metadata or {}).get("outline") or {}
-        mood = (outline.get("music_mood") or (metadata or {}).get("music_mood") or "").strip().lower()
-        default_mood = BIOPIC_MUSIC_DEFAULT_MOODS[0] if BIOPIC_MUSIC_DEFAULT_MOODS else "relaxing"
-        mood = mood or default_mood
-        mood_dir = BIOPIC_MUSIC_DIR / mood
-        songs = list(mood_dir.glob("*.mp3")) if mood_dir.exists() else []
-        if not songs:
-            for fallback in BIOPIC_MUSIC_DEFAULT_MOODS:
-                if fallback != mood:
-                    fallback_dir = BIOPIC_MUSIC_DIR / fallback
-                    if fallback_dir.exists():
-                        songs = list(fallback_dir.glob("*.mp3"))
-                        if songs:
-                            mood_dir = fallback_dir
-                            break
-        if not songs:
-            print(f"[BIOPIC MUSIC] No MP3s for mood '{mood}', skipping")
-            return None
-        song_path = random.choice(songs)
-        seg_duration = total_duration + tail_sec if tail_sec > 0 else total_duration
-        clip = _fit_song_to_duration(song_path, seg_duration)
-        if clip is None:
-            return None
-        music = apply_volume_to_audioclip(clip, 10 ** (vol_db / 20.0))
-        if tail_sec > 0 and fadeout_sec > 0:
-            from moviepy.audio.fx import AudioFadeOut
-            music = music.with_effects([AudioFadeOut(min(fadeout_sec, music.duration))])
-        return music
-
-    # Chapter-based mode: scene-based (chapter_num on scenes) or legacy (num_scenes from outline)
-    segment_clips = []
-    chapter_to_mood = {ch.get("chapter_num"): (ch.get("music_mood") or "relaxing").strip().lower() for ch in chapters if ch.get("chapter_num")}
-    # Shorts have chapter_num on scenes but no outline.chapters; use outline.music_mood
-    outline_mood = ((metadata or {}).get("outline") or {}).get("music_mood")
-    outline_mood = (outline_mood or "").strip().lower() or None
-
-    if use_scene_based:
-        # Group scenes by chapter_num; compute duration per chapter from actual scene_audio_clips.
-        # When crossfade is active every scene after the first in the video overlaps with its
-        # predecessor by crossfade_overlap seconds, so the chapter's effective duration in the
-        # final video is shorter than the raw sum of clip durations.
-        chapter_durations = defaultdict(float)
-        chapter_scene_counts = defaultdict(int)
-        for i, scene in enumerate(scenes):
-            ch_num = scene.get("chapter_num") or 1
-            if i < len(scene_audio_clips):
-                chapter_durations[ch_num] += scene_audio_clips[i].duration + END_SCENE_PAUSE_LENGTH
-                chapter_scene_counts[ch_num] += 1
-
-        if crossfade_overlap > 0:
-            sorted_ch_nums = sorted(chapter_durations.keys())
-            for idx, ch_num in enumerate(sorted_ch_nums):
-                n_scenes = chapter_scene_counts[ch_num]
-                # Intra-chapter overlaps (between scenes within the same chapter)
-                intra = n_scenes - 1
-                # Inter-chapter overlap: every chapter except the first loses one overlap
-                # with the previous chapter's last scene
-                inter = 1 if idx > 0 else 0
-                total_overlaps = intra + inter
-                chapter_durations[ch_num] -= total_overlaps * crossfade_overlap
-                chapter_durations[ch_num] = max(chapter_durations[ch_num], 0.1)
-
-        sorted_chapters = sorted(chapter_durations.keys())
-        last_ch_num = sorted_chapters[-1] if sorted_chapters else None
-        for ch_num in sorted_chapters:
-            chapter_duration = chapter_durations[ch_num]
-            if chapter_duration <= 0:
-                continue
-            if ch_num == last_ch_num and tail_sec > 0:
-                chapter_duration += tail_sec
-            mood = chapter_to_mood.get(ch_num) or outline_mood or "relaxing"
-            mood_dir = BIOPIC_MUSIC_DIR / mood
-            if not mood_dir.exists():
-                mood_dir = BIOPIC_MUSIC_DIR / (BIOPIC_MUSIC_DEFAULT_MOODS[0] if BIOPIC_MUSIC_DEFAULT_MOODS else "relaxing")
-            mp3s = list(mood_dir.glob("*.mp3"))
-            if not mp3s:
-                for fallback in BIOPIC_MUSIC_DEFAULT_MOODS:
-                    if fallback != mood:
-                        fallback_dir = BIOPIC_MUSIC_DIR / fallback
-                        if fallback_dir.exists():
-                            mp3s = list(fallback_dir.glob("*.mp3"))
-                            if mp3s:
-                                mood_dir = fallback_dir
-                                break
-            if not mp3s:
-                print(f"[BIOPIC MUSIC] No MP3s for mood '{mood}' (ch {ch_num}), skipping chapter")
-                continue
-            song_path = random.choice(mp3s)
-            clip = _fit_song_to_duration(song_path, chapter_duration)
-            if clip is not None:
-                segment_clips.append(clip)
-    else:
-        # Legacy: use num_scenes from outline (scene count must match)
-        scene_idx = 0
-        chapter_list = [ch for ch in chapters if ch.get("num_scenes", 0) > 0]
-        for ch_idx, ch in enumerate(chapter_list):
-            num_scenes = ch.get("num_scenes", 0)
-            if num_scenes <= 0:
-                continue
-            chapter_duration = 0.0
-            for i in range(num_scenes):
-                if scene_idx + i < len(scene_audio_clips):
-                    chapter_duration += scene_audio_clips[scene_idx + i].duration + END_SCENE_PAUSE_LENGTH
-            # Subtract crossfade overlaps (same logic as scene-based path)
-            if crossfade_overlap > 0:
-                intra = num_scenes - 1
-                inter = 1 if ch_idx > 0 else 0
-                chapter_duration -= (intra + inter) * crossfade_overlap
-                chapter_duration = max(chapter_duration, 0.1)
-            if ch_idx == len(chapter_list) - 1 and tail_sec > 0:
-                chapter_duration += tail_sec
-
-            mood = (ch.get("music_mood") or "relaxing").strip().lower()
-            mood_dir = BIOPIC_MUSIC_DIR / mood
-            if not mood_dir.exists():
-                mood_dir = BIOPIC_MUSIC_DIR / BIOPIC_MUSIC_DEFAULT_MOODS[0]
-            mp3s = list(mood_dir.glob("*.mp3"))
-            if not mp3s:
-                for fallback in BIOPIC_MUSIC_DEFAULT_MOODS:
-                    if fallback != mood:
-                        fallback_dir = BIOPIC_MUSIC_DIR / fallback
-                        if fallback_dir.exists():
-                            mp3s = list(fallback_dir.glob("*.mp3"))
-                            if mp3s:
-                                mood_dir = fallback_dir
-                                break
-            if not mp3s:
-                print(f"[BIOPIC MUSIC] No MP3s for mood '{mood}', skipping chapter")
-                scene_idx += num_scenes
-                continue
-
-            song_path = random.choice(mp3s)
-            clip = _fit_song_to_duration(song_path, chapter_duration)
-            if clip is not None:
-                segment_clips.append(clip)
-            scene_idx += num_scenes
-
-    if not segment_clips:
-        return None
-
-    # Prepend crossfade seconds of silence to each segment except the first.
-    # FFmpeg acrossfade overlaps the end of seg N with the start of seg N+1, so the next
-    # song starts fading in (crossfade_duration) seconds BEFORE the chapter boundary. By
-    # prepending silence to seg N+1, the crossfade overlaps seg N's end with silence, so
-    # the next song's content starts exactly at the chapter boundary.
-    if len(segment_clips) > 1 and crossfade > 0:
-        fps = getattr(segment_clips[0], "fps", 44100) or 44100
-
-        def _make_silence(t):
-            if np.isscalar(t):
-                return np.array([0.0, 0.0], dtype=np.float32)
-            return np.zeros((len(t), 2), dtype=np.float32)
-
-        for i in range(1, len(segment_clips)):
-            silence = AudioClip(_make_silence, duration=crossfade, fps=fps)
-            segment_clips[i] = concatenate_audioclips([silence, segment_clips[i]])
-
-    # Stitch segments
-    if len(segment_clips) == 1:
-        music = segment_clips[0]
-    else:
-        # Use FFmpeg acrossfade to chain segments
-        temp_dir = tempfile.mkdtemp(prefix="biopic_music_")
-        try:
-            wav_paths = []
-            for i, seg in enumerate(segment_clips):
-                p = Path(temp_dir) / f"seg_{i}.wav"
-                seg.write_audiofile(str(p), logger=None)
-                wav_paths.append(p)
-                seg.close()
-
-            if len(wav_paths) == 2:
-                filter_complex = f"[0][1]acrossfade=d={crossfade}:c1=tri:c2=tri[out]"
-            else:
-                chain = []
-                for i in range(1, len(wav_paths)):
-                    prev = "[0]" if i == 1 else f"[a{i-1}]"
-                    out_label = "[out]" if i == len(wav_paths) - 1 else f"[a{i}]"
-                    chain.append(f"{prev}[{i}]acrossfade=d={crossfade}:c1=tri:c2=tri{out_label}")
-                filter_complex = ";".join(chain)
-
-            out_wav = Path(temp_dir) / "mixed.wav"
-            cmd = ["ffmpeg", "-y"]
-            for p in wav_paths:
-                cmd.extend(["-i", str(p)])
-            cmd.extend(["-filter_complex", filter_complex, "-map", "[out]", str(out_wav)])
-            subprocess.run(cmd, check=True, capture_output=True)
-            music = AudioFileClip(str(out_wav))
-        finally:
-            try:
-                shutil.rmtree(temp_dir, ignore_errors=True)
-            except Exception:
-                pass
-
-    music = apply_volume_to_audioclip(music, 10 ** (vol_db / 20.0))
-    if tail_sec > 0 and fadeout_sec > 0:
-        from moviepy.audio.fx import AudioFadeOut
-        music = music.with_effects([AudioFadeOut(min(fadeout_sec, music.duration))])
-    return music
-
-
-def mix_biopic_background_music(narration_audio: AudioClip, duration: float, metadata: dict | None,
-                                scene_audio_clips: list, scenes: list[dict] | None = None,
-                                music_volume_db: float = None, tail_sec: float = 0.0,
-                                fadeout_sec: float = 0.0,
-                                crossfade_overlap: float = 0.0) -> CompositeAudioClip:
-    """
-    Mix biopic background music under narration.
-    When tail_sec > 0, music extends duration+tail_sec and fades out; narration should include
-    tail_sec of silence so the tail has only music.
-    """
-    music_track = build_biopic_music_track(
-        metadata, scene_audio_clips, duration,
-        scenes=scenes, music_volume_db=music_volume_db,
-        tail_sec=tail_sec, fadeout_sec=fadeout_sec,
-        crossfade_overlap=crossfade_overlap,
-    )
-    if music_track is None:
-        return CompositeAudioClip([narration_audio])
-    return CompositeAudioClip([narration_audio, music_track])
-
-
-def mix_horror_background_audio(narration_audio: AudioFileClip, duration: float, 
-                                scenes: list[dict] = None,
-                                scene_audio_clips: list[AudioFileClip] = None,
-                                room_tone_volume: float = None, 
-                                drone_volume: float = None,
-                                max_drone_volume: float = None,
-                                detail_volume: float = -30.0,
-                                environment: str = None,
-                                env_audio_volume: float = None) -> CompositeAudioClip:
-    """
-    Mix horror background audio layers with narration.
-    
-    Args:
-        narration_audio: The main narration audio clip
-        duration: Total duration in seconds
-        scenes: List of scene dictionaries (optional, for drone transitions)
-        scene_audio_clips: List of audio clips for each scene (optional, for calculating scene durations)
-        room_tone_volume: Room tone volume in dB (default: from ROOM_SOUND_BASE env var or -35)
-        drone_volume: Base drone volume in dB (default: from DRONE_BASE env var or -20)
-        max_drone_volume: Maximum drone volume in dB (default: from DRONE_MAX env var or -15, used to clip swell)
-        detail_volume: Detail sounds volume in dB (default: -30)
-        environment: Environment type for ambient audio: "blizzard", "snow", "forest", "rain", or "indoors" (optional)
-        env_audio_volume: Environment audio volume in dB (default: from ENV_AUDIO_VOLUME env var or -28)
-    
-    Returns:
-        CompositeAudioClip with all layers mixed
-    """
-    # Use environment variable defaults if not provided
-    if room_tone_volume is None:
-        room_tone_volume = ROOM_SOUND_BASE_VOLUME_DB
-    if drone_volume is None:
-        drone_volume = DRONE_BASE_VOLUME_DB
-    if max_drone_volume is None:
-        max_drone_volume = DRONE_MAX_VOLUME_DB
-    if env_audio_volume is None:
-        env_audio_volume = ENV_AUDIO_VOLUME_DB
-    
-    print(f"[HORROR AUDIO] Generating background layers (duration: {duration:.2f}s)...")
-    
-    # Generate all background layers
-    print("[HORROR AUDIO] Generating room tone...")
-    room_tone = generate_room_tone(duration)
-    
-    # Generate drone with transitions if scenes are provided
-    if scenes and scene_audio_clips and len(scenes) == len(scene_audio_clips):
-        print("[HORROR AUDIO] Generating low-frequency drone with scene-based transitions...")
-        drone = generate_drone_with_scene_transitions(scenes, scene_audio_clips, 
-                                                     base_drone_volume_db=drone_volume,
-                                                     max_drone_volume_db=max_drone_volume)
-    else:
-        print("[HORROR AUDIO] Generating low-frequency drone (constant volume)...")
-        drone = generate_low_frequency_drone(duration, frequency=50.0)
-    
-    print("[HORROR AUDIO] Generating detail sounds...")
-    detail_sounds = generate_detail_sounds(duration, sound_type="random")
-    
-    # Load environment audio if specified
-    env_audio = None
-    env_audio_original_path = None  # Store original path for FFmpeg trimming if needed later
-    if environment:
-        env_audio_path = None
-        env_map = {
-            "blizzard": ENV_BLIZZARD_AUDIO,
-            "snow": ENV_SNOW_AUDIO,
-            "forest": ENV_FOREST_AUDIO,
-            "rain": ENV_RAIN_AUDIO,
-            "indoors": ENV_INDOORS_AUDIO,
-            "jungle": ENV_JUNGLE_AUDIO
-        }
-        env_audio_path = env_map.get(environment.lower())
-        env_audio_original_path = env_audio_path  # Store for later use
-        
-        if env_audio_path and Path(env_audio_path).exists():
-            try:
-                print(f"[HORROR AUDIO] Loading environment audio: {environment} from {env_audio_path}")
-                # For .wav files, convert to 16-bit first and load only the converted file. This avoids
-                # ever calling AudioFileClip on 24-bit or problematic WAVs, which can leave MoviePy's
-                # FFMPEG_AudioReader in a broken state and trigger AttributeError in __del__ (no 'proc').
-                env_path_str = str(env_audio_path)
-                if env_path_str.lower().endswith(".wav"):
-                    temp_wav = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
-                    temp_wav_path = temp_wav.name
-                    temp_wav.close()
-                    subprocess.run(
-                        [
-                            "ffmpeg", "-y", "-i", env_path_str,
-                            "-acodec", "pcm_s16le", "-ar", "44100", "-ac", "2",
-                            temp_wav_path,
-                        ],
-                        check=True,
-                        capture_output=True,
-                    )
-                    env_audio = AudioFileClip(temp_wav_path)
-                else:
-                    try:
-                        env_audio = AudioFileClip(env_path_str)
-                    except Exception as load_err:
-                        err_str = str(load_err).lower()
-                        if "output" in err_str or "ffmpeg" in err_str or "passing" in err_str or "proc" in err_str:
-                            print(f"[HORROR AUDIO] Direct load failed, converting to 16-bit WAV for compatibility...")
-                            temp_wav = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
-                            temp_wav_path = temp_wav.name
-                            temp_wav.close()
-                            subprocess.run(
-                                [
-                                    "ffmpeg", "-y", "-i", env_path_str,
-                                    "-acodec", "pcm_s16le", "-ar", "44100", "-ac", "2",
-                                    temp_wav_path,
-                                ],
-                                check=True,
-                                capture_output=True,
-                            )
-                            env_audio = AudioFileClip(temp_wav_path)
-                        else:
-                            raise
-                
-                # Loop the environment audio to match duration
-                # NOTE: This initial loop may not work reliably with MoviePy concatenation
-                # We'll check again after volume/stereo processing and use FFmpeg if needed
-                if env_audio.duration < duration:
-                    single_clip_duration = env_audio.duration  # Store before concatenation (avoid loading original again in fallback)
-                    print(f"[HORROR AUDIO] Initial loop attempt: {env_audio.duration:.3f}s < {duration:.3f}s")
-                    loops_needed = int(np.ceil(duration / env_audio.duration))
-                    print(f"[HORROR AUDIO] Attempting to loop {loops_needed} times using MoviePy concatenation")
-                    env_audio_clips = [env_audio] * loops_needed
-                    env_audio = concatenate_audioclips(env_audio_clips)
-                    print(f"[HORROR AUDIO] After initial loop: {env_audio.duration:.3f}s (target: {duration:.3f}s)")
-                    # After concatenation, try subclip (may not work on CompositeAudioClip)
-                    if env_audio.duration > duration:
-                        try:
-                            env_audio = env_audio.subclip(0, duration)
-                        except (AttributeError, TypeError):
-                            # If subclip doesn't work on CompositeAudioClip, write to file and trim with FFmpeg
-                            try:
-                                temp_audio_file = tempfile.NamedTemporaryFile(suffix='.wav', delete=False)
-                                temp_audio_path = temp_audio_file.name
-                                temp_audio_file.close()
-                                
-                                # Write the concatenated audio to temp file
-                                try:
-                                    env_audio.write_audiofile(temp_audio_path)
-                                    # Now trim the written file to exact duration
-                                    temp_trimmed_file = tempfile.NamedTemporaryFile(suffix='.wav', delete=False)
-                                    temp_trimmed_path = temp_trimmed_file.name
-                                    temp_trimmed_file.close()
-                                    
-                                    result = subprocess.run([
-                                        'ffmpeg', '-y', '-i', temp_audio_path,
-                                        '-t', str(duration),
-                                        '-acodec', 'copy',
-                                        temp_trimmed_path
-                                    ], check=True, capture_output=True, text=True)
-                                    
-                                    try:
-                                        env_audio.close()
-                                    except:
-                                        pass
-                                    env_audio = AudioFileClip(temp_trimmed_path)
-                                except Exception as write_error:
-                                    # If write_audiofile fails, use FFmpeg on original file without loading it (avoids .wav FFMPEG_AudioReader __del__ bug)
-                                    try:
-                                        env_audio.close()
-                                    except:
-                                        pass
-                                    loops_needed = int(np.ceil(duration / single_clip_duration))
-                                    result = subprocess.run([
-                                        'ffmpeg', '-y',
-                                        '-i', str(env_audio_path),
-                                        '-filter_complex', f'aloop=loop={loops_needed - 1}:size=2e+09',
-                                        '-t', str(duration),
-                                        '-acodec', 'pcm_s16le',
-                                        temp_audio_path
-                                    ], check=True, capture_output=True, text=True)
-                                    env_audio = AudioFileClip(temp_audio_path)
-                            except Exception as e:
-                                print(f"[HORROR AUDIO] Warning: Could not trim concatenated environment audio: {e}")
-                                print(f"[HORROR AUDIO] Using full audio duration ({env_audio.duration:.2f}s) instead of requested {duration:.2f}s")
-                elif env_audio.duration > duration:
-                    # For AudioFileClip, try subclip first, but if it doesn't work, use FFmpeg directly
-                    try:
-                        env_audio = env_audio.subclip(0, duration)
-                    except (AttributeError, TypeError):
-                        # If subclip doesn't work, use FFmpeg directly to trim the file
-                        # This avoids recursion issues with get_frame wrappers
-                        try:
-                            temp_audio_file = tempfile.NamedTemporaryFile(suffix='.wav', delete=False)
-                            temp_audio_path = temp_audio_file.name
-                            temp_audio_file.close()
-                            
-                            # Use FFmpeg to trim the audio file (decode to PCM for .wav; -acodec copy fails for OGG/MP3 etc.)
-                            result = subprocess.run([
-                                'ffmpeg', '-y', '-i', str(env_audio_path),
-                                '-t', str(duration),
-                                '-acodec', 'pcm_s16le',
-                                '-ar', '44100', '-ac', '2',
-                                temp_audio_path
-                            ], check=True, capture_output=True, text=True)
-                            
-                            # Close the original clip and reload the trimmed version
-                            try:
-                                env_audio.close()
-                            except:
-                                pass
-                            env_audio = AudioFileClip(temp_audio_path)
-                            
-                            # Note: Temp file will be cleaned up when clip is closed or process ends
-                        except (subprocess.CalledProcessError, FileNotFoundError, Exception) as e:
-                            print(f"[HORROR AUDIO] Warning: Could not trim environment audio using FFmpeg: {e}")
-                            print(f"[HORROR AUDIO] Using full audio duration ({env_audio.duration:.2f}s) instead of requested {duration:.2f}s")
-                            # Will be handled later in the duration matching section
-                
-                print(f"[HORROR AUDIO] Environment audio loaded: {env_audio.duration:.2f}s")
-            except Exception as e:
-                print(f"[HORROR AUDIO] Warning: Failed to load environment audio '{env_audio_path}': {e}")
-                env_audio = None
-        elif env_audio_path:
-            print(f"[HORROR AUDIO] Warning: Environment audio file not found: {env_audio_path}")
-        else:
-            print(f"[HORROR AUDIO] No audio file path configured for environment: {environment}")
-    
-    # Convert dB to linear volume multiplier
-    def db_to_linear(db):
-        return 10 ** (db / 20.0)
-    
-    # Apply volume adjustments
-    room_tone = apply_volume_to_audioclip(room_tone, db_to_linear(room_tone_volume))
-    # Drone volume is already applied in generate_drone_with_scene_transitions if scenes are provided
-    if not (scenes and scene_audio_clips and len(scenes) == len(scene_audio_clips)):
-        drone = apply_volume_to_audioclip(drone, db_to_linear(drone_volume))
-    detail_sounds = apply_volume_to_audioclip(detail_sounds, db_to_linear(detail_volume))
-    
-    # Apply volume to environment audio if loaded
-    if env_audio:
-        env_audio = apply_volume_to_audioclip(env_audio, db_to_linear(env_audio_volume))
-    
-    # Ensure narration audio matches duration - NEVER trim narration, it's the source of truth
-    # If narration is longer than expected duration, use narration duration as the actual duration
-    if narration_audio.duration < duration:
-        # Extend narration with silence if needed
-        silence_duration = duration - narration_audio.duration
-        def make_silence(t):
-            # Handle both scalar and array inputs
-            if np.isscalar(t):
-                return 0.0
-            else:
-                return np.zeros_like(t)
-        silence = AudioClip(make_silence, duration=silence_duration, fps=narration_audio.fps)
-        narration_audio = concatenate_audioclips([narration_audio, silence])
-    elif narration_audio.duration > duration:
-        # Narration is longer than expected - use narration duration as the actual duration
-        # This means the video duration calculation was slightly off, but narration is correct
-        # We must NEVER trim narration - it's the source of truth
-        narration_duration = narration_audio.duration
-        print(f"[HORROR AUDIO] Narration audio ({narration_duration:.3f}s) is longer than expected duration ({duration:.3f}s)")
-        print(f"[HORROR AUDIO] Using narration duration as actual duration - extending other audio layers to match")
-        
-        # Extend all other audio layers to match narration duration
-        extension_needed = narration_duration - duration
-        
-        # Extend room_tone
-        if room_tone.duration < narration_duration:
-            silence_duration = narration_duration - room_tone.duration
-            def make_silence(t):
-                if np.isscalar(t):
-                    return np.array([0.0, 0.0])
-                else:
-                    return np.zeros((len(t), 2))
-            silence = AudioClip(make_silence, duration=silence_duration, fps=room_tone.fps)
-            room_tone = concatenate_audioclips([room_tone, silence])
-            print(f"[HORROR AUDIO] Extended room_tone from {duration:.3f}s to {narration_duration:.3f}s")
-        
-        # Extend drone
-        if drone.duration < narration_duration:
-            silence_duration = narration_duration - drone.duration
-            def make_silence(t):
-                if np.isscalar(t):
-                    return np.array([0.0, 0.0])
-                else:
-                    return np.zeros((len(t), 2))
-            silence = AudioClip(make_silence, duration=silence_duration, fps=drone.fps)
-            drone = concatenate_audioclips([drone, silence])
-            print(f"[HORROR AUDIO] Extended drone from {duration:.3f}s to {narration_duration:.3f}s")
-        
-        # Extend detail_sounds
-        if detail_sounds and detail_sounds.duration < narration_duration:
-            silence_duration = narration_duration - detail_sounds.duration
-            def make_silence(t):
-                if np.isscalar(t):
-                    return np.array([0.0, 0.0])
-                else:
-                    return np.zeros((len(t), 2))
-            silence = AudioClip(make_silence, duration=silence_duration, fps=detail_sounds.fps)
-            detail_sounds = concatenate_audioclips([detail_sounds, silence])
-            print(f"[HORROR AUDIO] Extended detail_sounds from {duration:.3f}s to {narration_duration:.3f}s")
-        
-        # Update duration to narration duration (will be used for env_audio check below)
-        duration = narration_duration
-    
-    # All generated clips (room_tone, drone, detail_sounds) are now stereo (2 channels)
-    # But narration_audio might be mono, so ensure it's stereo if needed
-    def ensure_stereo(clip):
-        """Ensure audio clip is stereo (2 channels) - safety check for narration_audio."""
-        try:
-            sample = clip.get_frame(0.0)
-            # Check if it's mono (scalar or single channel)
-            is_mono = (np.isscalar(sample) or 
-                      (hasattr(sample, 'shape') and (len(sample.shape) == 0 or 
-                       (len(sample.shape) == 1 and sample.shape[0] != 2))))
-            if is_mono:
-                # Convert mono to stereo
-                def stereo_func(t):
-                    mono = clip.get_frame(t)
-                    if np.isscalar(mono):
-                        return np.array([mono, mono])
-                    elif mono.ndim == 0:
-                        return np.array([mono, mono])
-                    elif mono.ndim == 1:
-                        if len(mono) == 1:
-                            return np.array([mono[0], mono[0]])
-                        else:
-                            # Already stereo or multi-channel
-                            return mono
-                    else:
-                        # Multi-dimensional - assume compatible
-                        return mono
-                return AudioClip(stereo_func, duration=clip.duration, fps=clip.fps)
-        except:
-            # If we can't determine, assume it's already compatible
-            pass
-        return clip
-    
-    # Ensure narration_audio is stereo (generated clips are already stereo)
-    narration_audio = ensure_stereo(narration_audio)
-    
-    # Ensure environment audio is stereo and matches duration
-    if env_audio:
-        env_audio = ensure_stereo(env_audio)
-        # Check duration after stereo conversion (duration might have changed slightly)
-        # CRITICAL: Always check if we need to loop, even if it was looped earlier
-        # The initial loop might not have worked, or duration might have changed
-        print(f"[HORROR AUDIO] Environment audio duration check: {env_audio.duration:.3f}s vs target {duration:.3f}s")
-        if env_audio.duration < duration:  # No tolerance - if shorter, we MUST loop
-            print(f"[HORROR AUDIO] Environment audio is shorter than target duration - looping required")
-            # Loop the environment audio to match duration (don't extend with silence)
-            # Use FFmpeg to loop from original file for better reliability
-            if env_audio_original_path and Path(env_audio_original_path).exists():
-                try:
-                    # Use current clip duration (do not load original again - for .wav that triggers FFMPEG_AudioReader __del__ bug)
-                    original_duration = env_audio.duration
-                    loops_needed = int(np.ceil(duration / original_duration))
-                    print(f"[HORROR AUDIO] Looping environment audio: {loops_needed} loops needed (original: {original_duration:.2f}s, target: {duration:.2f}s)")
-                    
-                    # Use FFmpeg aloop filter to loop audio (more reliable than -stream_loop for audio files)
-                    temp_audio_file = tempfile.NamedTemporaryFile(suffix='.wav', delete=False)
-                    temp_audio_path = temp_audio_file.name
-                    temp_audio_file.close()
-                    
-                    # aloop filter: loop=LOOPS means the input will play (LOOPS+1) times total
-                    # So if we need 5 loops total, we use loop=4
-                    # size=2e+09 sets a large buffer size to ensure the entire file fits
-                    result = subprocess.run([
-                        'ffmpeg', '-y',
-                        '-i', str(env_audio_original_path),
-                        '-filter_complex', f'aloop=loop={loops_needed - 1}:size=2e+09',
-                        '-t', str(duration),
-                        '-acodec', 'pcm_s16le',  # Use PCM for better compatibility
-                        temp_audio_path
-                    ], check=True, capture_output=True, text=True)
-                    
-                    # Close old clip and load looped version
-                    try:
-                        env_audio.close()
-                    except:
-                        pass
-                    
-                    env_audio = AudioFileClip(temp_audio_path)
-                    env_audio = ensure_stereo(env_audio)
-                    env_audio = apply_volume_to_audioclip(env_audio, db_to_linear(env_audio_volume))
-                    # Verify the looped audio has the correct duration (within 0.1s tolerance)
-                    if abs(env_audio.duration - duration) > 0.1:
-                        print(f"[HORROR AUDIO] Warning: Looped audio duration ({env_audio.duration:.2f}s) doesn't match target ({duration:.2f}s)")
-                        # If duration is still too short, we need to loop again or extend
-                        if env_audio.duration < duration:
-                            print(f"[HORROR AUDIO] Audio is still too short, attempting additional loop...")
-                            # This shouldn't happen with aloop filter, but handle it gracefully
-                    print(f"[HORROR AUDIO] Environment audio looped successfully: {env_audio.duration:.2f}s (target: {duration:.2f}s)")
-                except Exception as e:
-                    print(f"[HORROR AUDIO] Warning: Could not loop environment audio with FFmpeg: {e}")
-                    print(f"[HORROR AUDIO] Attempting MoviePy concatenation fallback...")
-                    # Fallback to MoviePy concatenation
-                    try:
-                        loops_needed = int(np.ceil(duration / env_audio.duration))
-                        env_audio_clips = [env_audio] * loops_needed
-                        env_audio = concatenate_audioclips(env_audio_clips)
-                        # Trim to exact duration if needed
-                        if env_audio.duration > duration + 0.1:
-                            try:
-                                env_audio = env_audio.subclip(0, duration)
-                            except (AttributeError, TypeError):
-                                # If subclip fails, write and trim with FFmpeg
-                                temp_audio_file = tempfile.NamedTemporaryFile(suffix='.wav', delete=False)
-                                temp_audio_path = temp_audio_file.name
-                                temp_audio_file.close()
-                                
-                                try:
-                                    env_audio.write_audiofile(temp_audio_path)
-                                    temp_trimmed_file = tempfile.NamedTemporaryFile(suffix='.wav', delete=False)
-                                    temp_trimmed_path = temp_trimmed_file.name
-                                    temp_trimmed_file.close()
-                                    
-                                    result = subprocess.run([
-                                        'ffmpeg', '-y', '-i', temp_audio_path,
-                                        '-t', str(duration),
-                                        '-acodec', 'copy',
-                                        temp_trimmed_path
-                                    ], check=True, capture_output=True, text=True)
-                                    
-                                    try:
-                                        env_audio.close()
-                                    except:
-                                        pass
-                                    env_audio = AudioFileClip(temp_trimmed_path)
-                                    env_audio = ensure_stereo(env_audio)
-                                    env_audio = apply_volume_to_audioclip(env_audio, db_to_linear(env_audio_volume))
-                                except Exception as write_error:
-                                    print(f"[HORROR AUDIO] Warning: Could not trim looped audio: {write_error}")
-                    except Exception as fallback_error:
-                        print(f"[HORROR AUDIO] Warning: MoviePy concatenation fallback also failed: {fallback_error}")
-            else:
-                print(f"[HORROR AUDIO] Warning: Could not loop environment audio (original path not available), using current duration")
-        elif env_audio.duration > duration:
-            # Try subclip first (should work on processed clips from concatenation/ensure_stereo)
-            try:
-                env_audio = env_audio.subclip(0, duration)
-            except (AttributeError, TypeError):
-                # If subclip doesn't work, try FFmpeg using the original file path we stored
-                try:
-                    if env_audio_original_path and Path(env_audio_original_path).exists():
-                        temp_audio_file = tempfile.NamedTemporaryFile(suffix='.wav', delete=False)
-                        temp_audio_path = temp_audio_file.name
-                        temp_audio_file.close()
-                        
-                        result = subprocess.run([
-                            'ffmpeg', '-y', '-i', str(env_audio_original_path),
-                            '-t', str(duration),
-                            '-acodec', 'pcm_s16le',
-                            '-ar', '44100', '-ac', '2',
-                            temp_audio_path
-                        ], check=True, capture_output=True, text=True)
-                        
-                        try:
-                            env_audio.close()
-                        except:
-                            pass
-                        env_audio = AudioFileClip(temp_audio_path)
-                        # Re-apply stereo conversion and volume after reloading
-                        env_audio = ensure_stereo(env_audio)
-                        env_audio = apply_volume_to_audioclip(env_audio, db_to_linear(env_audio_volume))
-                    else:
-                        print(f"[HORROR AUDIO] Warning: Could not trim environment audio (original path not available), using full duration")
-                except Exception as e:
-                    print(f"[HORROR AUDIO] Warning: Could not trim environment audio: {e}, using full duration")
-    
-    # Ensure drone duration matches total duration (use narration duration as source of truth)
-    if drone.duration < duration:
-        # Extend drone with silence (maintain last volume level)
-        silence_duration = duration - drone.duration
-        last_volume = drone.get_frame(drone.duration - 0.1) if drone.duration > 0.1 else np.array([0.0, 0.0])
-        # Get the average volume from the last sample
-        if hasattr(last_volume, '__len__') and len(last_volume) > 0:
-            avg_volume = np.mean(np.abs(last_volume))
-        else:
-            avg_volume = 0.0
-        
-        def make_silence(t):
-            # Return silence (or maintain last volume if needed)
-            if np.isscalar(t):
-                return np.array([0.0, 0.0])
-            else:
-                return np.zeros((len(t), 2))
-        silence = AudioClip(make_silence, duration=silence_duration, fps=drone.fps)
-        drone = concatenate_audioclips([drone, silence])
-    elif drone.duration > duration:
-        # Trim drone to match duration (narration is source of truth, so drone should match it)
-        try:
-            drone = drone.subclip(0, duration)
-        except (AttributeError, TypeError):
-            # If subclip doesn't work on AudioClip, write to temp file and trim with FFmpeg
-            try:
-                temp_audio_file = tempfile.NamedTemporaryFile(suffix='.wav', delete=False)
-                temp_audio_path = temp_audio_file.name
-                temp_audio_file.close()
-                
-                # Write the AudioClip to a temporary file
-                try:
-                    drone.write_audiofile(temp_audio_path)
-                    # Now trim the written file to exact duration
-                    temp_trimmed_file = tempfile.NamedTemporaryFile(suffix='.wav', delete=False)
-                    temp_trimmed_path = temp_trimmed_file.name
-                    temp_trimmed_file.close()
-                    
-                    result = subprocess.run([
-                        'ffmpeg', '-y', '-i', temp_audio_path,
-                        '-t', str(duration),
-                        '-acodec', 'copy',
-                        temp_trimmed_path
-                    ], check=True, capture_output=True, text=True)
-                    
-                    try:
-                        drone.close()
-                    except:
-                        pass
-                    drone = AudioFileClip(temp_trimmed_path)
-                except Exception as write_error:
-                    print(f"[HORROR AUDIO] Warning: Could not write drone audio to file for trimming: {write_error}")
-                    print(f"[HORROR AUDIO] Using full drone duration ({drone.duration:.2f}s) instead of requested {duration:.2f}s")
-            except Exception as e:
-                print(f"[HORROR AUDIO] Warning: Could not trim drone audio: {e}")
-                print(f"[HORROR AUDIO] Using full drone duration ({drone.duration:.2f}s) instead of requested {duration:.2f}s")
-    
-    # Mix all layers
-    print("[HORROR AUDIO] Mixing all audio layers...")
-    
-    # Debug: Check audio levels before mixing (sample multiple points to avoid zero crossings)
-    try:
-        # Sample multiple points across a short window for better RMS estimation
-        # This avoids issues with sine waves where single-point sampling can hit zero crossings
-        sample_window = 0.1  # Sample 0.1 seconds of audio
-        mid_start = duration * 0.3
-        mid_end = duration * 0.7
-        num_samples = max(10, int(sample_window * 44100))  # At least 10 samples
-        sample_times = np.linspace(mid_start, mid_end, num_samples)
-        
-        def calc_rms_from_samples(clip, times):
-            """Calculate RMS from multiple sample points."""
-            samples = []
-            for t in times:
-                if 0 <= t < clip.duration:
-                    try:
-                        sample = clip.get_frame(t)
-                        if np.isscalar(sample):
-                            samples.append(abs(sample))
-                        else:
-                            sample_array = np.asarray(sample)
-                            samples.extend(np.abs(sample_array).flatten())
-                    except:
-                        pass
-            if len(samples) == 0:
-                return 0.0
-            return np.sqrt(np.mean(np.array(samples) ** 2))
-        
-        room_rms = calc_rms_from_samples(room_tone, sample_times)
-        drone_rms = calc_rms_from_samples(drone, sample_times)
-        narration_rms = calc_rms_from_samples(narration_audio, sample_times)
-        
-        rms_msg = f"[HORROR AUDIO] Audio levels (RMS from {len(sample_times)} samples): room_tone={room_rms:.6f}, drone={drone_rms:.6f}, narration={narration_rms:.6f}"
-        if env_audio:
-            env_rms = calc_rms_from_samples(env_audio, sample_times)
-            rms_msg += f", environment={env_rms:.6f}"
-        print(rms_msg)
-    except Exception as e:
-        print(f"[HORROR AUDIO] Warning: Could not check audio levels: {e}")
-    
-    # Build list of audio clips to mix
-    audio_clips = [
-        narration_audio,
-        room_tone,
-        drone,
-        # detail_sounds
-    ]
-    
-    # Add environment audio if loaded
-    if env_audio:
-        audio_clips.append(env_audio)
-        print(f"[HORROR AUDIO] Environment audio added to mix: {environment}")
-    
-    mixed_audio = CompositeAudioClip(audio_clips)
-    
-    return mixed_audio
-
-
-def retry_call(name: str, func, *args, max_attempts: int = 3, base_delay: float = 2.0, **kwargs):
-    """
-    Generic retry wrapper for network/API calls.
-    Retries on any Exception up to max_attempts, with exponential backoff.
-    """
-    attempt = 1
-    while True:
-        try:
-            return func(*args, **kwargs)
-        except Exception as e:
-            if attempt >= max_attempts:
-                print(f"[RETRY][{name}] Failed after {attempt} attempts: {e}")
-                raise
-
-            delay = base_delay * (2 ** (attempt - 1)) * (0.8 + 0.4 * random.random())
-            print(f"[RETRY][{name}] Attempt {attempt} failed: {e}. Retrying in {delay:.1f} seconds...")
-            time.sleep(delay)
-            attempt += 1
 
 
 def generate_image_for_scene_with_retry(scene: dict, prev_scene: dict | None, global_block_override: str | None = None, story_context: str | None = None) -> Path:
@@ -2646,18 +862,24 @@ def generate_image_for_scene_with_retry(scene: dict, prev_scene: dict | None, gl
 
 
 def generate_audio_for_scene_with_retry(scene: dict) -> Path:
-    return retry_call(
-        "audio",
-        generate_audio_for_scene,
-        scene,
-        max_attempts=3,
-        base_delay=2.0,
-    )
+    """Generate audio with retry logic for network/API failures."""
+    attempt = 1
+    max_attempts = 3
+    base_delay = 2.0
+    while True:
+        try:
+            return generate_audio_for_scene(scene)
+        except Exception as e:
+            if attempt >= max_attempts:
+                print(f"[RETRY][audio] Scene {scene.get('id')}: Failed after {attempt} attempts: {e}")
+                raise
+            delay = base_delay * (2 ** (attempt - 1)) * (0.8 + 0.4 * random.random())
+            print(f"[RETRY][audio] Scene {scene.get('id')}: Attempt {attempt} failed: {e}. Retrying in {delay:.1f} seconds...")
+            time.sleep(delay)
+            attempt += 1
 
 
 def build_video(scenes_path: str, out_video_path: str | None = None, save_assets: bool = False, is_short: bool = False, scene_id: int | None = None, audio_only: bool = False,
-                is_horror: bool = False, horror_bg_enabled: bool = True, room_tone_volume: float = None, 
-                drone_volume: float = None, detail_volume: float = -30.0,
                 biopic_music_enabled: bool = True, biopic_music_volume: float = None,
                 motion: bool = False):
     """
@@ -2672,21 +894,16 @@ def build_video(scenes_path: str, out_video_path: str | None = None, save_assets
                      If False (default), use temp files that are cleaned up.
         is_short: If True, use vertical 9:16 format for YouTube Shorts.
                   If False (default), use landscape 16:9 format.
-        horror_bg_enabled: If True, add horror background audio for horror videos (default: True)
-        room_tone_volume: Room tone volume in dB (default: from ROOM_SOUND_BASE env var or -35)
-        drone_volume: Drone volume in dB (default: from DRONE_BASE env var or -20)
-        detail_volume: Detail sounds volume in dB (default: -30)
     """
     config.save_assets = save_assets
     config.is_vertical = is_short
     config.biopic_music_enabled = biopic_music_enabled
     config.biopic_music_volume = biopic_music_volume
 
-    # Set which narration instructions to use for TTS based on horror mode (--horror)
     global NARRATION_INSTRUCTIONS_FOR_TTS
-    NARRATION_INSTRUCTIONS_FOR_TTS = (HORROR_NARRATION_INSTRUCTIONS if is_horror else BIOPIC_NARRATION_INSTRUCTIONS) or ""
+    NARRATION_INSTRUCTIONS_FOR_TTS = BIOPIC_NARRATION_INSTRUCTIONS or ""
     if NARRATION_INSTRUCTIONS_FOR_TTS and (GOOGLE_VOICE_TYPE == "gemini" or TTS_PROVIDER == "openai"):
-        print(f"[TTS] Using {'horror' if is_horror else 'biopic'} narration instructions from env")
+        print(f"[TTS] Using biopic narration instructions from env")
 
     if config.is_vertical:
         print(f"[FORMAT] Vertical 9:16 (YouTube Short)")
@@ -2713,21 +930,13 @@ def build_video(scenes_path: str, out_video_path: str | None = None, save_assets
             # Relative path but not in the right directory, move it
             out_video_path = str(output_dir / out_path.name)
     
-    # Use environment variable defaults if not provided
-    if room_tone_volume is None:
-        room_tone_volume = ROOM_SOUND_BASE_VOLUME_DB
-    if drone_volume is None:
-        drone_volume = DRONE_BASE_VOLUME_DB
-    
     # Set up temp directory if not saving assets
     if not config.save_assets:
         config.temp_dir = tempfile.mkdtemp(prefix="video_build_")
         print(f"[TEMP] Using temporary directory: {config.temp_dir}")
     
     try:
-        _build_video_impl(scenes_path, out_video_path, scene_id=scene_id, audio_only=audio_only,
-                          is_horror=is_horror, horror_bg_enabled=horror_bg_enabled, room_tone_volume=room_tone_volume,
-                          drone_volume=drone_volume, detail_volume=detail_volume, motion=motion)
+        _build_video_impl(scenes_path, out_video_path, scene_id=scene_id, audio_only=audio_only, motion=motion)
     finally:
         # Clean up temp directory
         if not config.save_assets and config.temp_dir and os.path.exists(config.temp_dir):
@@ -2749,29 +958,9 @@ def build_video(scenes_path: str, out_video_path: str | None = None, save_assets
                 print(f"[WARNING] Error cleaning up temp directory {config.temp_dir}: {e}")
 
 
-def _build_video_impl(scenes_path: str, out_video_path: str | None = None, scene_id: int | None = None, audio_only: bool = False,
-                     is_horror: bool = False, horror_bg_enabled: bool = True, room_tone_volume: float = None, 
-                     drone_volume: float = None, detail_volume: float = -30.0, motion: bool = False):
+def _build_video_impl(scenes_path: str, out_video_path: str | None = None, scene_id: int | None = None, audio_only: bool = False, motion: bool = False):
     """Internal implementation of build_video."""
-    # Use environment variable defaults if not provided
-    if room_tone_volume is None:
-        room_tone_volume = ROOM_SOUND_BASE_VOLUME_DB
-    if drone_volume is None:
-        drone_volume = DRONE_BASE_VOLUME_DB
-    
     scenes, metadata = load_scenes(scenes_path)
-    
-    # Use the is_horror flag passed from command line
-    if is_horror:
-        print("[HORROR] Horror video mode enabled")
-    
-    # Horror disclaimer: first scene (fixed image + env/room noise, no narration)
-    disclaimer_image_path = None
-    disclaimer_duration = None
-    if is_horror:
-        disclaimer_image_path = get_horror_disclaimer_image_path(config.is_vertical)
-        if disclaimer_image_path is not None:
-            print(f"[HORROR] Disclaimer: using {disclaimer_image_path.name} as first scene ({HORROR_DISCLAIMER_DURATION}s)")
     
     # If scene_id is specified, filter to only that scene
     test_mode_prev_scene = None
@@ -2790,26 +979,14 @@ def _build_video_impl(scenes_path: str, out_video_path: str | None = None, scene
     
     num_scenes = len(scenes)
     
-    # Extract global_block from metadata if available
+    # Extract global_block and story_context from metadata if available
     global_block = None
     if metadata and "global_block" in metadata:
         global_block = metadata["global_block"]
         print(f"[METADATA] Using global_block from script metadata")
     else:
         print(f"[METADATA] Using default global_block")
-    
-    # Story context (creature/threat) so scene images show correct threat (e.g. bear paws not human feet)
-    story_context = None
-    if metadata:
-        concept = (metadata.get("story_concept") or "").strip()
-        script_type = (metadata.get("script_type") or "").strip()
-        if concept and script_type and "horror" in script_type.lower():
-            story_context = (
-                f"The threat or creature in this story: {concept}. "
-                "When showing the threat (footsteps, figures, shadows, shapes, predator): depict it according to this concept—e.g. for a bear attack show bear paws and bear legs, not human. "
-                "Any movement or presence outside the protagonist's view must be the creature, not human."
-            )
-            print(f"[METADATA] Using story_context for images: {concept}")
+    story_context = metadata.get("story_context") if metadata else None
     
     # Previous-scene references for image continuity
     if test_mode_prev_scene is not None:
@@ -2927,7 +1104,12 @@ def _build_video_impl(scenes_path: str, out_video_path: str | None = None, scene
         scene_audio = scene_audio_clips[i]
         print(f"[CLIP {i}] Scene {scene['id']}: {scene_audio.duration:.3f}s")
         if use_kenburns:
-            return i, make_motion_clip_with_audio(img_path, scene_audio, pattern=scene_patterns[i])
+            intensity = (scene.get("kenburns_intensity") or "").strip().lower()
+            return i, make_motion_clip_with_audio(
+                img_path, scene_audio,
+                pattern=scene_patterns[i],
+                intensity=intensity if intensity in KENBURNS_INTENSITY_VALUES else None,
+            )
         return i, make_static_clip_with_audio(img_path, scene_audio)
     
     clips = [None] * num_scenes
@@ -2938,44 +1120,74 @@ def _build_video_impl(scenes_path: str, out_video_path: str | None = None, scene
             i, clip = future.result()
             clips[i] = clip
 
-    # Prepend horror disclaimer clip (fixed image + placeholder silence; env/room mixed later for full video so env is continuous)
-    if disclaimer_image_path is not None:
-        def make_silence(t):
-            if np.isscalar(t):
-                return np.array([0.0, 0.0])
-            return np.zeros((len(t), 2))
-        silence_3s = AudioClip(make_silence, duration=HORROR_DISCLAIMER_DURATION, fps=44100)
-        disclaimer_clip = make_static_clip_with_audio(disclaimer_image_path, silence_3s)
-        disclaimer_duration = disclaimer_clip.duration
-        clips = [disclaimer_clip] + list(clips)
-        print(f"[HORROR] Disclaimer clip added: {disclaimer_duration:.2f}s")
+    # Concatenate clips with per-scene transitions from transition_to_next and transition_speed
+    # Build (trans_type, duration) for each pair: clip i -> clip i+1
+    has_disclaimer = False
+    num_story_clips = len(scenes)
+    transition_info = []  # list of (trans_type, duration) for each pair (i, i+1)
+    for pair_idx in range(len(clips) - 1):
+        if has_disclaimer and pair_idx == 0:
+            trans, speed = "crossfade", "medium"
+        else:
+            scene_idx = pair_idx - 1 if has_disclaimer else pair_idx
+            scene = scenes[scene_idx]
+            trans, speed = normalize_transition(
+                scene.get("transition_to_next"),
+                scene.get("transition_speed"),
+            )
+        dur = get_transition_duration(trans, speed)
+        transition_info.append((trans, dur))
 
-    # Concatenate clips — optionally with crossfade dissolve transitions
-    crossfade = CROSSFADE_DURATION if motion else 0
-    print(f"\n[VIDEO] Concatenating clips...{f' (crossfade={crossfade}s)' if crossfade > 0 else ''}")
+    transition_durations = [d for _, d in transition_info]
+    any_transition = any(d > 0 for d in transition_durations)
+    # Average transition duration so music total matches video; music is trimmed to narration if still long
+    if transition_durations:
+        crossfade = sum(transition_durations) / len(transition_durations)
+    else:
+        crossfade = CROSSFADE_DURATION
+    print(f"\n[VIDEO] Concatenating clips...{f' (per-scene transitions from script)' if any_transition else ' (cut)'}")
 
-    if crossfade > 0 and len(clips) > 1:
-        # Apply crossfade effects: fade-out on all but last, fade-in on all but first
-        original_clips = list(clips)  # Keep originals for fallback
+    if any_transition and len(clips) > 1:
+        from moviepy import CompositeVideoClip
+        original_clips = list(clips)
         try:
-            faded_clips = []
+            # Apply effects per clip based on transition type (crossfade vs slide_*)
+            processed = []
             for i, clip in enumerate(clips):
                 effects = []
                 if i > 0:
-                    effects.append(CrossFadeIn(crossfade))
+                    trans_in, dur_in = transition_info[i - 1]
+                    if dur_in > 0:
+                        if trans_in == "crossfade":
+                            effects.append(CrossFadeIn(dur_in))
+                        elif trans_in in ("slide_left", "slide_right", "slide_up", "slide_down"):
+                            # Incoming: slide in from opposite side
+                            slide_in_map = {"slide_left": "right", "slide_right": "left", "slide_up": "bottom", "slide_down": "top"}
+                            effects.append(SlideIn(dur_in, slide_in_map[trans_in]))
                 if i < len(clips) - 1:
-                    effects.append(CrossFadeOut(crossfade))
-                faded_clips.append(clip.with_effects(effects) if effects else clip)
+                    trans_out, dur_out = transition_info[i]
+                    if dur_out > 0:
+                        if trans_out == "crossfade":
+                            effects.append(CrossFadeOut(dur_out))
+                        elif trans_out in ("slide_left", "slide_right", "slide_up", "slide_down"):
+                            # Outgoing: slide out to this side
+                            slide_out_map = {"slide_left": "left", "slide_right": "right", "slide_up": "top", "slide_down": "bottom"}
+                            effects.append(SlideOut(dur_out, slide_out_map[trans_out]))
+                processed.append(clip.with_effects(effects) if effects else clip)
 
-            # Negative padding creates overlap where crossfades blend
-            final = concatenate_videoclips(faded_clips, padding=-crossfade, method="compose")
+            # Build composite with variable overlap via set_start
+            t = 0.0
+            composited = [processed[0]]
+            for i in range(1, len(processed)):
+                overlap = transition_durations[i - 1]
+                t += processed[i - 1].duration - overlap
+                composited.append(processed[i].with_start(t))
+            final = CompositeVideoClip(composited)
         except Exception as e:
-            print(f"[VIDEO] Crossfade failed ({e}), falling back to simple concatenation...")
-            clips = original_clips
+            print(f"[VIDEO] Per-scene transitions failed ({e}), falling back to simple concatenation...")
             final = concatenate_videoclips(clips, method="compose")
     else:
         try:
-            # "chain" is faster than "compose" when clips have the same size/dimensions
             final = concatenate_videoclips(clips, method="chain")
         except Exception:
             print("[VIDEO] Using compose method instead of chain...")
@@ -2983,70 +1195,18 @@ def _build_video_impl(scenes_path: str, out_video_path: str | None = None, scene
 
     print(f"[VIDEO] Final duration: {final.duration:.3f}s ({final.duration/60:.1f} min)")
 
-    # Apply horror background audio if this is a horror video
-    if is_horror and horror_bg_enabled:
-        print(f"\n[HORROR AUDIO] Adding background audio layers...")
-        try:
-            # Get environment from metadata if available
-            environment = None
-            if metadata:
-                environment = metadata.get("environment")
-            
-            # If disclaimer was prepended, mix horror once for the full video so environment audio is continuous (disclaimer + story)
-            if disclaimer_duration is not None:
-                subclip_fn = getattr(final.audio, "subclipped", getattr(final.audio, "subclip", None))
-                if subclip_fn is None:
-                    raise RuntimeError("Audio clip has no subclip/subclipped method")
-                story_part = subclip_fn(disclaimer_duration, final.duration)
-                def make_silence(t):
-                    if np.isscalar(t):
-                        return np.array([0.0, 0.0])
-                    return np.zeros((len(t), 2))
-                silence_disclaimer = AudioClip(make_silence, duration=disclaimer_duration, fps=44100)
-                narration_audio = concatenate_audioclips([silence_disclaimer, story_part])
-                mixed_audio = mix_horror_background_audio(
-                    narration_audio,
-                    final.duration,
-                    scenes=scenes,
-                    scene_audio_clips=scene_audio_clips,
-                    room_tone_volume=room_tone_volume,
-                    drone_volume=drone_volume,
-                    max_drone_volume=None,
-                    detail_volume=detail_volume,
-                    environment=environment,
-                    env_audio_volume=None,
-                )
-            else:
-                narration_audio = final.audio
-                mixed_audio = mix_horror_background_audio(
-                    narration_audio,
-                    final.duration,
-                    scenes=scenes,
-                    scene_audio_clips=scene_audio_clips,
-                    room_tone_volume=room_tone_volume,
-                    drone_volume=drone_volume,
-                    max_drone_volume=None,
-                    detail_volume=detail_volume,
-                    environment=environment,
-                    env_audio_volume=None,
-                )
-            
-            # Replace video audio with mixed audio
-            final = final.with_audio(mixed_audio)
-            print("[HORROR AUDIO] Background audio layers added successfully")
-        except Exception as e:
-            print(f"[WARNING] Failed to add horror background audio: {e}")
-            print("[WARNING] Continuing with narration audio only...")
-            import traceback
-            traceback.print_exc()
-
-    # Apply biopic background music if this is a biopic (non-horror) and biopic music is enabled
-    if not is_horror and getattr(config, "biopic_music_enabled", True):
+    # Apply biopic background music if enabled
+    if getattr(config, "biopic_music_enabled", True):
         biopic_vol = getattr(config, "biopic_music_volume", None)
         try:
             from biopic_music_config import BIOPIC_END_TAIL_SEC, BIOPIC_END_TAIL_FADEOUT_SEC
-            tail_sec = BIOPIC_END_TAIL_SEC
-            fadeout_sec = BIOPIC_END_TAIL_FADEOUT_SEC
+            # Shorts: 1s music-only tail. Main videos: longer tail from config.
+            if getattr(config, "is_vertical", False):
+                tail_sec = 1.0
+                fadeout_sec = 0.5
+            else:
+                tail_sec = BIOPIC_END_TAIL_SEC
+                fadeout_sec = BIOPIC_END_TAIL_FADEOUT_SEC
 
             if tail_sec > 0:
                 # Extend video with last frame for tail (music-only outro)
@@ -3080,6 +1240,7 @@ def _build_video_impl(scenes_path: str, out_video_path: str | None = None, scene
                 tail_sec=tail_sec,
                 fadeout_sec=fadeout_sec,
                 crossfade_overlap=crossfade,
+                transition_durations=transition_durations,
             )
             final = final.with_audio(mixed_audio)
             print("[BIOPIC MUSIC] Background music added successfully")
@@ -3124,6 +1285,577 @@ def _build_video_impl(scenes_path: str, out_video_path: str | None = None, scene
             ],
         )
         print("[VIDEO] Done!")
+
+
+def apply_volume_to_audioclip(clip: AudioClip, volume_factor: float) -> AudioClip:
+    """Apply volume to an AudioClip by wrapping its audio function."""
+    original_get_frame = clip.get_frame
+
+    def volume_adjusted_audio(t):
+        audio = original_get_frame(t)
+        return audio * volume_factor
+
+    return AudioClip(volume_adjusted_audio, duration=clip.duration, fps=clip.fps)
+
+
+def normalize_audio_to_lufs(input_path: Path, target_lufs: float = -18.0, output_path: Path | None = None,
+                            two_pass: bool = True) -> Path:
+    """
+    Normalize audio file to target LUFS using ffmpeg loudnorm (EBU R128).
+    Uses two-pass mode by default for more accurate results with music.
+    Returns path to normalized WAV. Uses temp file if output_path not provided.
+    Raises on ffmpeg failure.
+    """
+    path = Path(input_path)
+    if output_path is None:
+        temp_dir = config.temp_dir if config.temp_dir else tempfile.gettempdir()
+        output_path = Path(temp_dir) / f"{path.stem}_norm.wav"
+    out = Path(output_path)
+    target_lra = 11.0  # Music typically has more dynamics than speech
+    target_tp = -2.0
+
+    if two_pass:
+        # Pass 1: measure loudness (outputs JSON to stderr)
+        result1 = subprocess.run(
+            [
+                "ffmpeg", "-hide_banner", "-loglevel", "error", "-i", str(path),
+                "-af", f"loudnorm=I={target_lufs}:LRA={target_lra}:tp={target_tp}:print_format=json",
+                "-f", "null", "-",
+            ],
+            capture_output=True,
+            text=True,
+        )
+        if result1.returncode != 0:
+            raise RuntimeError(f"ffmpeg loudnorm pass 1 failed: {result1.stderr or result1.stdout}")
+
+        # Parse JSON from stderr (loudnorm prints it in the last lines)
+        stderr_text = (result1.stderr or "").strip()
+        stderr_lines = stderr_text.split("\n")
+        stats = None
+        # Try last 15 lines joined (JSON may be multiline)
+        for n in range(15, 0, -1):
+            if len(stderr_lines) < n:
+                continue
+            block = "\n".join(stderr_lines[-n:])
+            # Find JSON object
+            start = block.find("{")
+            if start >= 0:
+                depth = 0
+                end = -1
+                for i, c in enumerate(block[start:], start):
+                    if c == "{":
+                        depth += 1
+                    elif c == "}":
+                        depth -= 1
+                        if depth == 0:
+                            end = i
+                            break
+                if end >= 0:
+                    try:
+                        stats = json.loads(block[start:end + 1])
+                        if "input_i" in stats and "target_offset" in stats:
+                            break
+                    except json.JSONDecodeError:
+                        pass
+        if not stats or "input_i" not in stats or "target_offset" not in stats:
+            # Fall back to single-pass if we can't parse
+            two_pass = False
+
+    if two_pass and stats:
+        # Pass 2: apply measured values for accurate normalization
+        af_filter = (
+            f"loudnorm=I={target_lufs}:LRA={target_lra}:tp={target_tp}:"
+            f"linear=true:"
+            f"measured_I={stats['input_i']}:"
+            f"measured_LRA={stats['input_lra']}:"
+            f"measured_tp={stats['input_tp']}:"
+            f"measured_thresh={stats['input_thresh']}:"
+            f"offset={stats['target_offset']}"
+        )
+        result2 = subprocess.run(
+            [
+                "ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-i", str(path),
+                "-af", af_filter,
+                "-acodec", "pcm_s16le", "-ar", "44100", "-ac", "2",
+                str(out),
+            ],
+            capture_output=True,
+            text=True,
+        )
+        if result2.returncode != 0 or not out.exists():
+            raise RuntimeError(f"ffmpeg loudnorm pass 2 failed: {result2.stderr or result2.stdout}")
+    else:
+        # Single-pass fallback
+        result = subprocess.run(
+            [
+                "ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-i", str(path),
+                "-af", f"loudnorm=I={target_lufs}:LRA={target_lra}:tp={target_tp}",
+                "-acodec", "pcm_s16le", "-ar", "44100", "-ac", "2",
+                str(out),
+            ],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0 or not out.exists():
+            raise RuntimeError(f"ffmpeg loudnorm failed: {result.stderr or result.stdout}")
+    return out
+
+
+def _fit_song_to_duration(song_path: Path, required_duration: float) -> AudioFileClip | None:
+    """Load an MP3 and fit it to required_duration by looping (if shorter) or trimming (if longer)."""
+    load_path = song_path
+    try:
+        from biopic_music_config import BIOPIC_MUSIC_NORMALIZE_LUFS, BIOPIC_MUSIC_NORMALIZE_TWO_PASS
+        normalize_lufs = BIOPIC_MUSIC_NORMALIZE_LUFS
+        two_pass = BIOPIC_MUSIC_NORMALIZE_TWO_PASS
+    except ImportError:
+        normalize_lufs = None
+        two_pass = True
+    if normalize_lufs is not None and normalize_lufs != 0:
+        temp_dir = config.temp_dir if config.temp_dir else tempfile.gettempdir()
+        norm_path = Path(temp_dir) / f"{song_path.stem}_norm.wav"
+        try:
+            load_path = normalize_audio_to_lufs(
+                song_path, target_lufs=normalize_lufs, output_path=norm_path, two_pass=two_pass
+            )
+        except (RuntimeError, FileNotFoundError) as e:
+            print(f"[BIOPIC MUSIC] Loudness normalization failed for {song_path.name}: {e}, using original")
+    try:
+        song = AudioFileClip(str(load_path))
+    except Exception as e:
+        print(f"[BIOPIC MUSIC] Warning: Could not load {song_path}: {e}")
+        return None
+
+    subclip_fn = getattr(song, "subclipped", getattr(song, "subclip", None))
+    if subclip_fn is None:
+        try:
+            song.close()
+        except Exception:
+            pass
+        print("[BIOPIC MUSIC] Warning: Could not fit song to duration: clip has no subclip/subclipped method")
+        return None
+
+    try:
+        if song.duration < required_duration:
+            loops_needed = int(np.ceil(required_duration / song.duration))
+            clips = [song] * loops_needed
+            combined = concatenate_audioclips(clips)
+            if combined.duration > required_duration:
+                combined_subclip = getattr(combined, "subclipped", getattr(combined, "subclip", None))
+                if combined_subclip:
+                    combined = combined_subclip(0, required_duration)
+            return combined
+        elif song.duration > required_duration:
+            return subclip_fn(0, required_duration)
+        return song
+    except Exception as e:
+        print(f"[BIOPIC MUSIC] Warning: Could not fit song to duration: {e}")
+        try:
+            song.close()
+        except Exception:
+            pass
+        return None
+
+
+def build_biopic_music_track(metadata: dict | None, scene_audio_clips: list, total_duration: float,
+                            scenes: list[dict] | None = None, music_volume_db: float = None,
+                            tail_sec: float = 0.0, fadeout_sec: float = 0.0,
+                            crossfade_overlap: float = 0.0,
+                            transition_durations: list[float] | None = None) -> AudioClip | None:
+    """
+    Build a continuous music track from biopic_music/.
+    When scenes have music_song and music_volume (per-scene mode), uses them.
+    Otherwise uses chapter-based or single-segment mode.
+    """
+    try:
+        from collections import defaultdict
+        from biopic_music_config import (
+            BIOPIC_MUSIC_DIR,
+            BIOPIC_MUSIC_VOLUME_DB,
+            BIOPIC_MUSIC_CROSSFADE_SEC,
+            BIOPIC_MUSIC_DEFAULT_MOODS,
+            volume_label_to_db,
+        )
+    except ImportError:
+        print("[BIOPIC MUSIC] biopic_music_config not found, skipping")
+        return None
+
+    if not BIOPIC_MUSIC_DIR.exists() or not BIOPIC_MUSIC_DIR.is_dir():
+        print(f"[BIOPIC MUSIC] Directory {BIOPIC_MUSIC_DIR} not found, skipping")
+        return None
+
+    crossfade = BIOPIC_MUSIC_CROSSFADE_SEC
+    num_clips = len(scene_audio_clips)
+    outline = (metadata or {}).get("outline") or {}
+    chapters = outline.get("chapters") or (metadata or {}).get("chapters") or []
+    script_type = (metadata or {}).get("script_type", "")
+
+    # Per-scene mode: all scenes have music_song and music_volume
+    has_per_scene = (
+        scenes is not None
+        and len(scenes) == num_clips
+        and all(s.get("music_song") and s.get("music_volume") for s in scenes)
+    )
+
+    # Require music_song/music_volume when biopic with scenes
+    if scenes is not None and len(scenes) == num_clips and not has_per_scene:
+        if script_type == "biopic" or (chapters and any(ch.get("num_scenes") for ch in chapters)):
+            missing = [i for i, s in enumerate(scenes) if not s.get("music_song") or not s.get("music_volume")]
+            if missing:
+                raise ValueError(
+                    f"Scenes {[scenes[i].get('id') for i in missing]} lack music_song or music_volume. "
+                    "Biopic videos require per-scene music selection."
+                )
+
+    if has_per_scene:
+        # Compute scene start times in the video timeline (accounts for transition overlaps).
+        # t[i] = when scene i starts; scene i duration = d[i] = start_pause + audio + end_pause.
+        scene_durations = []
+        for j in range(num_clips):
+            d = START_SCENE_PAUSE_LENGTH + (scene_audio_clips[j].duration if j < len(scene_audio_clips) else 0.0) + END_SCENE_PAUSE_LENGTH
+            scene_durations.append(d)
+        scene_starts = [0.0]
+        for j in range(1, num_clips):
+            o = transition_durations[j - 1] if transition_durations and j - 1 < len(transition_durations) else crossfade_overlap
+            scene_starts.append(scene_starts[-1] + scene_durations[j - 1] - o)
+        # Total video duration = sum of scene durations minus overlaps
+        n_trans = len(scene_durations) - 1 if scene_durations else 0
+        overlaps = (
+            [transition_durations[j] for j in range(min(n_trans, len(transition_durations or [])))]
+            if transition_durations
+            else [crossfade_overlap] * n_trans
+        )
+        total_video_dur = sum(scene_durations) - sum(overlaps) if scene_durations else 0.0
+
+        # Per-scene: build segments, merging consecutive scenes with same song (by music_song only).
+        # Segment boundaries align with video scene starts so song changes sync with scene changes.
+        segments = []
+        i = 0
+        while i < len(scenes):
+            song_rel = (scenes[i].get("music_song") or "").strip()
+            if not song_rel:
+                i += 1
+                continue
+            start_i = i
+            volume_blocks = []
+            cum_dur = 0.0
+            block_start_cum = 0.0
+            prev_vol = None
+            prev_cum = 0.0
+            while i < len(scenes) and (scenes[i].get("music_song") or "").strip() == song_rel:
+                vol_label = (scenes[i].get("music_volume") or "medium").strip().lower()
+                scene_dur = scene_durations[i] if i < len(scene_durations) else 0.0
+                cum_dur += scene_dur
+                n_scenes_so_far = i - start_i + 1
+                overlap_so_far = crossfade_overlap * (n_scenes_so_far - 1) if n_scenes_so_far > 1 else 0.0
+                cum_after_overlap = cum_dur - overlap_so_far
+                if vol_label != prev_vol:
+                    if prev_vol is not None:
+                        block_dur = prev_cum - block_start_cum
+                        if block_dur > 0:
+                            volume_blocks.append((block_dur, prev_vol))
+                    block_start_cum = prev_cum
+                    prev_vol = vol_label
+                prev_cum = cum_after_overlap
+                i += 1
+            if prev_vol is not None:
+                block_dur = prev_cum - block_start_cum
+                if block_dur > 0:
+                    volume_blocks.append((block_dur, prev_vol))
+            # Segment should end when next scene starts in video; add crossfade so new song starts at boundary
+            t_start = scene_starts[start_i] if start_i < len(scene_starts) else 0.0
+            t_end = scene_starts[i] if i < len(scene_starts) else total_video_dur
+            is_last_segment = i >= len(scenes)
+            total_dur = t_end - t_start + (crossfade if not is_last_segment else 0.0)
+            # Scale volume_blocks to match target segment duration
+            block_sum = sum(d for d, _ in volume_blocks)
+            if block_sum > 0 and total_dur > 0 and abs(block_sum - total_dur) > 0.001:
+                scale = total_dur / block_sum
+                volume_blocks = [(d * scale, v) for d, v in volume_blocks]
+            if total_dur > 0 and volume_blocks:
+                song_path = BIOPIC_MUSIC_DIR / song_rel
+                if not song_path.exists():
+                    raise FileNotFoundError(f"Music file not found for scene (song={song_rel}): {song_rel}")
+                segments.append((song_rel, volume_blocks))
+
+        if not segments:
+            return None
+
+        # Extend last segment with tail (music-only outro) when requested.
+        if tail_sec > 0 and segments:
+            last_vol = segments[-1][1][-1][1]
+            segments[-1][1].append((tail_sec, last_vol))
+
+        segment_clips = []
+        for song_rel, volume_blocks in segments:
+            total_dur = sum(d for d, _ in volume_blocks)
+            song_path = BIOPIC_MUSIC_DIR / song_rel
+            clip = _fit_song_to_duration(song_path, total_dur)
+            if clip is None:
+                continue
+            subclip_fn = getattr(clip, "subclipped", getattr(clip, "subclip", None))
+            if subclip_fn is None:
+                vol_db = volume_label_to_db(volume_blocks[0][1])
+                segment_clips.append(apply_volume_to_audioclip(clip, 10 ** (vol_db / 20.0)))
+                continue
+            block_clips = []
+            start_t = 0.0
+            clip_dur = getattr(clip, "duration", None) or total_dur
+            for block_dur, vol_label in volume_blocks:
+                end_t = min(start_t + block_dur, clip_dur)
+                if end_t <= start_t:
+                    break
+                subclip = subclip_fn(start_t, end_t)
+                vol_db = volume_label_to_db(vol_label)
+                block_clips.append(apply_volume_to_audioclip(subclip, 10 ** (vol_db / 20.0)))
+                start_t = end_t
+            if block_clips:
+                segment_clips.append(concatenate_audioclips(block_clips))
+
+        if not segment_clips:
+            return None
+
+        if len(segment_clips) == 1:
+            music = segment_clips[0]
+        else:
+            fps = getattr(segment_clips[0], "fps", 44100) or 44100
+
+            def _make_silence(t):
+                if np.isscalar(t):
+                    return np.array([0.0, 0.0], dtype=np.float32)
+                return np.zeros((len(t), 2), dtype=np.float32)
+
+            for i in range(1, len(segment_clips)):
+                silence = AudioClip(_make_silence, duration=crossfade, fps=fps)
+                segment_clips[i] = concatenate_audioclips([silence, segment_clips[i]])
+
+            temp_dir = tempfile.mkdtemp(prefix="biopic_music_")
+            try:
+                wav_paths = []
+                for i, seg in enumerate(segment_clips):
+                    p = Path(temp_dir) / f"seg_{i}.wav"
+                    seg.write_audiofile(str(p), logger=None)
+                    wav_paths.append(p)
+                    seg.close()
+
+                if len(wav_paths) == 2:
+                    filter_complex = f"[0][1]acrossfade=d={crossfade}:c1=tri:c2=tri[out]"
+                else:
+                    chain = []
+                    for i in range(1, len(wav_paths)):
+                        prev = "[0]" if i == 1 else f"[a{i-1}]"
+                        out_label = "[out]" if i == len(wav_paths) - 1 else f"[a{i}]"
+                        chain.append(f"{prev}[{i}]acrossfade=d={crossfade}:c1=tri:c2=tri{out_label}")
+                    filter_complex = ";".join(chain)
+
+                out_wav = Path(temp_dir) / "mixed.wav"
+                cmd = ["ffmpeg", "-y"]
+                for p in wav_paths:
+                    cmd.extend(["-i", str(p)])
+                cmd.extend(["-filter_complex", filter_complex, "-map", "[out]", str(out_wav)])
+                subprocess.run(cmd, check=True, capture_output=True)
+                music = AudioFileClip(str(out_wav))
+            finally:
+                try:
+                    shutil.rmtree(temp_dir, ignore_errors=True)
+                except Exception:
+                    pass
+
+        if tail_sec > 0 and fadeout_sec > 0:
+            from moviepy.audio.fx import AudioFadeOut
+            music = music.with_effects([AudioFadeOut(min(fadeout_sec, music.duration))])
+        return music
+
+    # Fallback: chapter-based or single-segment (from HEAD)
+    vol_db = music_volume_db if music_volume_db is not None else BIOPIC_MUSIC_VOLUME_DB
+    total_scenes_from_chapters = sum(ch.get("num_scenes", 0) for ch in chapters)
+    use_scene_based = (
+        scenes is not None
+        and len(scenes) == num_clips
+        and any(s.get("chapter_num") for s in scenes)
+    )
+
+    if not use_scene_based and (not chapters or num_clips != total_scenes_from_chapters):
+        mood = (outline.get("music_mood") or (metadata or {}).get("music_mood") or "").strip().lower()
+        default_mood = BIOPIC_MUSIC_DEFAULT_MOODS[0] if BIOPIC_MUSIC_DEFAULT_MOODS else "relaxing"
+        mood = mood or default_mood
+        mood_dir = BIOPIC_MUSIC_DIR / mood
+        songs = list(mood_dir.glob("*.mp3")) if mood_dir.exists() else []
+        if not songs:
+            for fallback in BIOPIC_MUSIC_DEFAULT_MOODS:
+                if fallback != mood:
+                    fallback_dir = BIOPIC_MUSIC_DIR / fallback
+                    if fallback_dir.exists():
+                        songs = list(fallback_dir.glob("*.mp3"))
+                        if songs:
+                            mood_dir = fallback_dir
+                            break
+        if not songs:
+            print(f"[BIOPIC MUSIC] No MP3s for mood '{mood}', skipping")
+            return None
+        song_path = random.choice(songs)
+        seg_duration = total_duration + tail_sec if tail_sec > 0 else total_duration
+        clip = _fit_song_to_duration(song_path, seg_duration)
+        if clip is None:
+            return None
+        music = apply_volume_to_audioclip(clip, 10 ** (vol_db / 20.0))
+        if tail_sec > 0 and fadeout_sec > 0:
+            from moviepy.audio.fx import AudioFadeOut
+            music = music.with_effects([AudioFadeOut(min(fadeout_sec, music.duration))])
+        return music
+
+    # Chapter-based mode
+    segment_clips = []
+    chapter_to_mood = {ch.get("chapter_num"): (ch.get("music_mood") or "relaxing").strip().lower() for ch in chapters if ch.get("chapter_num")}
+    outline_mood = (outline.get("music_mood") or "").strip().lower() or None
+
+    if use_scene_based:
+        chapter_durations = defaultdict(float)
+        for i, scene in enumerate(scenes):
+            ch_num = scene.get("chapter_num") or 1
+            if i < len(scene_audio_clips):
+                chapter_durations[ch_num] += START_SCENE_PAUSE_LENGTH + scene_audio_clips[i].duration + END_SCENE_PAUSE_LENGTH
+        if crossfade_overlap > 0:
+            for ch_num in chapter_durations:
+                chapter_durations[ch_num] = max(chapter_durations[ch_num] - crossfade_overlap, 0.1)
+        sorted_chapters = sorted(chapter_durations.keys())
+        last_ch_num = sorted_chapters[-1] if sorted_chapters else None
+        for ch_num in sorted_chapters:
+            chapter_duration = chapter_durations[ch_num]
+            if chapter_duration <= 0:
+                continue
+            if ch_num == last_ch_num and tail_sec > 0:
+                chapter_duration += tail_sec
+            mood = chapter_to_mood.get(ch_num) or outline_mood or "relaxing"
+            mood_dir = BIOPIC_MUSIC_DIR / mood
+            if not mood_dir.exists():
+                mood_dir = BIOPIC_MUSIC_DIR / (BIOPIC_MUSIC_DEFAULT_MOODS[0] if BIOPIC_MUSIC_DEFAULT_MOODS else "relaxing")
+            mp3s = list(mood_dir.glob("*.mp3"))
+            if not mp3s:
+                for fallback in BIOPIC_MUSIC_DEFAULT_MOODS:
+                    if fallback != mood:
+                        fallback_dir = BIOPIC_MUSIC_DIR / fallback
+                        if fallback_dir.exists():
+                            mp3s = list(fallback_dir.glob("*.mp3"))
+                            if mp3s:
+                                mood_dir = fallback_dir
+                                break
+            if not mp3s:
+                continue
+            song_path = random.choice(mp3s)
+            clip = _fit_song_to_duration(song_path, chapter_duration)
+            if clip is not None:
+                segment_clips.append(clip)
+    else:
+        scene_idx = 0
+        chapter_list = [ch for ch in chapters if ch.get("num_scenes", 0) > 0]
+        for ch_idx, ch in enumerate(chapter_list):
+            num_scenes = ch.get("num_scenes", 0)
+            if num_scenes <= 0:
+                continue
+            chapter_duration = 0.0
+            for i in range(num_scenes):
+                if scene_idx + i < len(scene_audio_clips):
+                    chapter_duration += START_SCENE_PAUSE_LENGTH + scene_audio_clips[scene_idx + i].duration + END_SCENE_PAUSE_LENGTH
+            if crossfade_overlap > 0:
+                intra = num_scenes - 1
+                inter = 1 if ch_idx > 0 else 0
+                chapter_duration -= (intra + inter) * crossfade_overlap
+                chapter_duration = max(chapter_duration, 0.1)
+            if ch_idx == len(chapter_list) - 1 and tail_sec > 0:
+                chapter_duration += tail_sec
+            mood = (ch.get("music_mood") or "relaxing").strip().lower()
+            mood_dir = BIOPIC_MUSIC_DIR / mood
+            if not mood_dir.exists():
+                mood_dir = BIOPIC_MUSIC_DIR / BIOPIC_MUSIC_DEFAULT_MOODS[0]
+            mp3s = list(mood_dir.glob("*.mp3"))
+            if not mp3s:
+                scene_idx += num_scenes
+                continue
+            song_path = random.choice(mp3s)
+            clip = _fit_song_to_duration(song_path, chapter_duration)
+            if clip is not None:
+                segment_clips.append(clip)
+            scene_idx += num_scenes
+
+    if not segment_clips:
+        return None
+
+    if len(segment_clips) > 1 and crossfade > 0:
+        fps = getattr(segment_clips[0], "fps", 44100) or 44100
+
+        def _make_silence(t):
+            if np.isscalar(t):
+                return np.array([0.0, 0.0], dtype=np.float32)
+            return np.zeros((len(t), 2), dtype=np.float32)
+
+        for i in range(1, len(segment_clips)):
+            silence = AudioClip(_make_silence, duration=crossfade, fps=fps)
+            segment_clips[i] = concatenate_audioclips([silence, segment_clips[i]])
+
+    if len(segment_clips) == 1:
+        music = segment_clips[0]
+    else:
+        temp_dir = tempfile.mkdtemp(prefix="biopic_music_")
+        try:
+            wav_paths = []
+            for i, seg in enumerate(segment_clips):
+                p = Path(temp_dir) / f"seg_{i}.wav"
+                seg.write_audiofile(str(p), logger=None)
+                wav_paths.append(p)
+                seg.close()
+            if len(wav_paths) == 2:
+                filter_complex = f"[0][1]acrossfade=d={crossfade}:c1=tri:c2=tri[out]"
+            else:
+                chain = []
+                for i in range(1, len(wav_paths)):
+                    prev = "[0]" if i == 1 else f"[a{i-1}]"
+                    out_label = "[out]" if i == len(wav_paths) - 1 else f"[a{i}]"
+                    chain.append(f"{prev}[{i}]acrossfade=d={crossfade}:c1=tri:c2=tri{out_label}")
+                filter_complex = ";".join(chain)
+            out_wav = Path(temp_dir) / "mixed.wav"
+            cmd = ["ffmpeg", "-y"]
+            for p in wav_paths:
+                cmd.extend(["-i", str(p)])
+            cmd.extend(["-filter_complex", filter_complex, "-map", "[out]", str(out_wav)])
+            subprocess.run(cmd, check=True, capture_output=True)
+            music = AudioFileClip(str(out_wav))
+        finally:
+            try:
+                shutil.rmtree(temp_dir, ignore_errors=True)
+            except Exception:
+                pass
+
+    music = apply_volume_to_audioclip(music, 10 ** (vol_db / 20.0))
+    if tail_sec > 0 and fadeout_sec > 0:
+        from moviepy.audio.fx import AudioFadeOut
+        music = music.with_effects([AudioFadeOut(min(fadeout_sec, music.duration))])
+    return music
+
+
+def mix_biopic_background_music(narration_audio: AudioClip, duration: float, metadata: dict | None,
+                                scene_audio_clips: list, scenes: list[dict] | None = None,
+                                music_volume_db: float = None, tail_sec: float = 0.0,
+                                fadeout_sec: float = 0.0,
+                                crossfade_overlap: float = 0.0,
+                                transition_durations: list[float] | None = None) -> CompositeAudioClip:
+    """Mix biopic background music under narration."""
+    music_track = build_biopic_music_track(
+        metadata, scene_audio_clips, duration,
+        scenes=scenes, music_volume_db=music_volume_db,
+        tail_sec=tail_sec, fadeout_sec=fadeout_sec,
+        crossfade_overlap=crossfade_overlap,
+        transition_durations=transition_durations,
+    )
+    if music_track is None:
+        return CompositeAudioClip([narration_audio])
+    # Trim music to narration duration so it never extends past the video (avoids long fadeout)
+    target_dur = narration_audio.duration
+    if music_track.duration > target_dur:
+        subclip_fn = getattr(music_track, "subclipped", getattr(music_track, "subclip", None))
+        if subclip_fn:
+            music_track = subclip_fn(0, target_dur)
+    return CompositeAudioClip([narration_audio, music_track])
 
 
 # ------------- ENTRY POINT -------------
@@ -3186,6 +1918,9 @@ Examples:
 
   # Build video with Ken Burns motion and crossfade transitions
   python build_video.py scenes.json output.mp4 --motion
+
+  # Print full image prompts to stdout (for debugging)
+  python build_video.py scenes.json output.mp4 --log-image-prompts
         """
     )
     
@@ -3203,54 +1938,36 @@ Examples:
                         help="Generate only audio files (skip images and video assembly). Useful for testing TTS models.")
     parser.add_argument("--female", action="store_true",
                         help="Use female voice (GOOGLE_TTS_FEMALE_VOICE from .env) instead of default GOOGLE_TTS_VOICE")
-    parser.add_argument("--horror-bg-room-tone-volume", type=float, default=None, metavar="DB",
-                        help=f"Room tone volume in dB for horror videos (default: {ROOM_SOUND_BASE_VOLUME_DB} from ROOM_SOUND_BASE env var)")
-    parser.add_argument("--horror-bg-drone-volume", type=float, default=None, metavar="DB",
-                        help=f"Low-frequency drone volume in dB for horror videos (default: {DRONE_BASE_VOLUME_DB} from DRONE_BASE env var)")
-    parser.add_argument("--horror-bg-detail-volume", type=float, default=-30.0, metavar="DB",
-                        help="Detail sounds volume in dB for horror videos (default: -30)")
-    parser.add_argument("--horror", action="store_true",
-                        help="Enable horror video mode (adds horror background audio)")
-    parser.add_argument("--horror-bg-disable", action="store_true",
-                        help="Disable horror background audio even for horror videos")
     parser.add_argument("--no-biopic-music", action="store_true",
-                        help="Disable biopic background music (enabled by default for non-horror videos)")
+                        help="Disable biopic background music (enabled by default)")
     parser.add_argument("--biopic-music-volume", type=float, default=None, metavar="DB",
                         help="Biopic music volume in dB (default: -22)")
     parser.add_argument("--motion", action="store_true",
                         help="Enable Ken Burns motion and crossfade transitions (smooth pan/zoom on images)")
+    parser.add_argument("--log-image-prompts", action="store_true",
+                        help="Print full image prompts to stdout (for debugging)")
     
     args = parser.parse_args()
-    
-    # Set default values from environment variables if not provided via command line
-    if args.horror_bg_room_tone_volume is None:
-        args.horror_bg_room_tone_volume = ROOM_SOUND_BASE_VOLUME_DB
-    if args.horror_bg_drone_volume is None:
-        args.horror_bg_drone_volume = DRONE_BASE_VOLUME_DB
     
     # Validate: need either positional args or --all-shorts
     # For --audio-only, output_file is optional (will use default if not provided)
     if not args.all_shorts and not args.scenes_file:
         parser.error("scenes_file is required unless using --all-shorts")
     
-    # Override voice if --female is specified
-    global USE_FEMALE_VOICE, GOOGLE_TTS_VOICE
+    # Override voice if --female is specified (llm_utils reads from env / use_female_voice)
+    global USE_FEMALE_VOICE
     if args.female and TTS_PROVIDER == "google":
         USE_FEMALE_VOICE = True
         if GOOGLE_VOICE_TYPE == "gemini":
-            # For Gemini, use the female speaker env var
-            female_voice = GOOGLE_GEMINI_FEMALE_SPEAKER
-            if female_voice:
-                GOOGLE_TTS_VOICE = female_voice
-                print(f"[TTS] Using Gemini female voice: {GOOGLE_TTS_VOICE}")
+            if GOOGLE_GEMINI_FEMALE_SPEAKER:
+                print(f"[TTS] Using Gemini female voice: {GOOGLE_GEMINI_FEMALE_SPEAKER}")
             else:
                 print("[WARNING] --female specified for Gemini but GOOGLE_GEMINI_FEMALE_SPEAKER not set in .env. Using default voice.")
         else:
-            # For standard Google TTS, use GOOGLE_TTS_FEMALE_VOICE
             female_voice = os.getenv("GOOGLE_TTS_FEMALE_VOICE")
             if female_voice:
-                GOOGLE_TTS_VOICE = female_voice
-                print(f"[TTS] Using female voice: {GOOGLE_TTS_VOICE}")
+                os.environ["GOOGLE_TTS_VOICE"] = female_voice
+                print(f"[TTS] Using female voice: {female_voice}")
             else:
                 print("[WARNING] --female specified but GOOGLE_TTS_FEMALE_VOICE not set in .env. Using default voice.")
     else:
@@ -3270,6 +1987,10 @@ if __name__ == "__main__":
         print("[MODE] Saving assets to generated_images/ and generated_audio/")
     else:
         print("[MODE] Using temporary files (will be cleaned up after)")
+
+    config.log_image_prompts = args.log_image_prompts
+    if args.log_image_prompts:
+        print("[MODE] Logging image prompts to stdout")
 
     # Handle --all-shorts mode
     if args.all_shorts:
@@ -3291,10 +2012,6 @@ if __name__ == "__main__":
             print(f"{'='*60}")
             
             build_video(str(short_path), short_output, save_assets=args.save_assets, is_short=True,
-                       is_horror=args.horror, horror_bg_enabled=not args.horror_bg_disable,
-                       room_tone_volume=args.horror_bg_room_tone_volume,
-                       drone_volume=args.horror_bg_drone_volume,
-                       detail_volume=args.horror_bg_detail_volume,
                        biopic_music_enabled=not args.no_biopic_music,
                        biopic_music_volume=args.biopic_music_volume,
                        motion=args.motion)
@@ -3334,10 +2051,6 @@ if __name__ == "__main__":
     print(f"{'='*60}")
     build_video(args.scenes_file, args.output_file, save_assets=args.save_assets, is_short=is_short, 
                scene_id=args.scene_id, audio_only=args.audio_only,
-               is_horror=args.horror, horror_bg_enabled=not args.horror_bg_disable,
-               room_tone_volume=args.horror_bg_room_tone_volume,
-               drone_volume=args.horror_bg_drone_volume,
-               detail_volume=args.horror_bg_detail_volume,
                biopic_music_enabled=not args.no_biopic_music,
                biopic_music_volume=args.biopic_music_volume,
                motion=args.motion)
@@ -3363,10 +2076,6 @@ if __name__ == "__main__":
                 
                 # Shorts are always vertical
                 build_video(str(short_path), short_output, save_assets=args.save_assets, is_short=True,
-                           is_horror=args.horror, horror_bg_enabled=not args.horror_bg_disable,
-                           room_tone_volume=args.horror_bg_room_tone_volume,
-                           drone_volume=args.horror_bg_drone_volume,
-                           detail_volume=args.horror_bg_detail_volume,
                            biopic_music_enabled=not args.no_biopic_music,
                            biopic_music_volume=args.biopic_music_volume,
                            motion=args.motion)

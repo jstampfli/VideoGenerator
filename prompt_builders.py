@@ -124,52 +124,21 @@ def get_image_prompt_guidelines(
     aspect_ratio: str = "16:9 cinematic",
     is_trailer: bool = False,
     recurring_themes: Optional[str] = None,
-    is_horror: bool = False
 ) -> str:
     """
     Get image prompt guidelines.
     
     Args:
-        person: Name of the person (or protagonist name for horror)
-        birth_year: Birth year for age validation (not used for horror)
-        death_year: Death year for age validation (not used for horror)
+        person: Name of the person
+        birth_year: Birth year for age validation
+        death_year: Death year for age validation
         aspect_ratio: Image aspect ratio (default "16:9 cinematic" for main video, "9:16 vertical" for shorts)
         is_trailer: If True, uses trailer-specific image guidelines
         recurring_themes: Optional recurring themes to reinforce visually
-        is_horror: If True, uses horror-specific image guidelines
     """
     # Evaluate expressions before formatting
     birth_year_str = str(birth_year) if birth_year else 'unknown'
     death_year_str = str(death_year) if death_year else 'still alive'
-    
-    if is_horror:
-        # Horror-specific image guidelines
-        base = f"""IMAGE PROMPT STYLE - HORROR:
-- Dark, shadowy, eerie atmosphere
-- Horror mood: tense, fearful, mysterious, unsettling
-- Dramatic lighting with HIGH CONTRAST (chiaroscuro) - deep shadows, harsh highlights
-- Color palette: blues, grays, deep shadows, muted tones
-- Specific composition (close-up for fear, wide shot for isolation, etc.)
-- CRITICAL - EMOTION AND MOOD (MUST MATCH SCENE'S EMOTION FIELD):
-  * The scene's "emotion" field MUST be reflected in the image_prompt - this is critical for visual consistency
-  * Use the emotion to guide lighting, composition, facial expressions, and overall mood
-  * Examples: "terrified" → wide eyes, tense body, dark shadows; "tense" → sharp contrasts, wary expressions, claustrophobic framing; "atmospheric" → soft shadows, mysterious mood, eerie lighting; "dread-filled" → heavy shadows, oppressive atmosphere
-  * Explicitly include the emotion in image description: "terrified expression", "tense atmosphere", "dread-filled mood"
-  * The visual mood must match the emotional reality of the moment - if emotion is "terrified", the image should look terrifying
-- Horror elements: shadows, darkness, eerie lighting, unsettling atmosphere
-- Focus on MOOD and ATMOSPHERE rather than explicit gore
-- Show fear, tension, unease through composition and lighting
-- Symbolic horror elements: shadows suggesting presence, objects that create unease, environments that feel wrong
-- No historical/period accuracy needed - focus on horror atmosphere
-- Include {person} (the protagonist) in first-person perspective scenes when appropriate
-- End with ", {aspect_ratio}\""""
-        
-        if recurring_themes:
-            base += f"""
-- VISUAL THEME REINFORCEMENT: If recurring themes include concepts like "isolation", "paranoia", "unseen threat", etc., incorporate visual motifs that reinforce these themes through composition, lighting, or symbolism. For example, if "isolation" is a theme, use wide shots with the subject alone, or shadows that emphasize separation.
-- Recurring Horror Themes to Consider Visually: {recurring_themes}"""
-        
-        return base
     
     if is_trailer:
         base = f"""IMAGE PROMPTS:
@@ -247,27 +216,84 @@ def get_trailer_structure_prompt() -> str:
 4. SCENE 4: ANSWER the question posed at the end of scene 3. This is a WHAT scene - deliver the payoff. Give the viewer the resolution so they feel satisfied: what actually happened, how it worked, or why it mattered. Use clear, punchy facts. Do NOT end with a CTA to watch the full documentary—it hurts view duration; end with a satisfying resolution only."""
 
 
+def get_short_structure_prompt(narrative_structure: str, video_question: str) -> str:
+    """
+    Get scene-by-scene instructions for a given narrative structure.
+    Used when generating short scenes to vary structure and avoid formulaic output.
+
+    Args:
+        narrative_structure: One of question_first, in_medias_res, outcome_first, twist_structure, chronological_story
+        video_question: The central question this short answers (for context in instructions)
+    """
+    structures = {
+        "question_first": """TRAILER STRUCTURE (question_first - default):
+1. SCENE 1: Open with the video_question—state it explicitly. Then add context. Format: "[Question]? [2-3 sentences of setup]."
+2. SCENE 2: Deepen the same mystery. Build on scene 1. Do not introduce unrelated facts.
+3. SCENE 3: Escalate. End with a clear QUESTION that scene 4 will answer.
+4. SCENE 4: ANSWER the question. WHAT scene—deliver the payoff. No CTA to watch full documentary.""",
+        "in_medias_res": """TRAILER STRUCTURE (in_medias_res - drop into the moment):
+1. SCENE 1: Drop into the pivotal moment. Show the scene—NO question yet. Immersive, high energy. Viewer is IN the moment.
+2. SCENE 2: Pull back. Add context. What led here? Who, where, why it matters.
+3. SCENE 3: The central question emerges naturally—or state it here. "But how did it come to this?" or similar.
+4. SCENE 4: Payoff. Answer the question. WHAT scene—clear resolution. No CTA to watch full documentary.""",
+        "outcome_first": """TRAILER STRUCTURE (outcome_first - start with the result):
+1. SCENE 1: Start with the result or achievement. "The only president with a patent." "He preserved the Union." Hook with the outcome.
+2. SCENE 2: How did we get here? Pull back to the setup. What was the situation before?
+3. SCENE 3: Stakes or twist. What made this difficult? What was at risk?
+4. SCENE 4: Full resolution. Tie it together. The how, the why, the significance. No CTA to watch full documentary.""",
+        "twist_structure": """TRAILER STRUCTURE (twist_structure - common belief then reveal):
+1. SCENE 1: Establish the common belief or assumption. "Everyone thought..." or "The story goes..."
+2. SCENE 2: Evidence that complicates it. Something that doesn't fit. Build doubt.
+3. SCENE 3: "But the truth was..." or "What actually happened..." Pivot toward the reveal.
+4. SCENE 4: Reveal the twist. The real story. WHAT scene—satisfying payoff. No CTA to watch full documentary.""",
+        "chronological_story": """TRAILER STRUCTURE (chronological_story - linear narrative):
+1. SCENE 1: Set the scene. Year, place, stakes. No explicit question—let the story unfold.
+2. SCENE 2: Build tension chronologically. What happens next? Escalate.
+3. SCENE 3: Climax or turning point. The moment everything changes.
+4. SCENE 4: Resolution. What happened, why it mattered. Satisfying conclusion. No CTA to watch full documentary.""",
+    }
+    base = structures.get(narrative_structure, structures["question_first"])
+    return f"""CENTRAL QUESTION (answered by scene 4): {video_question}
+
+{base}"""
+
+
+def get_hook_content_guidance() -> str:
+    """
+    Shared guidance for hook content (intro chapter and shorts).
+    Emphasizes depth over breadth, one thread, substantive storytelling.
+    """
+    return """HOOK CONTENT (intro chapter and shorts) - DEPTH OVER BREADTH:
+- ONE question or tension, not many
+- Connected scenes that build the same thread
+- Substantive storytelling—avoid meta "You'll discover" language
+- Give moments room to breathe; 2-4 sentences with context
+- Satisfy curiosity with substance, not scatter"""
+
+
 def build_video_questions_prompt(person_of_interest: str, research_context: "ResearchContext | None" = None) -> str:
     """
-    Build the prompt for generating the question(s) this documentary will answer.
-    This is the FIRST step - the questions frame everything else.
-    These questions are the PRIMARY HOOK that gets users to click and watch.
+    Build the prompt for generating the ONE question this documentary will answer.
+    This is the FIRST step - the question frames everything else.
+    The question is the PRIMARY HOOK that gets users to click and watch.
     """
     from research_utils import get_research_context_block
     research_block = get_research_context_block(research_context) if research_context else ""
-    return f"""Identify 1-3 questions that this documentary about {person_of_interest} will answer.
+    return f"""Identify exactly ONE question that this documentary about {person_of_interest} will answer.
 {research_block}
 {get_biopic_audience_profile()}
 
-CRITICAL - THESE QUESTIONS ARE YOUR #1 HOOK:
-These questions appear at the very start of the video. They are what make viewers stop scrolling and click. They must be as engaging and interesting as possible—framed specifically for this audience. A great question makes someone think "I need to know the answer."
+CRITICAL - THIS QUESTION IS YOUR #1 HOOK:
+This question appears at the very start of the video. It is what makes viewers stop scrolling and click. It must be as engaging and interesting as possible—framed specifically for this audience. A great question makes someone think "I need to know the answer."
 
-MAKE THEM COMPELLING:
+ONE COMPELLING QUESTION:
+- ONE compelling question that frames the entire documentary. Depth over breadth.
+- The question should be substantive enough to sustain 20+ minutes of answer.
 - Tap into themes that resonate: legacy, perseverance, leadership, American values, what it means to build something lasting, how individuals shaped the world
-- Create genuine curiosity—not clickbait, but substantive questions that promise a satisfying answer
-- Each question should feel like the opening of a story you can't ignore
+- Create genuine curiosity—not clickbait, but a substantive question that promises a satisfying answer
+- The question should feel like the opening of a story you can't ignore
 - Prefer questions that hint at struggle, triumph, sacrifice, or unexpected turns
-- Avoid dry or academic phrasing; make them human and gripping
+- Avoid dry or academic phrasing; make it human and gripping
 
 QUESTION PARADIGMS (use when they naturally fit):
 The most engaging questions often follow one of these paradigms—but ONLY if it naturally fits the person's story AND the documentary can deliver a satisfying answer. Do not force a paradigm if it doesn't fit or if we can't answer it well.
@@ -277,15 +303,13 @@ The most engaging questions often follow one of these paradigms—but ONLY if it
 If none of these fit naturally, a strong substantive question is better than forcing a paradigm.
 
 CRITICAL RULES:
-- If you provide multiple questions, each MUST ask something FUNCTIONALLY DIFFERENT. Do NOT ask variations of the same question.
-  - BAD: "How did X become who they were?" and "How did a sickly child become successful?" (same question, rephrased)
-  - GOOD: "How did X overcome their physical limitations?" and "What drove X to break from convention?" and "Why did X's greatest achievement almost fail?"
-- Each question should be substantive—something the documentary will spend real time answering.
+- Return exactly ONE question. No more.
+- The question should be substantive—something the documentary will spend real time answering.
 - Tone: Authoritative and substantive (PBS/Ken Burns), not sensationalist. No "shocking" or "incredible"—create interest through substance and stakes.
 
 Return JSON:
 {{
-  "video_questions": ["Question 1", "Question 2 (optional)", "Question 3 (optional)"]
+  "video_questions": ["Your single compelling question here"]
 }}"""
 
 
@@ -352,8 +376,8 @@ def build_outline_prompt(person_of_interest: str, chapters: int, target_total_sc
     if video_questions:
         q_list = "\n".join(f"- {q}" for q in video_questions)
         questions_section = f"""
-THE QUESTIONS THIS DOCUMENTARY WILL ANSWER (CRITICAL - FRAME EVERYTHING):
-These questions were generated first. Your outline MUST be structured so the documentary answers each one. Every chapter should advance toward answering at least one of these. Chapter 1 must explicitly ask all of them.
+THE QUESTION THIS DOCUMENTARY WILL ANSWER (CRITICAL - FRAME EVERYTHING):
+This question was generated first. Your outline MUST be structured so the documentary answers it. Every chapter should advance toward answering it. The question must be woven into chapter 1 naturally—as the central thread. Allow it to unfold across scenes rather than forcing it into one beat.
 
 {q_list}
 
@@ -416,8 +440,10 @@ FULL LIFE SPAN - CRITICAL:
 - Sparse periods (e.g. childhood with little documented detail) can be brief (1-2 scenes)—brief is fine, but never skip entirely. Dense periods get more scenes.
 - Chapter year_ranges should flow continuously with no gaps (e.g. Ch2: 1452-1469, Ch3: 1469-1482). Overlap at boundaries is fine; skipping years is not.
 
+{get_hook_content_guidance()}
+
 STORY ARC REQUIREMENTS:
-1. Chapter 1 - THE HOOK: Always the hook chapter. Start by introducing the person with context. Present a rapid-fire "trailer" of their MOST interesting facts, achievements, controversies, and dramatic moments. Make viewers think "I NEED to know more." This is NOT chronological - it's a highlight reel. End with "But how did they get here? Let's start from the beginning..." Assign num_scenes (typically 4-5).
+1. Chapter 1 - THE HOOK: One focused question or central tension. NOT a rapid-fire highlight reel. Pick ONE thread (e.g. "How did X overcome Y?" or "What drove X to Z?") and build 4-5 scenes that go DEEPER into that thread. Scenes should feel connected—each builds on the last toward the same mystery or stakes. Avoid jumping across decades; either stay in one period or move chronologically within ONE narrative arc. End with a natural bridge to the full story: "But how did they get here? It begins with..." Assign num_scenes (typically 4-5). For key_events: 3-5 moments that all relate to the SAME question/tension—not a scatter of unrelated highlights.
 2. Chapter 2 - MUST START AT BIRTH: The first story chapter MUST cover birth and early years (childhood, upbringing, formative experiences). This creates a seamless transition from the hook. Can be brief (2-3 scenes) if little is known.
 3. Chapters 3+: Use ANY chapter type. Continue chronologically. Dense periods or major works deserve more scenes. Sparse transitions get fewer scenes.
 4. Final chapter: Legacy and emotional conclusion that echoes the hook.
@@ -635,8 +661,110 @@ Generate JSON with exactly 3 thumbnail_options (each has title, thumbnail_descri
 }}"""
 
 
+def build_metadata_prompt_3_options_no_global(person_of_interest: str, tagline: str, total_scenes: int,
+                                              video_questions: list[str] | None = None,
+                                              research_context: "ResearchContext | None" = None) -> str:
+    """
+    Build the initial metadata prompt that returns 3 title+thumbnail pairs (no global_block).
+    global_block is generated separately by Google.
+    """
+    video_questions_section = ""
+    if video_questions:
+        q_list = "\n".join(f"- {q}" for q in video_questions)
+        video_questions_section = f"""
+VIDEO QUESTIONS (the documentary will answer these):
+{q_list}
+
+CRITICAL: Each title and thumbnail pair must be driven by these video questions.
+"""
+    from research_utils import get_research_context_block
+    research_block = get_research_context_block(research_context) if research_context else ""
+    return f"""Create initial metadata for a documentary about: {person_of_interest}
+
+Their story in one line: {tagline}
+{research_block}
+{get_biopic_audience_profile()}
+{video_questions_section}
+Generate EXACTLY 3 different title+thumbnail pairs. The user will pick the best when uploading. Each pair must be self-contained and maximally symbiotic.
+
+FOR EACH PAIR - TITLE AND THUMBNAIL MUST BE SYMBIOTIC:
+1. Choose ONE WHY type for that pair (counterintuitive, secret_mystery, or known_but_misunderstood). Use a different WHY type for at least 2 of the 3 options to give variety.
+2. TITLE: Frame the curiosity using that WHY type. Power words: UNTOLD, REVEALED, SECRET, HIDDEN, REAL, WRONG, UNTHINKABLE.
+3. THUMBNAIL_TEXT: Must DIRECTLY reinforce the title. This is the short phrase that appears on the thumbnail. If title says "The Secret X Kept", thumbnail_text = "THE SECRET". If title says "What Everyone Gets WRONG", thumbnail_text = "EVERYONE GETS THIS WRONG" or "THE REAL STORY". If title says "Why X Did the UNTHINKABLE", thumbnail_text = "NOT WHAT YOU THINK" or "DEFIED EXPECTATIONS". Title and thumbnail_text are ONE symbiotic pair—they must say the same thing in different words.
+4. THUMBNAIL_DESCRIPTION: Describe the ONE peak moment. Same WHY type. Clean solid dark background. RULE OF THIRDS: Subject on intersection of thirds (left or right third), text in lower third band. REPRESENT FULL VIDEO, ACCURATE.
+
+THE THREE WHY TYPES (use different ones across the 3 options):
+- counterintuitive: Defies expectations. Title: "Why [Person] Did the UNTHINKABLE", "The Decision Nobody Saw Coming". thumbnail_text: "NOT WHAT YOU THINK", "DEFIED EXPECTATIONS".
+- secret_mystery: Hidden truth. Title: "The Secret [Person] Took to the Grave", "What [Person] Never Wanted You to Know". thumbnail_text: "THE SECRET", "HIDDEN TRUTH".
+- known_but_misunderstood: Familiar story most get wrong. Title: "What Everyone Gets WRONG About [Person]", "The Real [Person] (Not the Myth)". thumbnail_text: "EVERYONE GETS THIS WRONG", "THE REAL STORY".
+
+RULE OF THIRDS (CRITICAL for thumbnail_description): Describe composition using the 9-part grid. Subject must be on a THIRD (left third line or right third line, or at an intersection). NOT centered. Text goes in the LOWER third band only. The composition must follow this grid.
+
+Generate JSON with exactly 3 thumbnail_options (each has title, thumbnail_description, thumbnail_why_type, thumbnail_text):
+{{
+  "tag_line": "Short tagline (5-10 words) for this documentary.",
+  "thumbnail_options": [
+    {{"title": "Option 1 title (60-80 chars)", "thumbnail_description": "Peak moment. Subject on left or right third. Text in lower third. Clean background.", "thumbnail_why_type": "counterintuitive|secret_mystery|known_but_misunderstood", "thumbnail_text": "2-5 words that DIRECTLY reinforce the title"}},
+    {{"title": "Option 2 title (different angle)", "thumbnail_description": "...", "thumbnail_why_type": "...", "thumbnail_text": "..."}},
+    {{"title": "Option 3 title (different angle)", "thumbnail_description": "...", "thumbnail_why_type": "...", "thumbnail_text": "..."}}
+  ]
+}}"""
+
+
+def build_global_block_prompt(person_of_interest: str, total_scenes: int, outline: dict,
+                              tag_line: str, title: str) -> str:
+    """
+    Build prompt for generating the global_block (visual style guide) separately.
+    Uses outline and metadata as context. Called with Google (Gemini) for consistency.
+    """
+    person = outline.get("person", person_of_interest)
+    tagline = outline.get("tagline", tag_line)
+    central_theme = outline.get("central_theme", "")
+    narrative_arc = outline.get("narrative_arc", "")
+    chapters = outline.get("chapters", [])
+    overarching_plots = outline.get("overarching_plots", [])
+
+    chapters_block = ""
+    if chapters:
+        ch_lines = []
+        for ch in chapters[:12]:  # Limit to avoid huge prompts
+            ch_lines.append(f"- Ch {ch.get('chapter_num', '?')}: {ch.get('title', '')} - {ch.get('summary', '')[:150]}")
+        chapters_block = "CHAPTERS:\n" + "\n".join(ch_lines)
+
+    plots_block = ""
+    if overarching_plots:
+        plot_lines = [f"- {p.get('plot_name', '')}: {p.get('description', '')[:120]}" for p in overarching_plots[:6]]
+        plots_block = "OVERARCHING PLOTS:\n" + "\n".join(plot_lines)
+
+    return f"""Create a visual style guide (global_block) for a documentary about {person_of_interest}.
+
+DOCUMENTARY CONTEXT:
+- Title: {title}
+- Tag line: {tag_line}
+- Person: {person}
+- Tagline from outline: {tagline}
+- Central theme: {central_theme}
+- Narrative arc: {narrative_arc}
+
+{chapters_block}
+
+{plots_block}
+
+Write a 300-400 word visual style guide that will keep ALL {total_scenes} scenes visually cohesive. Include:
+1. Overall style: semi-realistic digital painting evoking Ken Burns documentary gravitas
+2. Color palette: specific colors (e.g. muted earth tones, deep browns, warm sepias, soft golds)
+3. Lighting: dramatic, single-source, chiaroscuro feel
+4. How {person_of_interest} should appear consistently: physical description (height, build, face, hair, beard), clothing by period, aging progression (youth to maturity)
+5. Backgrounds and compositions: rule of thirds, sparse vs detailed, typical settings
+6. Constraints: no anachronisms, no cartoons, no text in scene images (except title cards)
+
+Generate JSON:
+{{"global_block": "Your 300-400 word visual style guide here."}}"""
+
+
 def build_short_outline_prompt(person: str, outline: dict, short_num: int = 1, total_shorts: int = 3,
                               available_moods: list[str] | None = None, previously_used_topics: list[str] | None = None,
+                              previously_used_structures: list[str] | None = None,
                               research_context: "ResearchContext | None" = None) -> str:
     """
     Build a shared prompt for generating short outlines (trailer style).
@@ -649,6 +777,7 @@ def build_short_outline_prompt(person: str, outline: dict, short_num: int = 1, t
         total_shorts: Total number of shorts
         available_moods: List of music mood folder names for LLM to pick (e.g., ["relaxing", "passionate", "happy"])
         previously_used_topics: Titles or topics already used in other shorts—MUST pick a different topic
+        previously_used_structures: Narrative structures already used—prefer a DIFFERENT one for variety
     """
     moods_str = ", ".join(available_moods) if available_moods else "relaxing, passionate, happy"
     no_repeat_section = ""
@@ -658,6 +787,12 @@ def build_short_outline_prompt(person: str, outline: dict, short_num: int = 1, t
 CRITICAL - NO REPEAT TOPICS: The following topics have ALREADY been used in other shorts. You MUST pick a COMPLETELY DIFFERENT topic for this short. Do NOT cover the same story, event, or angle.
 {topics_list}
 Choose a different moment, work, or aspect of {person}'s life that is NOT listed above.
+"""
+    structure_variety_section = ""
+    if previously_used_structures:
+        struct_list = ", ".join(previously_used_structures)
+        structure_variety_section = f"""
+VARIETY - USE A DIFFERENT NARRATIVE STRUCTURE: Previous short(s) already used: {struct_list}. Prefer a DIFFERENT narrative_structure for this short (e.g. if question_first was used, try in_medias_res, twist_structure, or outcome_first).
 """
     # Build full outline context from all chapters
     chapters = outline.get("chapters", [])
@@ -681,33 +816,38 @@ Short #{short_num} of {total_shorts}
 
 FULL DOCUMENTARY OUTLINE - Pick whatever you think will make the BEST short form video from these events:
 {outline_context}
+{structure_variety_section}
 
-YOUR TASK: Choose ONE moment, work, or story from the outline above that would make a compelling 4-scene short. Expand it into a high-energy trailer: scenes 1-3 build the hook and end with a clear question; scene 4 answers that question (payoff). Do not instruct the short to end with a CTA to watch the full documentary in the narration—that hurts view duration.
+{get_hook_content_guidance()}
+
+NARRATIVE STRUCTURE: Choose ONE that best fits this story. Each creates a different flow and avoids the same formula every time.
+- question_first: Open with the question, then context. Works for most stories. (Default)
+- in_medias_res: Drop into the pivotal moment—no question yet. Pull back for context. Best for dramatic moments, crises.
+- outcome_first: Start with the result or achievement. "The only president with a patent." Then how we got here. Best for surprising outcomes.
+- twist_structure: Establish common belief, then complicate it. "But the truth was..." Best for counterintuitive stories.
+- chronological_story: Linear narrative. Set scene, build tension, climax, resolution. Best when the story flows naturally in order.
+
+YOUR TASK: Choose ONE moment or story from the outline above—not a summary of many. Pick the narrative_structure that best fits. The short should feel like a complete mini-story with enough depth that viewers feel satisfied. In hook_expansion: Describe how to execute the chosen structure across 4 scenes—scene-by-scene flow specific to that structure, not a generic formula. Do not instruct the short to end with a CTA to watch the full documentary in the narration—that hurts view duration.
 
 {get_biopic_audience_profile()}
 
-CRITICAL: This is a TRAILER, not a complete story. The short should:
-- Be HIGH ENERGY and attention-grabbing
-- Create CURIOSITY and make viewers NEED to watch the full documentary
-- Expand the hook into 4 scenes: scenes 1-3 build the hook and end with a clear question; scene 4 answers that question (payoff)
-- Scene 4 gives viewers a satisfying answer so they feel the short is complete. Do not add a spoken CTA to watch the full documentary at the end of scene 4—it hurts view duration and causes users to leave before the short finishes.
+CRITICAL: The short should:
+- Be HIGH ENERGY and attention-grabbing, but substantive and clear—viewers should understand what's happening, not just feel teased
+- Choose ONE moment or story—not a summary of many
+- In hook_expansion: Describe how to execute the chosen narrative_structure across 4 scenes—scene-by-scene flow, not a generic formula. Each structure has different scene roles.
+- Scene 4 gives viewers a satisfying answer/resolution so they feel the short is complete. Do not add a spoken CTA to watch the full documentary at the end of scene 4—it hurts view duration and causes users to leave before the short finishes.
 - Drive viewers to the main video via title/description only; never via end-of-narration CTA.
 
-This Short has EXACTLY 4 scenes (scenes 1-3 WHY, scene 4 WHAT):
-1. SCENE 1: Expand the hook - create high energy, grab attention immediately. Set up the mystery, problem, or question from the hook.
-2. SCENE 2: Build the hook - escalate the curiosity, add more intrigue, deepen the mystery or stakes.
-3. SCENE 3: Create anticipation - end with a compelling QUESTION that scene 4 will answer (e.g. "How did he do it?" "What happened next?" "Why did this work?").
-4. SCENE 4: ANSWER the question from scene 3. This is a WHAT scene - deliver the payoff with clear facts. Do NOT end with a CTA to watch the full documentary; end with a satisfying resolution only.
+This Short has EXACTLY 4 scenes. The flow depends on narrative_structure—see options above. hook_expansion must describe the scene-by-scene execution for your chosen structure.
 
 CRITICAL RULES:
-- HIGH ENERGY throughout - every scene should be attention-grabbing
-- Create CURIOSITY GAPS - tease information but don't fully reveal
-- Make viewers NEED to watch the main video to get answers
-- Scene 4 is the only resolution - it answers the question from scene 3; the full story remains in the main video
+- ONE THREAD: Scenes should advance the same story. Do not introduce new unrelated facts each scene.
+- DEPTH: Give key facts room to breathe. 2-3 sentences per scene with context. Avoid one-sentence bullets.
+- HIGH ENERGY can stay, but pair with substantive and clear—viewers should understand what's happening, not just feel teased
+- Scene 4 delivers the resolution—satisfying payoff. The full story remains in the main video.
 - Simple, clear, punchy sentences
 - Every scene must contain SPECIFIC, INTERESTING FACTS
 - NO vague statements or filler
-- Scenes 1-3 must be WHY scenes (trailer format); scene 4 must be a WHAT scene (payoff/answer)
 
 TITLE AND THUMBNAIL - SAME WHY TYPE, SYNERGY: Choose ONE WHY type (thumbnail_why_type) for this short. short_title and thumbnail (thumbnail_prompt + thumbnail_text) MUST both use that SAME type and play off each other—one curiosity gap, complementary angles. short_title must also reflect the video_question.
 
@@ -715,8 +855,9 @@ THUMBNAIL RULES: ONE subject, two colors, subject lit brighter than background. 
 
 THE THREE WHY TYPES (pick one; align short_title + thumbnail): counterintuitive (twist/unexpected), secret_mystery (hidden truth), known_but_misunderstood (what everyone gets wrong).
 
-Provide JSON (choose thumbnail_why_type FIRST; then short_title and thumbnail_prompt + thumbnail_text to match):
+Provide JSON (choose narrative_structure and thumbnail_why_type FIRST; then short_title and thumbnail_prompt + thumbnail_text to match):
 {{
+  "narrative_structure": "Exactly one of: question_first, in_medias_res, outcome_first, twist_structure, chronological_story. Pick the structure that best fits this story.",
   "thumbnail_why_type": "Exactly one of: counterintuitive, secret_mystery, known_but_misunderstood. Primary WHY type for this short. short_title and thumbnail MUST match this type.",
   "short_title": "WHY SCENE TITLE (max 50 chars) - MUST match thumbnail_why_type AND reflect video_question. Same curiosity as thumbnail. counterintuitive: frame the twist (e.g. How He Survived the IMPOSSIBLE); secret_mystery: frame the secret (e.g. The Secret That Saved His Life); known_but_misunderstood: frame the real story (e.g. What Everyone Gets WRONG About That Day). Title + thumbnail = one package for CTR.",
   "short_description": "YouTube description (100 words) with hashtags. Should drive viewers to watch the full documentary.",
@@ -724,9 +865,9 @@ Provide JSON (choose thumbnail_why_type FIRST; then short_title and thumbnail_pr
   "music_mood": "Exactly one of: {moods_str}. Pick the music mood that best fits this high-energy trailer.",
   "thumbnail_prompt": "ONE subject, ONE peak moment. MUST match thumbnail_why_type and synergize with short_title. Clean solid dark background—no figures, no letters, no half-visible elements. Subject lit; natural contrast (not extreme). Rule of thirds. Bold text in lower third only. ACCURATE to short's story. Mobile-friendly.",
   "thumbnail_text": "Short phrase (2-5 words) for thumbnail. MUST match thumbnail_why_type: counterintuitive -> NOT WHAT YOU THINK; secret_mystery -> THE SECRET; known_but_misunderstood -> EVERYONE GETS THIS WRONG. Omit for default.",
-  "video_question": "The question this short will answer - MUST be asked at the very start of scene 1. Must be specific to this short's chosen topic. Example: 'How did Roosevelt survive a point-blank shot to the chest?'",
-  "hook_expansion": "How to expand the chosen topic into a 4-scene short - what story/mystery to tease, and what question scene 3 should pose for scene 4 to answer",
-  "key_facts": ["3-5 specific facts to include across the 4 scenes: use in scenes 1-3 for curiosity, and in scene 4 for the payoff answer"]
+  "video_question": "The central question or curiosity this short answers. For question_first, state it in scene 1; for other structures, it can be implied or revealed later. Must be specific to this short's chosen topic.",
+  "hook_expansion": "How to execute the chosen narrative_structure across 4 scenes. Scene-by-scene flow specific to that structure—not a generic formula. Describe what each scene does.",
+  "key_facts": ["3-5 specific facts to include across the 4 scenes"]
 }}"""
 
 
@@ -775,160 +916,3 @@ VISUAL COMPOSITION:
 - {size_note}"""
 
 
-def get_horror_narration_style() -> str:
-    """Get first-person narration style for horror stories."""
-    return """NARRATION STYLE - FIRST PERSON HORROR (CRITICAL):
-- PERSPECTIVE: Write in FIRST PERSON - the protagonist is telling their own story (I/me/my)
-- CRITICAL: Use first person throughout - "I walk into the room...", "My heart pounds as I...", "I realize that..."
-- Present tense for immediacy and immersion: "I hear a sound...", "I turn around...", "I see something..."
-- IMMERSIVE and PERSONAL - make the viewer feel like they ARE the protagonist experiencing the horror
-- Horror tone: suspenseful, atmospheric, tense, fearful
-- Use sensory details: what I see, hear, feel, smell - make it visceral and immediate
-- Internal thoughts and reactions: "I think...", "I wonder...", "I'm terrified because..."
-- Physical sensations: "My hands shake...", "My heart races...", "I feel cold..."
-- Build tension through pacing: short, sharp sentences for scares; longer, atmospheric sentences for buildup
-- Create atmosphere through description: shadows, sounds, feelings of being watched
-- NO third person - never say "he/she/they" when referring to the protagonist
-- NO meta references - don't mention chapters, videos, or production elements
-- 2-3 sentences per scene (~12-18 seconds of narration)
-- Pack maximum atmosphere and tension into minimum words
-- CRITICAL: This is SPOKEN narration for text-to-speech. Do NOT include film directions or camera directions.
-- Write ONLY words that should be spoken by the protagonist's voice.
-- QUOTES (CRITICAL FOR TTS): Use quotes ONLY around proper nouns you want to emphasize (e.g. titles of works, key terms). Otherwise do NOT use any quotes—they will mess up the text-to-speech."""
-
-
-def build_horror_outline_prompt(story_concept: str, chapters: int, total_scenes: int) -> str:
-    """
-    Build the horror story outline generation prompt.
-    
-    Args:
-        story_concept: The story concept/prompt (e.g., "A haunted house story")
-        chapters: Number of chapters (should be 3 for horror)
-        total_scenes: Total number of scenes
-    """
-    return f"""You are a master horror storyteller. Create a compelling narrative outline for a ~10 minute horror story about: {story_concept}
-
-This will be a {total_scenes}-scene horror story with EXACTLY {chapters} chapters. Think of this as a SHORT HORROR FILM with building tension, scares, and an open ending.
-
-HORROR NARRATIVE STRUCTURE:
-- The story should feel like ONE CONTINUOUS HORROR EXPERIENCE, not disconnected scenes
-- Each chapter should ESCALATE tension from the previous one
-- Build ATMOSPHERE and FEAR throughout
-- Create MYSTERY and UNEASE that keeps viewers scared
-- End with an OPEN ENDING that leaves viewers unsettled and scared
-
-For each of the {chapters} chapters, provide:
-- "chapter_num": 1-{chapters}
-- "title": A compelling, scary chapter title
-- "time_setting": When/where this takes place (e.g., "Late night in an abandoned house", "Present day, suburban neighborhood")
-- "summary": 2-3 sentences about what happens (from first-person perspective)
-- "key_events": 4-6 specific scary moments or tension-building events to show
-- "emotional_tone": The horror mood of this chapter (e.g., "tense", "terrifying", "atmospheric", "dread-filled")
-- "dramatic_tension": What horror/threat drives this chapter
-- "connects_to_next": How this chapter escalates into the next
-- "horror_elements": Specific horror elements (e.g., "unexplained sounds", "shadowy figures", "growing paranoia")
-
-HORROR STORY ARC REQUIREMENTS:
-1. Chapter 1 - SETUP & TENSION BUILDING:
-   - Introduce protagonist in first person (I/me/my)
-   - Establish normal world before horror begins
-   - Introduce mystery/threat/unease
-   - Build initial tension and atmosphere
-   - Mostly WHY scenes (mystery, questions, unease)
-   - End with something unsettling that makes viewers want to continue
-
-2. Chapter 2 - ESCALATION & SCARES:
-   - Tension escalates significantly
-   - Scare moments and reveals
-   - Threat becomes clearer (but not fully explained)
-   - Mix of WHY (mystery) and WHAT (scares/reveals)
-   - Build to a major scare or revelation
-   - Increase fear and paranoia
-
-3. Chapter 3 - CLIMAX & OPEN ENDING:
-   - Final confrontation/climax with the horror
-   - Open ending (unresolved, keeps viewer scared)
-   - Lingering questions and unease
-   - Mostly WHY scenes (unresolved tension)
-   - End with something that makes viewers still feel scared/unsettled
-   - DO NOT fully resolve - leave mystery and fear lingering
-
-CRITICAL HORROR REQUIREMENTS:
-- First person perspective throughout (I/me/my)
-- Build TENSION progressively - each chapter should be scarier than the last
-- Create ATMOSPHERE through description: shadows, sounds, feelings, unease
-- Use WHY/WHAT paradigm at scene level:
-  * WHY scenes: Frame mysteries, questions, unease, "what's happening?" moments
-  * WHAT scenes: Reveal scares, show threats, deliver horror moments
-- Focus on FEAR and ATMOSPHERE, not just jump scares
-- Open ending is CRITICAL - don't fully explain or resolve everything
-- Make viewers feel UNSETTLED and SCARED even after watching
-
-CRITICAL: ENVIRONMENT SELECTION - You must select ONE environment for the entire story. This will determine the background ambient sound. Choose from: "blizzard", "snow", "forest", "rain", "indoors", or "jungle". Base your choice on the story's setting and atmosphere. The environment should match where the horror takes place.
-
-{{
-  "story_concept": "{story_concept}",
-  "protagonist_name": "Name of the protagonist (optional, can be generic like 'the narrator')",
-  "setting": "Where and when the story takes place",
-  "environment": "ONE of: 'blizzard', 'snow', 'forest', 'rain', 'indoors', or 'jungle' - the ambient environment for the entire story",
-  "central_horror": "The main horror element/threat (e.g., 'haunted house', 'unexplained entity', 'paranormal activity')",
-  "narrative_arc": "Brief description of the horror journey from normal to terrified",
-  "overarching_plots": [
-    {{
-      "plot_name": "The main horror thread (e.g., 'The Haunting', 'The Growing Threat', 'The Unseen Presence')",
-      "description": "What this horror plot is about",
-      "starts_chapter": 1-{chapters},
-      "peaks_chapter": 1-{chapters},
-      "resolves_chapter": null or {chapters} (but should remain open/unresolved),
-      "key_moments": ["specific horror moments that develop this story"]
-    }}
-  ],
-  "sub_plots": [
-    {{
-      "subplot_name": "A sub-plot that spans chapters (e.g., 'The Discovery', 'The Escalation', 'The Realization')",
-      "description": "What this sub-plot is about",
-      "chapters_span": [1-3],
-      "key_moments": ["specific moments that advance this sub-plot"]
-    }}
-  ],
-  "chapters": [
-    {{
-      "chapter_num": 1,
-      "title": "...",
-      "time_setting": "...",
-      "summary": "...",
-      "key_events": ["...", ...],
-      "emotional_tone": "...",
-      "dramatic_tension": "...",
-      "connects_to_next": "...",
-      "horror_elements": ["...", ...],
-      "plots_active": ["plot names or subplot names that are active/developing in this chapter"],
-      "plot_developments": ["How horror plots develop in this chapter - what happens to them"]
-    }},
-    ... ({chapters} chapters total)
-  ]
-}}"""
-
-
-def build_horror_metadata_prompt(story_concept: str, tagline: str, total_scenes: int) -> str:
-    """
-    Build the horror story metadata generation prompt.
-    
-    Args:
-        story_concept: The story concept
-        tagline: One-line tagline
-        total_scenes: Total number of scenes
-    """
-    return f"""Create initial metadata for a horror story video about: {story_concept}
-
-Story tagline: {tagline}
-
-CRITICAL: TITLE AND THUMBNAIL MUST BE COHESIVE AND SYNCED - They must create the SAME curiosity gap and work together to maximize CTR. The thumbnail should visually represent the same horror/mystery/threat that the title frames.
-
-Generate JSON:
-{{
-  "title": "MYSTERIOUS HORROR TITLE - MAXIMIZE CTR (30-50 chars): Inspired by famous horror book titles like 'The Shining', 'It', 'The Exorcist', 'Pet Sematary', 'The Thing'. Keep it SHORT, MYSTERIOUS, and AMBIGUOUS. Use simple, evocative words that create curiosity through ambiguity, not explicit questions. Avoid verbose explanations or parentheticals. The title should hint at horror without revealing it. Examples: 'The Mimic', 'Blizzard Whistle', 'Something in the Snow', 'The Echo', 'The Shadow', 'The Voice', 'The Presence', 'The Thing in the Basement', 'The Watcher', 'The Copy', 'The Reflection'. Use power words SPARINGLY - only when they add mystery (e.g., 'The Cursed', 'The Haunted', 'The Forbidden'). The title should make viewers think: 'What is this about?' through mystery, not explicit questions. Must create a curiosity gap that makes viewers NEED to click to discover the horror, while staying appropriate.",
-  "tag_line": "Short, scary tagline (5-10 words) that captures the horror. Examples: 'a story that will haunt you', 'the night that changed everything', 'when the horror found me', 'the thing that still watches'. Should be memorable and scary.",
-  "thumbnail_description": "WHY SCENE THUMBNAIL - MAXIMIZE CTR THROUGH HORROR (MUST BE COHESIVE WITH TITLE): The thumbnail must function as a WHY scene that creates the SAME curiosity gap and fear as the title. Visually frame the SAME MYSTERY, THREAT, or HORROR ELEMENT that the title frames. If the title asks 'What horror is this?', the thumbnail should visually hint at that horror. If the title mentions 'I Found Something EVIL', the thumbnail should show the moment of discovery or the evil element. If the title mentions 'The CURSED Object', the thumbnail should show visual elements suggesting the cursed object or its effects. Show scary, unsettling, or creepy elements that match the title's horror theme. Use visual storytelling to ask the SAME questions the title asks: 'What horror is this?', 'What threat is here?', 'What will happen?', 'What is watching?', 'What did they find?'. Composition: intense close-ups, fearful expressions, dramatic shadows, eerie lighting, horror atmosphere, symbolic elements suggesting danger or horror matching the title's theme, visual curiosity gaps that make viewers ask the SAME questions the title asks. Subject in MOMENT OF FEAR, DISCOVERY, or CONFRONTATION with horror - not passive. Show visual hints of the horror/threat without fully revealing it. Think: 'What question does this image make me ask?' It should be the SAME question the title asks. The viewer should look at this and think 'I NEED to know what this horror is about' - create visual fear and curiosity gaps that sync with the title. NO TEXT in image, but visually SCREAM horror, fear, and the promise of scares that matches the title's promise.",
-  "global_block": "Visual style guide (300-400 words): horror atmosphere, dark and shadowy, eerie lighting, color palette (blues, grays, deep shadows), how the horror should appear consistently across {total_scenes} scenes. Focus on mood, atmosphere, and fear rather than explicit gore."
-}}"""

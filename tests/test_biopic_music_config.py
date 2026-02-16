@@ -122,6 +122,55 @@ class TestBiopicMusicConfig(unittest.TestCase):
             mp3s = list(subdir.glob("*.mp3"))
             self.assertGreater(len(mp3s), 0, f"Mood {mood} should contain at least one .mp3")
 
+    def test_get_all_songs_when_dir_missing(self):
+        """When biopic_music/ does not exist, returns empty list."""
+        with patch.object(biopic_music_config, "BIOPIC_MUSIC_DIR", Path("/nonexistent/path/12345")):
+            result = biopic_music_config.get_all_songs()
+        self.assertEqual(result, [])
+
+    def test_get_all_songs_discovers_mp3s(self):
+        """get_all_songs returns relative paths for all MP3s under mood subdirs."""
+        tmp = _temp_dir_in_workspace()
+        try:
+            music_dir = Path(tmp) / "biopic_music"
+            music_dir.mkdir()
+            (music_dir / "relaxing").mkdir()
+            (music_dir / "relaxing" / "song1.mp3").touch()
+            (music_dir / "relaxing" / "song2.mp3").touch()
+            (music_dir / "passionate").mkdir()
+            (music_dir / "passionate" / "track.mp3").touch()
+            with patch.object(biopic_music_config, "BIOPIC_MUSIC_DIR", music_dir):
+                result = biopic_music_config.get_all_songs()
+            self.assertEqual(
+                sorted(result),
+                ["passionate/track.mp3", "relaxing/song1.mp3", "relaxing/song2.mp3"],
+            )
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_get_all_songs_ignores_non_mp3(self):
+        """get_all_songs only includes .mp3 files."""
+        tmp = _temp_dir_in_workspace()
+        try:
+            music_dir = Path(tmp) / "biopic_music"
+            music_dir.mkdir()
+            (music_dir / "relaxing").mkdir()
+            (music_dir / "relaxing" / "song.mp3").touch()
+            (music_dir / "relaxing" / "song.wav").touch()
+            with patch.object(biopic_music_config, "BIOPIC_MUSIC_DIR", music_dir):
+                result = biopic_music_config.get_all_songs()
+            self.assertEqual(result, ["relaxing/song.mp3"])
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_volume_label_to_db(self):
+        """volume_label_to_db maps low/medium/loud to correct dB values."""
+        self.assertEqual(biopic_music_config.volume_label_to_db("low"), -28.0)
+        self.assertEqual(biopic_music_config.volume_label_to_db("medium"), -25.5)
+        self.assertEqual(biopic_music_config.volume_label_to_db("loud"), -23.0)
+        self.assertEqual(biopic_music_config.volume_label_to_db("unknown"), -25.5)
+        self.assertEqual(biopic_music_config.volume_label_to_db(""), -25.5)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -159,5 +159,43 @@ class TestTitleIntegrity(unittest.TestCase):
         self.assertNotEqual(main_title, scene_titles[0])
 
 
+class TestGenerateShortScenes(unittest.TestCase):
+    """Test cases for generate_short_scenes (build_script_biopic)."""
+
+    def test_short_scenes_get_chapter_num(self):
+        """Short scenes must have chapter_num=1 for music track alignment."""
+        from unittest.mock import patch, MagicMock
+        from build_script_biopic import generate_short_scenes
+
+        # LLM returns scenes without chapter_num (schema may allow; we enforce in code)
+        mock_scenes = [
+            {"id": 1, "title": "Hook", "narration": "N1", "scene_type": "WHY", "image_prompt": "P1",
+             "emotion": "tense", "narration_instructions": "Focus on tension.", "year": "1860",
+             "kenburns_pattern": "zoom_in", "kenburns_intensity": "medium"},
+            {"id": 2, "title": "Build", "narration": "N2", "scene_type": "WHY", "image_prompt": "P2",
+             "emotion": "intense", "narration_instructions": "Focus on intensity.", "year": "1861",
+             "kenburns_pattern": "zoom_out", "kenburns_intensity": "pronounced"},
+            {"id": 3, "title": "Climax", "narration": "N3", "scene_type": "WHY", "image_prompt": "P3",
+             "emotion": "urgent", "narration_instructions": "Focus on urgency.", "year": "1862",
+             "kenburns_pattern": "drift_up", "kenburns_intensity": "medium"},
+            {"id": 4, "title": "Payoff", "narration": "N4", "scene_type": "WHAT", "image_prompt": "P4",
+             "emotion": "satisfying", "narration_instructions": "Focus on payoff.", "year": "1863",
+             "kenburns_pattern": "drift_down", "kenburns_intensity": "subtle"},
+        ]
+        with patch("build_script_biopic.llm_utils.generate_text") as mock_gen:
+            mock_gen.return_value = json.dumps(mock_scenes)
+            short_outline = {
+                "short_title": "Test Short",
+                "hook_expansion": "Hook text",
+                "video_question": "What happened?",
+                "narrative_structure": "question_first",
+                "key_facts": ["Fact 1"],
+            }
+            result = generate_short_scenes("Lincoln", short_outline, 1809, 1865)
+        self.assertEqual(len(result), 4)
+        for i, scene in enumerate(result):
+            self.assertEqual(scene.get("chapter_num"), 1, f"Scene {i+1} must have chapter_num=1")
+
+
 if __name__ == "__main__":
     unittest.main()

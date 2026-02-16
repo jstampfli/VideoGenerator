@@ -12,6 +12,38 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import prompt_builders
 
 
+class TestGetHookContentGuidance(unittest.TestCase):
+    """Test cases for get_hook_content_guidance function."""
+
+    def test_returns_depth_over_breadth(self):
+        """Hook content guidance emphasizes depth over breadth."""
+        result = prompt_builders.get_hook_content_guidance()
+        self.assertIn("DEPTH OVER BREADTH", result)
+        self.assertIn("ONE question or tension", result)
+        self.assertIn("Connected scenes", result)
+        self.assertIn("substantive storytelling", result.lower())
+        # Guidance tells writers to avoid meta "You'll discover" language
+        self.assertIn("avoid", result.lower())
+        self.assertIn("meta", result.lower())
+
+
+class TestBuildVideoQuestionsPrompt(unittest.TestCase):
+    """Test cases for build_video_questions_prompt (exactly 1 question)."""
+
+    def test_asks_for_exactly_one_question(self):
+        """Prompt must ask for exactly ONE question, not 1-3."""
+        result = prompt_builders.build_video_questions_prompt("Einstein", research_context=None)
+        self.assertIn("exactly ONE question", result)
+        self.assertIn("ONE compelling question", result)
+        self.assertNotIn("1-3 questions", result)
+
+    def test_return_json_single_question(self):
+        """Return JSON example shows single question array."""
+        result = prompt_builders.build_video_questions_prompt("Lincoln", research_context=None)
+        self.assertIn('"video_questions":', result)
+        self.assertIn("Your single compelling question", result)
+
+
 class TestWhyWhatParadigmPrompt(unittest.TestCase):
     """Test cases for get_why_what_paradigm_prompt function."""
     
@@ -126,6 +158,52 @@ class TestTrailerNarrationStyle(unittest.TestCase):
         self.assertIn("third person", result.lower())
         self.assertIn("HIGH ENERGY", result)
         self.assertIn("curiosity gaps", result.lower())
+
+
+class TestGetShortStructurePrompt(unittest.TestCase):
+    """Test cases for get_short_structure_prompt function."""
+
+    def test_question_first_structure(self):
+        """question_first returns Scene 1 MUST start with video_question."""
+        result = prompt_builders.get_short_structure_prompt("question_first", "How did X do it?")
+        self.assertIn("question_first", result)
+        self.assertIn("SCENE 1", result)
+        self.assertIn("video_question", result)
+        self.assertIn("Open with", result)
+
+    def test_in_medias_res_structure(self):
+        """in_medias_res returns drop-into-moment instructions."""
+        result = prompt_builders.get_short_structure_prompt("in_medias_res", "What happened?")
+        self.assertIn("in_medias_res", result)
+        self.assertIn("Drop into", result)
+        self.assertIn("NO question yet", result)
+
+    def test_outcome_first_structure(self):
+        """outcome_first returns start-with-result instructions."""
+        result = prompt_builders.get_short_structure_prompt("outcome_first", "Why did it work?")
+        self.assertIn("outcome_first", result)
+        self.assertIn("result", result)
+        self.assertIn("achievement", result)
+
+    def test_twist_structure(self):
+        """twist_structure returns common-belief-then-reveal instructions."""
+        result = prompt_builders.get_short_structure_prompt("twist_structure", "What was the truth?")
+        self.assertIn("twist_structure", result)
+        self.assertIn("common belief", result)
+        self.assertIn("twist", result)
+
+    def test_chronological_story_structure(self):
+        """chronological_story returns linear narrative instructions."""
+        result = prompt_builders.get_short_structure_prompt("chronological_story", "How did it unfold?")
+        self.assertIn("chronological_story", result)
+        self.assertIn("linear", result.lower())
+        self.assertIn("Climax", result)
+
+    def test_invalid_structure_falls_back_to_question_first(self):
+        """Invalid structure falls back to question_first."""
+        result = prompt_builders.get_short_structure_prompt("invalid", "Test?")
+        self.assertIn("question_first", result)
+        self.assertIn("Open with", result)
 
 
 class TestTrailerStructurePrompt(unittest.TestCase):
@@ -247,6 +325,14 @@ class TestBuildOutlinePrompt(unittest.TestCase):
         self.assertIn("passionate", result)
         self.assertIn("happy", result)
 
+    def test_outline_ch1_depth_over_breadth(self):
+        """Chapter 1 hook must emphasize one thread, depth over breadth, not rapid-fire."""
+        result = prompt_builders.build_outline_prompt("Einstein", chapters=4, target_total_scenes=16)
+        self.assertIn("One focused question or central tension", result)
+        self.assertIn("NOT a rapid-fire highlight reel", result)
+        self.assertIn("DEPTH OVER BREADTH", result)
+        self.assertIn("ONE question or tension", result)
+
 
 class TestBuildShortOutlinePrompt(unittest.TestCase):
     """Test cases for build_short_outline_prompt function."""
@@ -269,6 +355,36 @@ class TestBuildShortOutlinePrompt(unittest.TestCase):
         self.assertIn("happy", result)
         self.assertIn("high-energy trailer", result.lower())
         self.assertIn("FULL DOCUMENTARY OUTLINE", result)
+
+    def test_short_outline_one_thread_depth(self):
+        """Short outline must emphasize one moment, one thread, depth over breadth."""
+        outline = {"chapters": [{"chapter_num": 1, "title": "Hook", "key_events": []}]}
+        result = prompt_builders.build_short_outline_prompt("Einstein", outline, short_num=1, total_shorts=2)
+        self.assertIn("ONE moment or story", result)
+        self.assertIn("ONE THREAD", result)
+        self.assertIn("DEPTH", result)
+
+    def test_short_outline_narrative_structure_options(self):
+        """Short outline must include narrative structure options."""
+        outline = {"chapters": [{"chapter_num": 1, "title": "Hook", "key_events": []}]}
+        result = prompt_builders.build_short_outline_prompt("Einstein", outline, short_num=1, total_shorts=2)
+        self.assertIn("narrative_structure", result)
+        self.assertIn("question_first", result)
+        self.assertIn("in_medias_res", result)
+        self.assertIn("outcome_first", result)
+        self.assertIn("twist_structure", result)
+        self.assertIn("chronological_story", result)
+
+    def test_short_outline_structure_variety_when_used(self):
+        """When previously_used_structures provided, prompt asks for different structure."""
+        outline = {"chapters": [{"chapter_num": 1, "title": "Hook", "key_events": []}]}
+        result = prompt_builders.build_short_outline_prompt(
+            "Einstein", outline, short_num=2, total_shorts=3,
+            previously_used_structures=["question_first"]
+        )
+        self.assertIn("question_first", result)
+        self.assertIn("DIFFERENT", result)
+        self.assertIn("VARIETY", result)
 
 
 class TestBuildMetadataPrompt(unittest.TestCase):
@@ -376,6 +492,51 @@ class TestBuildMetadataPrompt3Options(unittest.TestCase):
         self.assertIn("counterintuitive", result.lower())
         self.assertIn("secret_mystery", result.lower())
         self.assertIn("known_but_misunderstood", result.lower())
+
+
+class TestBuildMetadataPrompt3OptionsNoGlobal(unittest.TestCase):
+    """Test cases for build_metadata_prompt_3_options_no_global (no global_block)."""
+
+    def test_no_global_prompt_excludes_global_block(self):
+        """No-global prompt must NOT request global_block (generated separately by Google)."""
+        result = prompt_builders.build_metadata_prompt_3_options_no_global(
+            "Einstein", "the man who changed the world", 24
+        )
+        self.assertIn("thumbnail_options", result)
+        self.assertIn("tag_line", result.lower())
+        self.assertNotIn("global_block", result.lower())
+
+    def test_no_global_prompt_structure(self):
+        """No-global prompt must request tag_line and thumbnail_options."""
+        result = prompt_builders.build_metadata_prompt_3_options_no_global(
+            "Lincoln", "the president who saved the union", 30
+        )
+        self.assertIn("tag_line", result.lower())
+        self.assertIn("thumbnail_options", result)
+
+
+class TestBuildGlobalBlockPrompt(unittest.TestCase):
+    """Test cases for build_global_block_prompt (visual style guide)."""
+
+    def test_global_block_prompt_includes_outline_and_metadata(self):
+        """Global block prompt must include outline context and metadata (title, tag_line)."""
+        outline = {
+            "person": "Lincoln",
+            "tagline": "The president who saved the union",
+            "central_theme": "Preservation",
+            "narrative_arc": "From log cabin to White House",
+            "chapters": [{"chapter_num": 1, "title": "Early Years", "summary": "Childhood"}],
+            "overarching_plots": [{"plot_name": "Civil War", "description": "The conflict"}],
+        }
+        result = prompt_builders.build_global_block_prompt(
+            "Lincoln", 24, outline, "Short tag", "The Real Lincoln"
+        )
+        self.assertIn("Lincoln", result)
+        self.assertIn("The Real Lincoln", result)
+        self.assertIn("Short tag", result)
+        self.assertIn("Preservation", result)
+        self.assertIn("visual style guide", result.lower())
+        self.assertIn("global_block", result.lower())
 
 
 if __name__ == "__main__":

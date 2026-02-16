@@ -19,7 +19,7 @@ import requests
 RESEARCH_CACHE_DIR = Path("research_cache")
 WIKIPEDIA_API = "https://en.wikipedia.org/w/api.php"
 USER_AGENT = "VideoGenerator/1.0 (biopic script research; https://github.com)"
-MAX_SUMMARY_CHARS = 1_000_000  # Full article; Gemini 2.0 Flash has 1M token context
+MAX_SUMMARY_CHARS = 1_000_000  # Beyond this, extra content may dilute focus on the most relevant early sections
 RESEARCH_DEBUG = os.getenv("DEBUG", "").lower() in ("1", "true", "yes")
 
 
@@ -221,7 +221,8 @@ def _save_to_cache(person: str, ctx: ResearchContext) -> None:
 def fetch_research(person_of_interest: str, use_cache: bool = True) -> ResearchContext:
     """
     Fetch research for a person from Wikipedia.
-    Returns a ResearchContext with summary (truncated to token budget) and optional key_facts.
+    Returns a ResearchContext with summary and optional key_facts.
+    Truncation only when article length would dilute focus on the most relevant content.
     """
     if use_cache:
         cached = _load_from_cache(person_of_interest)
@@ -242,7 +243,7 @@ def fetch_research(person_of_interest: str, use_cache: bool = True) -> ResearchC
         if not extract:
             return ResearchContext(summary="")
 
-        # Truncate for prompt budget
+        # Truncate only when extreme length would dilute focus (quality, not cost/length)
         summary = _truncate_at_paragraphs(extract, MAX_SUMMARY_CHARS)
         if len(summary) < len(extract):
             _log(f"Truncated extract from {len(extract)} to {len(summary)} chars")

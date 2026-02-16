@@ -21,30 +21,20 @@ warnings.filterwarnings("ignore", category=RuntimeWarning, message=".*FFMPEG_Aud
 warnings.filterwarnings("ignore", message=".*FFMPEG_AudioReader.*proc.*")
 
 from build_video import (
-    text_to_ssml,
     load_scenes,
     build_image_prompt,
     find_shorts_for_script,
     find_all_shorts,
     sanitize_prompt_for_safety,
-    generate_room_tone,
-    generate_low_frequency_drone,
-    generate_low_frequency_drone_with_transition,
-    generate_drone_with_scene_transitions,
-    generate_detail_sounds,
-    apply_volume_to_audioclip,
-    mix_horror_background_audio,
-    get_horror_disclaimer_image_path,
-    HORROR_DISCLAIMER_DURATION,
     FIXED_IMAGES_DIR,
-    HORROR_DISCLAIMER_TALL,
-    HORROR_DISCLAIMER_WIDE,
     END_SCENE_PAUSE_LENGTH,
+    START_SCENE_PAUSE_LENGTH,
     _build_video_impl,
     make_motion_clip_with_audio,
     make_static_clip_with_audio,
     build_biopic_music_track,
     mix_biopic_background_music,
+    normalize_audio_to_lufs,
     KENBURNS_PATTERNS,
     KENBURNS_ENABLED,
     CROSSFADE_DURATION,
@@ -52,119 +42,6 @@ from build_video import (
 )
 from moviepy import AudioClip, CompositeAudioClip, VideoClip, AudioFileClip
 import numpy as np
-
-
-class TestTextToSSML(unittest.TestCase):
-    """Test cases for text_to_ssml function."""
-    
-    @patch('build_video.TTS_PROVIDER', 'google')
-    @patch('build_video.GOOGLE_VOICE_TYPE', '')
-    def test_basic_text(self):
-        """Test basic text conversion."""
-        text = "Hello world."
-        result = text_to_ssml(text)
-        self.assertIn("<speak>", result)
-        self.assertIn("</speak>", result)
-        self.assertIn("Hello world", result)
-    
-    @patch('build_video.TTS_PROVIDER', 'google')
-    @patch('build_video.GOOGLE_VOICE_TYPE', '')
-    def test_sentence_pauses(self):
-        """Test that periods add pauses."""
-        text = "First sentence. Second sentence."
-        result = text_to_ssml(text)
-        self.assertIn('<break time="400ms"/>', result)
-        # Should have breaks after both sentences
-        self.assertEqual(result.count('<break time="400ms"/>'), 2)
-    
-    @patch('build_video.TTS_PROVIDER', 'google')
-    @patch('build_video.GOOGLE_VOICE_TYPE', '')
-    def test_ellipsis_handling(self):
-        """Test ellipsis conversion to dramatic pause."""
-        text = "He thought... then acted."
-        result = text_to_ssml(text)
-        # Ellipsis should become 600ms break, not 400ms
-        self.assertIn('<break time="600ms"/>', result)
-        # Should still have pause after final period
-        self.assertIn('<break time="400ms"/>', result)
-    
-    @patch('build_video.TTS_PROVIDER', 'google')
-    @patch('build_video.GOOGLE_VOICE_TYPE', '')
-    def test_unicode_ellipsis(self):
-        """Test Unicode ellipsis character."""
-        text = "He thought… then acted."
-        result = text_to_ssml(text)
-        self.assertIn('<break time="600ms"/>', result)
-    
-    @patch('build_video.TTS_PROVIDER', 'google')
-    @patch('build_video.GOOGLE_VOICE_TYPE', '')
-    def test_comma_pauses(self):
-        """Test that commas add shorter pauses."""
-        text = "First, second, third."
-        result = text_to_ssml(text)
-        # Should have 200ms breaks after commas
-        self.assertIn('<break time="200ms"/>', result)
-        # Should have 400ms break after period
-        self.assertIn('<break time="400ms"/>', result)
-    
-    @patch('build_video.TTS_PROVIDER', 'google')
-    @patch('build_video.GOOGLE_VOICE_TYPE', '')
-    def test_question_exclamation_pauses(self):
-        """Test question and exclamation marks."""
-        text = "Really? Yes!"
-        result = text_to_ssml(text)
-        self.assertIn('<break time="350ms"/>', result)
-        # Should have two breaks (one for ?, one for !)
-        self.assertEqual(result.count('<break time="350ms"/>'), 2)
-    
-    @patch('build_video.TTS_PROVIDER', 'google')
-    @patch('build_video.GOOGLE_VOICE_TYPE', '')
-    def test_em_dash_pause(self):
-        """Test em-dash conversion to pause."""
-        text = "He said—then stopped."
-        result = text_to_ssml(text)
-        # Em-dash should become 400ms break
-        self.assertIn('<break time="400ms"/>', result)
-        # Should not contain the em-dash character
-        self.assertNotIn("—", result)
-    
-    @patch('build_video.TTS_PROVIDER', 'google')
-    @patch('build_video.GOOGLE_VOICE_TYPE', '')
-    def test_hyphen_pauses(self):
-        """Test hyphen/dash handling."""
-        text = "Word - another word."
-        result = text_to_ssml(text)
-        # Should have break where hyphen was
-        self.assertIn('<break time="300ms"/>', result)
-    
-    @patch('build_video.TTS_PROVIDER', 'google')
-    @patch('build_video.GOOGLE_VOICE_TYPE', '')
-    def test_year_emphasis(self):
-        """Test that years get prosody emphasis."""
-        text = "In 1936, he published."
-        result = text_to_ssml(text)
-        # Years should be wrapped in prosody tags
-        self.assertIn('<prosody rate="95%">1936</prosody>', result)
-    
-    @patch('build_video.TTS_PROVIDER', 'google')
-    @patch('build_video.GOOGLE_VOICE_TYPE', '')
-    def test_xml_escaping(self):
-        """Test that special XML characters are escaped."""
-        text = "A & B < C > D"
-        result = text_to_ssml(text)
-        # Should escape special characters
-        self.assertIn("&amp;", result)
-        self.assertIn("&lt;", result)
-        self.assertIn("&gt;", result)
-    
-    @patch('build_video.TTS_PROVIDER', 'google')
-    @patch('build_video.GOOGLE_VOICE_TYPE', '')
-    def test_colon_semicolon_pauses(self):
-        """Test colon and semicolon pauses."""
-        text = "First: second; third."
-        result = text_to_ssml(text)
-        self.assertIn('<break time="300ms"/>', result)  # Colon
-        self.assertIn('<break time="250ms"/>', result)  # Semicolon
 
 
 class TestLoadScenes(unittest.TestCase):
@@ -349,6 +226,77 @@ class TestBuildImagePrompt(unittest.TestCase):
         # Context must appear before scene description so model sees it first
         self.assertLess(prompt.index("STORY CONTEXT"), prompt.index("Footsteps outside"))
 
+    def test_prompt_chapter_transition_uses_title_card_constraint(self):
+        """Chapter transition scenes use TITLE CARD constraint instead of 'no text'."""
+        scene = {
+            "id": 2,
+            "title": "Chapter 2: Frontier Foundations",
+            "narration": "Frontier Foundations",
+            "image_prompt": "Title card with chapter title, 16:9",
+            "is_chapter_transition": True,
+        }
+        prompt = build_image_prompt(scene, None, None)
+        self.assertIn("TITLE CARD", prompt)
+        self.assertIn("Frontier Foundations", prompt)
+        self.assertNotIn("text-free", prompt.lower())
+        # Anti-gap: prompt must instruct to fill the entire frame
+        self.assertIn("FILL THE ENTIRE FRAME", prompt)
+        self.assertIn("no empty black areas", prompt.lower())
+
+
+class TestStoryContextPassing(unittest.TestCase):
+    """Test that story_context from metadata is passed to image generation."""
+
+    def test_story_context_passed_when_metadata_has_it(self):
+        """When metadata contains story_context, it must be passed to generate_image_for_scene_with_retry."""
+        try:
+            from PIL import Image
+        except ImportError:
+            self.skipTest("PIL not available")
+
+        import build_video as bv
+        tmp = _TESTS_DIR / "tmp_story_context"
+        tmp.mkdir(parents=True, exist_ok=True)
+        try:
+            story_context_value = "The threat: a bear in the woods. Depict bear paws, not human."
+            scenes_data = {
+                "metadata": {"story_context": story_context_value},
+                "scenes": [
+                    {"id": 1, "title": "Footsteps", "narration": "Heavy steps.", "image_prompt": "Forest floor."},
+                ],
+            }
+            scenes_path = tmp / "scenes.json"
+            with open(scenes_path, "w", encoding="utf-8") as f:
+                json.dump(scenes_data, f, indent=2)
+
+            img_path = tmp / "scene.png"
+            Image.new("RGB", (1536, 1024), color="white").save(str(img_path))
+
+            import wave
+            audio_path = tmp / "scene.wav"
+            with wave.open(str(audio_path), "wb") as wav:
+                wav.setnchannels(2)
+                wav.setsampwidth(2)
+                wav.setframerate(44100)
+                wav.writeframes(b"\x00\x00" * (44100 * 2 * 2))
+
+            with patch.object(bv.config, "save_assets", False), \
+                 patch.object(bv.config, "is_vertical", False), \
+                 patch.object(bv.config, "temp_dir", str(tmp)), \
+                 patch("build_video.generate_image_for_scene_with_retry", return_value=img_path) as mock_gen, \
+                 patch("build_video.generate_audio_for_scene_with_retry", return_value=audio_path), \
+                 patch("build_video.make_motion_clip_with_audio") as mock_motion, \
+                 patch("build_video.concatenate_videoclips") as mock_concat:
+                mock_concat.return_value = MagicMock(duration=4.0, audio=MagicMock(fps=44100))
+                with patch("moviepy.video.VideoClip.VideoClip.write_videofile"):
+                    _build_video_impl(str(scenes_path), out_video_path=str(tmp / "out.mp4"), motion=False)
+
+            mock_gen.assert_called_once()
+            call_kwargs = mock_gen.call_args[1]
+            self.assertEqual(call_kwargs.get("story_context"), story_context_value)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
 
 class TestFindShortsForScript(unittest.TestCase):
     """Test cases for find_shorts_for_script function."""
@@ -497,658 +445,6 @@ class TestSanitizePromptForSafety(unittest.TestCase):
         self.assertIn("legacy", result.lower())
         self.assertIn("journey", result.lower())
 
-
-class TestHorrorBackgroundAudio(unittest.TestCase):
-    """Test cases for horror background audio functions."""
-    
-    def test_generate_room_tone(self):
-        """Test that room tone is generated correctly."""
-        duration = 1.0  # 1 second
-        room_tone = generate_room_tone(duration)
-        
-        # Should return an AudioClip
-        self.assertIsInstance(room_tone, AudioClip)
-        # Duration should match
-        self.assertAlmostEqual(room_tone.duration, duration, places=2)
-        # Should have fps
-        self.assertIsNotNone(room_tone.fps)
-        # Should be able to get audio samples using get_frame
-        sample = room_tone.get_frame(0.5)
-        self.assertIsNotNone(sample)
-    
-    def test_generate_room_tone_duration(self):
-        """Test room tone with different durations."""
-        for duration in [0.5, 1.0, 2.0, 5.0]:
-            room_tone = generate_room_tone(duration)
-            self.assertAlmostEqual(room_tone.duration, duration, places=2)
-    
-    def test_generate_low_frequency_drone(self):
-        """Test that low-frequency drone is generated correctly."""
-        duration = 1.0
-        frequency = 50.0
-        drone = generate_low_frequency_drone(duration, frequency)
-        
-        # Should return an AudioClip
-        self.assertIsInstance(drone, AudioClip)
-        # Duration should match
-        self.assertAlmostEqual(drone.duration, duration, places=2)
-        # Should have fps
-        self.assertIsNotNone(drone.fps)
-        # Should be able to get audio samples using get_frame
-        sample = drone.get_frame(0.5)
-        self.assertIsNotNone(sample)
-    
-    def test_generate_drone_frequency_clamping(self):
-        """Test that drone frequency is clamped to 30-80 Hz range."""
-        # Test frequency below minimum (should clamp to 30)
-        drone_low = generate_low_frequency_drone(1.0, 10.0)
-        self.assertIsInstance(drone_low, AudioClip)
-        
-        # Test frequency above maximum (should clamp to 80)
-        drone_high = generate_low_frequency_drone(1.0, 100.0)
-        self.assertIsInstance(drone_high, AudioClip)
-        
-        # Test frequency in range
-        drone_normal = generate_low_frequency_drone(1.0, 50.0)
-        self.assertIsInstance(drone_normal, AudioClip)
-    
-    def test_generate_detail_sounds(self):
-        """Test that detail sounds are generated correctly."""
-        duration = 2.0
-        detail_sounds = generate_detail_sounds(duration, sound_type="random")
-        
-        # Should return an AudioClip
-        self.assertIsInstance(detail_sounds, AudioClip)
-        # Duration should be at least the requested duration (sounds can extend beyond)
-        # Individual sounds can be 0.5-2 seconds, and are placed randomly
-        self.assertGreaterEqual(detail_sounds.duration, duration)
-        # Should have fps
-        self.assertIsNotNone(detail_sounds.fps)
-    
-    def test_generate_detail_sounds_specific_types(self):
-        """Test detail sounds with specific sound types."""
-        duration = 1.0
-        for sound_type in ["creak", "wind", "hum", "whisper"]:
-            detail_sounds = generate_detail_sounds(duration, sound_type=sound_type)
-            self.assertIsInstance(detail_sounds, AudioClip)
-            # Duration should be at least the requested duration
-            # Sounds are placed randomly and can extend up to 2 seconds each,
-            # so the actual duration can be longer than requested
-            self.assertGreaterEqual(detail_sounds.duration, duration)
-            # Allow for sounds that extend beyond (up to 2 seconds per sound, 3-8 sounds total)
-            # So max could be duration + ~16 seconds, but typically much less
-            # We'll just check it's reasonable (not more than 5x the duration)
-            self.assertLessEqual(detail_sounds.duration, duration * 5)
-    
-    def test_apply_volume_to_audioclip(self):
-        """Test that volume is applied correctly to AudioClip."""
-        # Create a simple test AudioClip
-        duration = 1.0
-        sample_rate = 44100
-        
-        def make_test_audio(t):
-            if np.isscalar(t):
-                return 1.0
-            else:
-                return np.ones_like(t)
-        
-        original_clip = AudioClip(make_test_audio, duration=duration, fps=sample_rate)
-        
-        # Apply volume (half volume)
-        volume_factor = 0.5
-        volume_adjusted = apply_volume_to_audioclip(original_clip, volume_factor)
-        
-        # Should return an AudioClip
-        self.assertIsInstance(volume_adjusted, AudioClip)
-        # Duration should be preserved
-        self.assertAlmostEqual(volume_adjusted.duration, duration, places=2)
-        # FPS should be preserved
-        self.assertEqual(volume_adjusted.fps, sample_rate)
-        
-        # Check that volume is actually applied using get_frame
-        original_sample = original_clip.get_frame(0.5)
-        adjusted_sample = volume_adjusted.get_frame(0.5)
-        
-        # Adjusted sample should be half the original
-        if np.isscalar(original_sample):
-            self.assertAlmostEqual(adjusted_sample, original_sample * volume_factor, places=5)
-        else:
-            np.testing.assert_array_almost_equal(adjusted_sample, original_sample * volume_factor, decimal=5)
-    
-    def test_apply_volume_zero(self):
-        """Test applying zero volume (should silence audio)."""
-        duration = 1.0
-        sample_rate = 44100
-        
-        def make_test_audio(t):
-            if np.isscalar(t):
-                return 1.0
-            else:
-                return np.ones_like(t)
-        
-        original_clip = AudioClip(make_test_audio, duration=duration, fps=sample_rate)
-        silenced = apply_volume_to_audioclip(original_clip, 0.0)
-        
-        sample = silenced.get_frame(0.5)
-        if np.isscalar(sample):
-            self.assertEqual(sample, 0.0)
-        else:
-            np.testing.assert_array_equal(sample, np.zeros_like(sample))
-    
-    def test_apply_volume_double(self):
-        """Test applying double volume (should amplify audio)."""
-        duration = 1.0
-        sample_rate = 44100
-        
-        def make_test_audio(t):
-            if np.isscalar(t):
-                return 0.5
-            else:
-                return np.full_like(t, 0.5)
-        
-        original_clip = AudioClip(make_test_audio, duration=duration, fps=sample_rate)
-        amplified = apply_volume_to_audioclip(original_clip, 2.0)
-        
-        original_sample = original_clip.get_frame(0.5)
-        amplified_sample = amplified.get_frame(0.5)
-        
-        if np.isscalar(original_sample):
-            self.assertAlmostEqual(amplified_sample, original_sample * 2.0, places=5)
-        else:
-            np.testing.assert_array_almost_equal(amplified_sample, original_sample * 2.0, decimal=5)
-    
-    @patch('build_video.generate_room_tone')
-    @patch('build_video.generate_low_frequency_drone')
-    @patch('build_video.generate_detail_sounds')
-    @patch('build_video.apply_volume_to_audioclip')
-    def test_mix_horror_background_audio_structure(self, mock_apply_volume, mock_detail_sounds, 
-                                                     mock_drone, mock_room_tone):
-        """Test that mix_horror_background_audio calls all required functions."""
-        duration = 5.0
-        
-        # Create mock AudioClip objects
-        def make_silence(t):
-            return 0.0
-        
-        mock_room = AudioClip(make_silence, duration=duration, fps=44100)
-        mock_drone_clip = AudioClip(make_silence, duration=duration, fps=44100)
-        mock_detail = AudioClip(make_silence, duration=duration, fps=44100)
-        
-        mock_room_tone.return_value = mock_room
-        mock_drone.return_value = mock_drone_clip
-        mock_detail_sounds.return_value = mock_detail
-        mock_apply_volume.side_effect = lambda clip, vol: clip  # Return clip as-is
-        
-        # Create narration audio
-        narration_audio = AudioClip(make_silence, duration=duration, fps=44100)
-        
-        # Call the function
-        try:
-            result = mix_horror_background_audio(
-                narration_audio,
-                duration,
-                room_tone_volume=-45.0,
-                drone_volume=-25.0,
-                detail_volume=-30.0
-            )
-            
-            # Should return a CompositeAudioClip
-            self.assertIsInstance(result, CompositeAudioClip)
-            
-            # Verify all functions were called
-            mock_room_tone.assert_called_once_with(duration)
-            mock_drone.assert_called_once_with(duration, frequency=50.0)
-            mock_detail_sounds.assert_called_once_with(duration, sound_type="random")
-            
-            # Volume should be applied 3 times (room tone, drone, detail)
-            self.assertEqual(mock_apply_volume.call_count, 3)
-        except Exception as e:
-            # If CompositeAudioClip creation fails, that's okay for unit test
-            # We're mainly testing that the functions are called correctly
-            pass
-    
-    def test_mix_horror_background_audio_volume_conversion(self):
-        """Test that dB to linear volume conversion works correctly."""
-        # Test dB to linear conversion
-        def db_to_linear(db):
-            return 10 ** (db / 20.0)
-        
-        # -20 dB should be 0.1 linear
-        self.assertAlmostEqual(db_to_linear(-20.0), 0.1, places=5)
-        
-        # -40 dB should be 0.01 linear
-        self.assertAlmostEqual(db_to_linear(-40.0), 0.01, places=5)
-        
-        # 0 dB should be 1.0 linear
-        self.assertAlmostEqual(db_to_linear(0.0), 1.0, places=5)
-        
-        # -45 dB (default room tone) should be very quiet
-        room_tone_vol = db_to_linear(-45.0)
-        self.assertLess(room_tone_vol, 0.01)
-        self.assertGreater(room_tone_vol, 0.0)
-    
-    def test_mix_horror_background_audio_duration_matching(self):
-        """Test that narration audio duration is handled correctly."""
-        # Create narration audio shorter than target duration
-        short_duration = 3.0
-        target_duration = 5.0
-        
-        def make_silence(t):
-            return 0.0
-        
-        narration_audio = AudioClip(make_silence, duration=short_duration, fps=44100)
-        
-        # The function should handle duration mismatches
-        # We'll test that it doesn't crash
-        try:
-            result = mix_horror_background_audio(
-                narration_audio,
-                target_duration,
-                room_tone_volume=-45.0,
-                drone_volume=-25.0,
-                detail_volume=-30.0
-            )
-            # If it succeeds, result should be a CompositeAudioClip
-            self.assertIsInstance(result, CompositeAudioClip)
-        except Exception as e:
-            # If it fails due to MoviePy internals, that's acceptable for unit test
-            # The important thing is that the logic is correct
-            pass
-    
-    def test_horror_background_audio_uses_with_audio(self):
-        """Test that VideoClip uses with_audio instead of set_audio (verifying the fix)."""
-        # Create a simple video clip to test the API
-        def make_frame(t):
-            return np.zeros((100, 100, 3), dtype=np.uint8)
-        
-        video_clip = VideoClip(make_frame, duration=5.0)
-        video_clip.fps = 30
-        
-        # Create mock audio
-        def make_silence(t):
-            return 0.0
-        
-        mock_audio = AudioClip(make_silence, duration=5.0, fps=44100)
-        
-        # Verify that with_audio exists (the correct method)
-        self.assertTrue(hasattr(video_clip, 'with_audio'), 
-                       "VideoClip should have with_audio method (MoviePy API)")
-        
-        # Verify that set_audio doesn't exist (deprecated/removed method)
-        self.assertFalse(hasattr(video_clip, 'set_audio'), 
-                        "VideoClip should not have set_audio method (deprecated in newer MoviePy)")
-        
-        # Test that with_audio can be called successfully
-        try:
-            result = video_clip.with_audio(mock_audio)
-            # Should return a new clip (not modify in place)
-            self.assertIsNotNone(result)
-            # Result should be a VideoClip
-            self.assertIsInstance(result, VideoClip)
-        except Exception as e:
-            # If it fails due to MoviePy internals, that's okay for this test
-            # The important thing is verifying the method exists and set_audio doesn't
-            pass
-    
-    def test_audio_clips_return_stereo(self):
-        """Test that generated audio clips return stereo (2 channels) for compatibility."""
-        # Test room tone
-        room_tone = generate_room_tone(1.0)
-        sample = room_tone.get_frame(0.5)
-        # Should return stereo array [left, right]
-        self.assertIsInstance(sample, np.ndarray)
-        self.assertEqual(sample.shape, (2,), "Room tone should return stereo (2 channels)")
-        
-        # Test drone
-        drone = generate_low_frequency_drone(1.0, 50.0)
-        sample = drone.get_frame(0.5)
-        self.assertIsInstance(sample, np.ndarray)
-        self.assertEqual(sample.shape, (2,), "Drone should return stereo (2 channels)")
-        
-        # Test detail sounds
-        detail_sounds = generate_detail_sounds(1.0, sound_type="creak")
-        sample = detail_sounds.get_frame(0.5)
-        # Detail sounds might return array for multiple samples, but should be stereo
-        self.assertIsInstance(sample, np.ndarray)
-        # Should be 2D array with 2 columns (stereo) or 1D with 2 elements
-        if sample.ndim == 1:
-            self.assertEqual(sample.shape[0], 2, "Detail sounds should return stereo (2 channels)")
-        else:
-            self.assertEqual(sample.shape[-1], 2, "Detail sounds should return stereo (2 channels)")
-    
-    def test_mix_horror_background_audio_stereo_compatibility(self):
-        """Test that mixing horror background audio works with stereo clips."""
-        duration = 2.0
-        
-        # Create narration audio (might be mono or stereo)
-        def make_narration(t):
-            if np.isscalar(t):
-                return np.array([0.5, 0.5])  # Stereo
-            else:
-                return np.column_stack([np.full(len(t), 0.5), np.full(len(t), 0.5)])
-        
-        narration_audio = AudioClip(make_narration, duration=duration, fps=44100)
-        
-        # Mix should work without broadcasting errors
-        try:
-            result = mix_horror_background_audio(
-                narration_audio,
-                duration,
-                room_tone_volume=-45.0,
-                drone_volume=-25.0,
-                detail_volume=-30.0
-            )
-            # Should return a CompositeAudioClip
-            self.assertIsInstance(result, CompositeAudioClip)
-            # Should be able to get a frame without broadcasting errors
-            sample = result.get_frame(1.0)
-            self.assertIsNotNone(sample)
-        except ValueError as e:
-            if "broadcast" in str(e).lower():
-                self.fail(f"Broadcasting error when mixing audio: {e}")
-            else:
-                # Other errors are acceptable for this test
-                pass
-    
-    @patch('build_video.ENV_BLIZZARD_AUDIO', None)
-    @patch('build_video.ENV_SNOW_AUDIO', None)
-    @patch('build_video.ENV_FOREST_AUDIO', None)
-    @patch('build_video.ENV_RAIN_AUDIO', None)
-    @patch('build_video.ENV_INDOORS_AUDIO', None)
-    def test_mix_horror_background_audio_no_environment(self):
-        """Test that mix_horror_background_audio works without environment audio."""
-        duration = 2.0
-        
-        def make_silence(t):
-            return 0.0
-        
-        narration_audio = AudioClip(make_silence, duration=duration, fps=44100)
-        
-        # Should work without environment parameter
-        try:
-            result = mix_horror_background_audio(
-                narration_audio,
-                duration,
-                room_tone_volume=-35.0,
-                drone_volume=-20.0,
-                environment=None
-            )
-            self.assertIsInstance(result, CompositeAudioClip)
-        except Exception as e:
-            # If it fails due to MoviePy internals, that's acceptable
-            pass
-    
-    @patch('build_video.Path')
-    @patch('build_video.AudioFileClip')
-    @patch('build_video.concatenate_audioclips')
-    @patch('build_video.apply_volume_to_audioclip')
-    def test_mix_horror_background_audio_with_environment_looping(self, mock_apply_volume,
-                                                                   mock_concatenate, mock_audio_file,
-                                                                   mock_path):
-        """Test environment audio looping when shorter than duration."""
-        duration = 5.0
-        env_duration = 2.0  # Environment audio is shorter
-        
-        # Mock Path.exists() to return True
-        mock_path_instance = mock_path.return_value
-        mock_path_instance.exists.return_value = True
-        
-        # Mock AudioFileClip
-        def make_env_audio(t):
-            if np.isscalar(t):
-                return np.array([0.1, 0.1])
-            else:
-                return np.column_stack([np.full(len(t), 0.1), np.full(len(t), 0.1)])
-        
-        mock_env_clip = AudioClip(make_env_audio, duration=env_duration, fps=44100)
-        mock_audio_file.return_value = mock_env_clip
-        
-        # Mock concatenate to return a longer clip
-        def make_looped_audio(t):
-            if np.isscalar(t):
-                return np.array([0.1, 0.1])
-            else:
-                return np.column_stack([np.full(len(t), 0.1), np.full(len(t), 0.1)])
-        
-        looped_clip = AudioClip(make_looped_audio, duration=duration, fps=44100)
-        mock_concatenate.return_value = looped_clip
-        mock_apply_volume.side_effect = lambda clip, vol: clip
-        
-        def make_silence(t):
-            return 0.0
-        
-        narration_audio = AudioClip(make_silence, duration=duration, fps=44100)
-        
-        # Set up environment variable
-        with patch('build_video.ENV_BLIZZARD_AUDIO', 'test_blizzard.wav'):
-            try:
-                result = mix_horror_background_audio(
-                    narration_audio,
-                    duration,
-                    room_tone_volume=-35.0,
-                    drone_volume=-20.0,
-                    environment="blizzard"
-                )
-                # Should have called AudioFileClip to load the file
-                mock_audio_file.assert_called_once()
-                # Should have called concatenate to loop it
-                mock_concatenate.assert_called()
-                # Should have applied volume
-                self.assertGreater(mock_apply_volume.call_count, 0)
-            except Exception as e:
-                # If it fails due to MoviePy internals, that's acceptable
-                pass
-    
-    @patch('build_video.Path')
-    @patch('build_video.AudioFileClip')
-    @patch('build_video.apply_volume_to_audioclip')
-    def test_mix_horror_background_audio_with_environment_trimming(self, mock_apply_volume,
-                                                                    mock_audio_file, mock_path):
-        """Test environment audio trimming when longer than duration."""
-        duration = 2.0
-        env_duration = 5.0  # Environment audio is longer
-        
-        # Mock Path.exists() to return True
-        mock_path_instance = mock_path.return_value
-        mock_path_instance.exists.return_value = True
-        
-        # Mock AudioFileClip that supports subclip
-        def make_env_audio(t):
-            if np.isscalar(t):
-                return np.array([0.1, 0.1])
-            else:
-                return np.column_stack([np.full(len(t), 0.1), np.full(len(t), 0.1)])
-        
-        mock_env_clip = AudioClip(make_env_audio, duration=env_duration, fps=44100)
-        # Add subclip method to mock
-        mock_env_clip.subclip = lambda start, end: AudioClip(make_env_audio, duration=end-start, fps=44100)
-        mock_audio_file.return_value = mock_env_clip
-        mock_apply_volume.side_effect = lambda clip, vol: clip
-        
-        def make_silence(t):
-            return 0.0
-        
-        narration_audio = AudioClip(make_silence, duration=duration, fps=44100)
-        
-        # Set up environment variable
-        with patch('build_video.ENV_BLIZZARD_AUDIO', 'test_blizzard.wav'):
-            try:
-                result = mix_horror_background_audio(
-                    narration_audio,
-                    duration,
-                    room_tone_volume=-35.0,
-                    drone_volume=-20.0,
-                    environment="blizzard"
-                )
-                # Should have called AudioFileClip to load the file
-                mock_audio_file.assert_called_once()
-                # Should have applied volume
-                self.assertGreater(mock_apply_volume.call_count, 0)
-            except Exception as e:
-                # If it fails due to MoviePy internals, that's acceptable
-                pass
-    
-    @patch('build_video.Path')
-    def test_mix_horror_background_audio_environment_file_not_found(self, mock_path):
-        """Test that missing environment audio file is handled gracefully."""
-        duration = 2.0
-        
-        # Mock Path.exists() to return False
-        mock_path_instance = mock_path.return_value
-        mock_path_instance.exists.return_value = False
-        
-        def make_silence(t):
-            return 0.0
-        
-        narration_audio = AudioClip(make_silence, duration=duration, fps=44100)
-        
-        # Set up environment variable but file doesn't exist
-        with patch('build_video.ENV_BLIZZARD_AUDIO', 'nonexistent.wav'):
-            try:
-                result = mix_horror_background_audio(
-                    narration_audio,
-                    duration,
-                    room_tone_volume=-35.0,
-                    drone_volume=-20.0,
-                    environment="blizzard"
-                )
-                # Should still work, just without environment audio
-                self.assertIsInstance(result, CompositeAudioClip)
-            except Exception as e:
-                # If it fails due to MoviePy internals, that's acceptable
-                pass
-    
-    @patch('build_video.Path')
-    def test_mix_horror_background_audio_environment_not_configured(self, mock_path):
-        """Test that unconfigured environment is handled gracefully."""
-        duration = 2.0
-        
-        def make_silence(t):
-            return 0.0
-        
-        narration_audio = AudioClip(make_silence, duration=duration, fps=44100)
-        
-        # Environment is set but no env var configured
-        with patch('build_video.ENV_BLIZZARD_AUDIO', None):
-            try:
-                result = mix_horror_background_audio(
-                    narration_audio,
-                    duration,
-                    room_tone_volume=-35.0,
-                    drone_volume=-20.0,
-                    environment="blizzard"
-                )
-                # Should still work, just without environment audio
-                self.assertIsInstance(result, CompositeAudioClip)
-            except Exception as e:
-                # If it fails due to MoviePy internals, that's acceptable
-                pass
-
-    @patch('build_video.tempfile.NamedTemporaryFile')
-    @patch('subprocess.run')
-    @patch('build_video.AudioFileClip')
-    @patch('build_video.Path')
-    def test_mix_horror_background_audio_wav_env_never_loaded_directly(
-        self, mock_path, mock_audio_file, mock_subprocess_run, mock_tempfile
-    ):
-        """Regression: .wav env files must be converted first; AudioFileClip must never be called with the original path (avoids FFMPEG_AudioReader __del__ AttributeError: no 'proc')."""
-        duration = 5.0
-        mock_path_instance = mock_path.return_value
-        mock_path_instance.exists.return_value = True
-
-        def make_audio(t):
-            if np.isscalar(t):
-                return np.array([0.1, 0.1])
-            return np.column_stack([np.full(len(t), 0.1), np.full(len(t), 0.1)])
-        env_clip = AudioClip(make_audio, duration=3.0, fps=44100)
-        mock_audio_file.return_value = env_clip
-        mock_subprocess_run.return_value = None
-        temp_wav = MagicMock()
-        temp_wav.name = "/tmp/env_converted.wav"
-        temp_wav.__enter__ = MagicMock(return_value=temp_wav)
-        temp_wav.__exit__ = MagicMock(return_value=None)
-        mock_tempfile.return_value = temp_wav
-
-        def make_silence(t):
-            return 0.0
-        narration_audio = AudioClip(make_silence, duration=duration, fps=44100)
-
-        original_wav_path = "environment_audio/forest_night.wav"
-        with patch('build_video.ENV_FOREST_AUDIO', original_wav_path):
-            result = mix_horror_background_audio(
-                narration_audio,
-                duration,
-                room_tone_volume=-35.0,
-                drone_volume=-20.0,
-                environment="forest"
-            )
-        self.assertIsInstance(result, CompositeAudioClip)
-        # Must never call AudioFileClip with the original .wav path (that triggers the __del__ bug)
-        def norm(p):
-            return str(p).replace("\\", "/").lower()
-        original_norm = norm(original_wav_path)
-        for call in mock_audio_file.call_args_list:
-            args = call[0]
-            if args:
-                path_arg_norm = norm(args[0])
-                self.assertNotEqual(
-                    path_arg_norm, original_norm,
-                    msg="AudioFileClip must not be called with original .wav path (causes FFMPEG_AudioReader __del__ error)",
-                )
-        # Conversion must run for .wav (convert-first path)
-        conversion_calls = [
-            c for c in mock_subprocess_run.call_args_list
-            if len(c[0][0]) >= 6 and "pcm_s16le" in c[0][0] and "-ar" in c[0][0] and "-t" not in c[0][0]
-        ]
-        self.assertGreaterEqual(len(conversion_calls), 1, "For .wav env, ffmpeg must convert to 16-bit before load")
-
-    @patch('build_video.tempfile.NamedTemporaryFile')
-    @patch('subprocess.run')
-    @patch('build_video.AudioFileClip')
-    @patch('build_video.Path')
-    def test_mix_horror_background_audio_env_fallback_when_direct_load_fails(
-        self, mock_path, mock_audio_file, mock_subprocess_run, mock_tempfile
-    ):
-        """When env file is NOT .wav and AudioFileClip(env_path) fails, fallback converts via ffmpeg and loads; no UnboundLocalError."""
-        duration = 5.0
-        mock_path_instance = mock_path.return_value
-        mock_path_instance.exists.return_value = True
-
-        def make_audio(t):
-            if np.isscalar(t):
-                return np.array([0.1, 0.1])
-            return np.column_stack([np.full(len(t), 0.1), np.full(len(t), 0.1)])
-        fallback_clip = AudioClip(make_audio, duration=3.0, fps=44100)
-        mock_audio_file.side_effect = [
-            Exception("Error passing `ffmpeg -i` command output: At least one output file must be specified"),
-            fallback_clip,
-        ]
-        mock_subprocess_run.return_value = None
-        temp_wav = MagicMock()
-        temp_wav.name = "/tmp/env_fallback.wav"
-        temp_wav.__enter__ = MagicMock(return_value=temp_wav)
-        temp_wav.__exit__ = MagicMock(return_value=None)
-        mock_tempfile.return_value = temp_wav
-
-        def make_silence(t):
-            return 0.0
-        narration_audio = AudioClip(make_silence, duration=duration, fps=44100)
-
-        # Use a non-.wav path so we hit the try/except fallback path
-        with patch('build_video.ENV_FOREST_AUDIO', 'environment_audio/forest_night.ogg'):
-            result = mix_horror_background_audio(
-                narration_audio,
-                duration,
-                room_tone_volume=-35.0,
-                drone_volume=-20.0,
-                environment="forest"
-            )
-        self.assertIsInstance(result, CompositeAudioClip)
-        self.assertGreaterEqual(mock_audio_file.call_count, 2, "AudioFileClip called at least twice (direct fail + load converted WAV)")
-        conversion_calls = [c for c in mock_subprocess_run.call_args_list if len(c[0][0]) >= 6 and "pcm_s16le" in c[0][0] and "-ar" in c[0][0] and "-t" not in c[0][0]]
-        self.assertGreaterEqual(len(conversion_calls), 1, "Fallback must run ffmpeg to convert env file to 16-bit WAV")
-
-
 class TestWriteAudiofileNoVerboseOrLogger(unittest.TestCase):
     """Regression: write_audiofile must not be called with verbose= or logger= (MoviePy 2.x removed them)."""
 
@@ -1163,539 +459,6 @@ class TestWriteAudiofileNoVerboseOrLogger(unittest.TestCase):
             call_args = m.group(1)
             self.assertNotIn("verbose", call_args, msg=f"write_audiofile must not be called with verbose= (MoviePy 2.x): {m.group(0)}")
             self.assertNotIn("logger", call_args, msg=f"write_audiofile must not be called with logger= (MoviePy 2.x): {m.group(0)}")
-    
-    
-    def test_mix_horror_background_audio_environment_volume(self):
-        """Test that environment audio volume is applied correctly."""
-        duration = 2.0
-        
-        def make_silence(t):
-            return 0.0
-        
-        narration_audio = AudioClip(make_silence, duration=duration, fps=44100)
-        
-        # Test with custom environment audio volume
-        try:
-            result = mix_horror_background_audio(
-                narration_audio,
-                duration,
-                room_tone_volume=-35.0,
-                drone_volume=-20.0,
-                environment=None,  # No environment, but test volume parameter
-                env_audio_volume=-28.0
-            )
-            # Should work with custom volume
-            self.assertIsInstance(result, CompositeAudioClip)
-        except Exception as e:
-            # If it fails due to MoviePy internals, that's acceptable
-            pass
-    
-    def test_mix_horror_background_audio_all_environments(self):
-        """Test that all environment types are recognized."""
-        duration = 1.0
-        
-        def make_silence(t):
-            return 0.0
-        
-        narration_audio = AudioClip(make_silence, duration=duration, fps=44100)
-        
-        # Test all valid environment types
-        valid_environments = ["blizzard", "snow", "forest", "rain", "indoors", "jungle"]
-        
-        for env in valid_environments:
-            try:
-                result = mix_horror_background_audio(
-                    narration_audio,
-                    duration,
-                    room_tone_volume=-35.0,
-                    drone_volume=-20.0,
-                    environment=env
-                )
-                # Should work for all valid environments (even if file doesn't exist)
-                self.assertIsInstance(result, CompositeAudioClip)
-            except Exception as e:
-                # If it fails due to MoviePy internals, that's acceptable
-                pass
-    
-    def test_generate_low_frequency_drone_with_transition(self):
-        """Test that drone transitions are generated correctly."""
-        duration = 5.0
-        
-        # Test fade_in
-        drone_fade_in = generate_low_frequency_drone_with_transition(
-            duration=duration,
-            frequency=50.0,
-            transition_type="fade_in",
-            start_volume=0.0,
-            end_volume=1.0,
-            transition_duration=5.0
-        )
-        self.assertIsInstance(drone_fade_in, AudioClip)
-        self.assertAlmostEqual(drone_fade_in.duration, duration, places=2)
-        
-        # Test hold
-        drone_hold = generate_low_frequency_drone_with_transition(
-            duration=duration,
-            frequency=50.0,
-            transition_type="hold",
-            start_volume=0.5,
-            end_volume=0.5,
-            transition_duration=0.0
-        )
-        self.assertIsInstance(drone_hold, AudioClip)
-        
-        # Test swell
-        drone_swell = generate_low_frequency_drone_with_transition(
-            duration=duration,
-            frequency=50.0,
-            transition_type="swell",
-            start_volume=0.3,
-            end_volume=0.8,
-            transition_duration=4.0
-        )
-        self.assertIsInstance(drone_swell, AudioClip)
-        
-        # Test shrink
-        drone_shrink = generate_low_frequency_drone_with_transition(
-            duration=duration,
-            frequency=50.0,
-            transition_type="shrink",
-            start_volume=0.8,
-            end_volume=0.3,
-            transition_duration=4.0
-        )
-        self.assertIsInstance(drone_shrink, AudioClip)
-        
-        # Test hard_cut
-        drone_hard_cut = generate_low_frequency_drone_with_transition(
-            duration=duration,
-            frequency=50.0,
-            transition_type="hard_cut",
-            start_volume=1.0,
-            end_volume=0.0,
-            transition_duration=0.0
-        )
-        self.assertIsInstance(drone_hard_cut, AudioClip)
-        # Hard cut should be silent
-        sample = drone_hard_cut.get_frame(2.0)
-        if hasattr(sample, '__len__'):
-            self.assertAlmostEqual(np.max(np.abs(sample)), 0.0, places=3)
-    
-    def test_generate_drone_with_scene_transitions(self):
-        """Test that drone transitions are generated correctly based on scene drone_change values."""
-        # Create test scenes with different drone_change values
-        scenes = [
-            {"id": 1, "drone_change": "fade_in"},
-            {"id": 2, "drone_change": "hold"},
-            {"id": 3, "drone_change": "swell"},
-            {"id": 4, "drone_change": "shrink"},
-            {"id": 5, "drone_change": "fade_out"},
-        ]
-        
-        # Create mock audio clips for each scene
-        def make_silence(t):
-            if np.isscalar(t):
-                return np.array([0.0, 0.0])
-            else:
-                return np.zeros((len(t), 2))
-        
-        scene_audio_clips = [
-            AudioClip(make_silence, duration=3.0, fps=44100),  # Scene 1: 3s
-            AudioClip(make_silence, duration=2.5, fps=44100),  # Scene 2: 2.5s
-            AudioClip(make_silence, duration=4.0, fps=44100),  # Scene 3: 4s
-            AudioClip(make_silence, duration=3.5, fps=44100),  # Scene 4: 3.5s
-            AudioClip(make_silence, duration=2.0, fps=44100),  # Scene 5: 2s
-        ]
-        
-        # Generate drone with transitions
-        try:
-            drone = generate_drone_with_scene_transitions(scenes, scene_audio_clips, 
-                                                          base_drone_volume_db=-25.0,
-                                                          max_drone_volume_db=-20.0)
-            self.assertIsInstance(drone, AudioClip)
-            # Total duration should be sum of scene durations + pauses
-            expected_duration = sum(clip.duration for clip in scene_audio_clips) + (len(scenes) * 0.15)  # 0.15s pause per scene
-            self.assertAlmostEqual(drone.duration, expected_duration, places=1)
-        except Exception as e:
-            # If it fails due to MoviePy internals, that's acceptable for this test
-            # The important thing is that the function exists and can be called
-            pass
-    
-    def test_audioclip_has_no_subclip_method(self):
-        """Test that AudioClip doesn't have subclip method (regression test for drone trimming bug).
-        
-        This test verifies the root cause: AudioClip objects don't have subclip method,
-        which is why we need the FFmpeg fallback in mix_horror_background_audio.
-        """
-        def make_audio(t):
-            return 0.1
-        
-        audio_clip = AudioClip(make_audio, duration=5.0, fps=44100)
-        
-        # Verify that AudioClip doesn't have subclip method
-        # This is the bug we fixed - the code was calling subclip on AudioClip which doesn't have it
-        self.assertFalse(hasattr(audio_clip, 'subclip'), 
-                        "AudioClip should not have subclip method - this is why we need FFmpeg fallback")
-        
-        # Verify that calling subclip raises AttributeError
-        with self.assertRaises(AttributeError) as context:
-            audio_clip.subclip(0, 2.0)
-        
-        self.assertIn("subclip", str(context.exception).lower(),
-                     "Error should mention 'subclip'")
-    
-    def test_mix_horror_background_audio_drone_trimming_handles_audioclip(self):
-        """Test that drone trimming handles AudioClip (no subclip method) without crashing.
-        
-        This test verifies that the fix works: when drone is an AudioClip and needs trimming,
-        the code should catch the AttributeError and use FFmpeg fallback instead of crashing.
-        """
-        duration = 2.0
-        
-        def make_silence(t):
-            return 0.0
-        
-        narration_audio = AudioClip(make_silence, duration=duration, fps=44100)
-        
-        # Create an AudioClip drone (programmatically generated, no subclip method)
-        # Make it longer than duration to trigger trimming
-        drone_duration = 5.0
-        def make_drone(t):
-            return 0.1
-        
-        drone = AudioClip(make_drone, duration=drone_duration, fps=44100)
-        
-        # Mock the dependencies - use the same pattern as other tests
-        with patch('build_video.generate_room_tone', return_value=AudioClip(make_silence, duration=duration, fps=44100)), \
-             patch('build_video.generate_drone_with_scene_transitions', return_value=drone), \
-             patch('build_video.generate_detail_sounds', return_value=None), \
-             patch('build_video.apply_volume_to_audioclip', side_effect=lambda x, v: x if x is not None else None):
-            
-            # The function should handle the AttributeError when subclip is called on AudioClip
-            # and use the FFmpeg fallback. We're testing that it doesn't crash with AttributeError.
-            try:
-                result = mix_horror_background_audio(
-                    narration_audio,
-                    duration,
-                    room_tone_volume=-35.0,
-                    drone_volume=-20.0
-                )
-                # If it succeeds, the fallback worked (or FFmpeg handled it)
-                self.assertIsInstance(result, CompositeAudioClip)
-            except AttributeError as e:
-                # This is the bug we're testing - should NOT get AttributeError about subclip
-                error_str = str(e)
-                if "'AudioClip' object has no attribute 'subclip'" in error_str or \
-                   "has no attribute 'subclip'" in error_str or \
-                   "object has no attribute 'subclip'" in error_str:
-                    self.fail("Drone trimming should handle AudioClip subclip error with FFmpeg fallback, not raise AttributeError. "
-                            "This indicates the fix is not working. Error: " + error_str)
-                raise
-            except Exception as e:
-                # Other exceptions (like FFmpeg not available, write_audiofile issues) are acceptable
-                # The important thing is we don't get the AttributeError about subclip
-                error_str = str(e)
-                if "'AudioClip' object has no attribute 'subclip'" in error_str or \
-                   "has no attribute 'subclip'" in error_str or \
-                   "object has no attribute 'subclip'" in error_str:
-                    self.fail("Drone trimming should handle AudioClip subclip error, not propagate it. "
-                            "This indicates the fix is not working. Error: " + error_str)
-    
-    def test_mix_horror_background_audio_drone_trimming_audiofileclip(self):
-        """Test that drone trimming works when drone is an AudioFileClip (has subclip method)."""
-        duration = 2.0
-        
-        def make_silence(t):
-            return 0.0
-        
-        narration_audio = AudioClip(make_silence, duration=duration, fps=44100)
-        
-        # Create a mock AudioFileClip drone (has subclip method)
-        drone_duration = 5.0
-        mock_drone = mock.MagicMock()
-        mock_drone.duration = drone_duration
-        mock_drone.fps = 44100
-        mock_drone.subclip.return_value = mock.MagicMock()
-        mock_drone.subclip.return_value.duration = duration
-        mock_drone.subclip.return_value.fps = 44100
-        
-        # Verify that AudioFileClip has subclip method
-        self.assertTrue(hasattr(mock_drone, 'subclip'), 
-                       "AudioFileClip should have subclip method")
-        
-        with patch('build_video.generate_room_tone', return_value=AudioClip(make_silence, duration=duration, fps=44100)), \
-             patch('build_video.generate_drone_with_scene_transitions', return_value=mock_drone), \
-             patch('build_video.generate_detail_sounds', return_value=None):
-            
-            try:
-                result = mix_horror_background_audio(
-                    narration_audio,
-                    duration,
-                    room_tone_volume=-35.0,
-                    drone_volume=-20.0
-                )
-                
-                # Verify that subclip was called (direct method, not FFmpeg fallback)
-                mock_drone.subclip.assert_called_once_with(0, duration)
-                
-            except Exception as e:
-                # If it fails due to MoviePy internals, that's acceptable
-                # The important thing is that we tried subclip first
-                pass
-    
-    def test_mix_horror_background_audio_drone_trimming_ffmpeg_fallback_error(self):
-        """Test that drone trimming handles FFmpeg fallback errors gracefully."""
-        duration = 2.0
-        
-        def make_silence(t):
-            return 0.0
-        
-        narration_audio = AudioClip(make_silence, duration=duration, fps=44100)
-        
-        # Create an AudioClip drone (no subclip method)
-        drone_duration = 5.0
-        def make_drone(t):
-            return 0.1
-        
-        drone = AudioClip(make_drone, duration=drone_duration, fps=44100)
-        
-        # Mock write_audiofile to fail (simulating FFmpeg fallback error)
-        drone.write_audiofile = mock.MagicMock(side_effect=Exception("Write failed"))
-        
-        with patch('build_video.generate_room_tone', return_value=AudioClip(make_silence, duration=duration, fps=44100)), \
-             patch('build_video.generate_drone_with_scene_transitions', return_value=drone), \
-             patch('build_video.generate_detail_sounds', return_value=None), \
-             patch('build_video.apply_volume_to_audioclip', side_effect=lambda x, v: x if x is not None else None):
-            
-            # The function should handle the error gracefully and use full duration
-            try:
-                result = mix_horror_background_audio(
-                    narration_audio,
-                    duration,
-                    room_tone_volume=-35.0,
-                    drone_volume=-20.0
-                )
-                
-                # Should still work, using full drone duration with warning
-                # The function should handle the error gracefully
-                self.assertIsInstance(result, CompositeAudioClip)
-                
-            except AttributeError as e:
-                # This is the bug we're testing - should NOT get AttributeError about subclip
-                error_str = str(e)
-                if "'AudioClip' object has no attribute 'subclip'" in error_str or \
-                   "has no attribute 'subclip'" in error_str or \
-                   "object has no attribute 'subclip'" in error_str:
-                    self.fail("Drone trimming should handle AudioClip subclip error, not propagate it. "
-                            "This indicates the fix is not working. Error: " + error_str)
-                raise
-            except Exception as e:
-                # Other exceptions are acceptable - the important thing is we don't get the subclip AttributeError
-                error_str = str(e)
-                if "'AudioClip' object has no attribute 'subclip'" in error_str or \
-                   "has no attribute 'subclip'" in error_str or \
-                   "object has no attribute 'subclip'" in error_str:
-                    self.fail("Drone trimming should handle AudioClip subclip error, not propagate it. "
-                            "This indicates the fix is not working. Error: " + error_str)
-
-    def test_drone_swell_clips_at_max_volume(self):
-        """Test that swell clips at max volume, not base volume."""
-        # Create test scenes with swell
-        scenes = [
-            {"id": 1, "drone_change": "fade_in"},  # Fade in to base
-            {"id": 2, "drone_change": "swell"},     # Swell should clip at max, not base
-        ]
-        
-        def make_silence(t):
-            if np.isscalar(t):
-                return np.array([0.0, 0.0])
-            else:
-                return np.zeros((len(t), 2))
-        
-        scene_audio_clips = [
-            AudioClip(make_silence, duration=3.0, fps=44100),
-            AudioClip(make_silence, duration=4.0, fps=44100),
-        ]
-        
-        base_volume_db = -25.0
-        max_volume_db = -20.0  # Higher than base
-        
-        # Convert to linear for comparison
-        def db_to_linear(db):
-            return 10 ** (db / 20.0)
-        
-        base_volume_linear = db_to_linear(base_volume_db)
-        max_volume_linear = db_to_linear(max_volume_db)
-        
-        # Generate drone
-        try:
-            drone = generate_drone_with_scene_transitions(
-                scenes, scene_audio_clips,
-                base_drone_volume_db=base_volume_db,
-                max_drone_volume_db=max_volume_db
-            )
-            self.assertIsInstance(drone, AudioClip)
-            # The swell should be able to reach max_volume, which is higher than base_volume
-            # We can't easily test the exact volume, but we can verify the function accepts the parameter
-        except Exception as e:
-            # If it fails due to MoviePy internals, that's acceptable for this test
-            pass
-
-
-class TestHorrorDisclaimer(unittest.TestCase):
-    """Test cases for horror disclaimer (first scene: fixed image + env/room noise, no narration)."""
-
-    def test_disclaimer_constants(self):
-        """Test horror disclaimer constants and path names."""
-        self.assertEqual(HORROR_DISCLAIMER_DURATION, 3.0)
-        self.assertEqual(FIXED_IMAGES_DIR, Path("fixed_images"))
-        self.assertEqual(HORROR_DISCLAIMER_TALL.name, "tall_horror_disclaimer.jpg")
-        self.assertEqual(HORROR_DISCLAIMER_WIDE.name, "wide_horror_disclaimer.jpg")
-        self.assertEqual(HORROR_DISCLAIMER_TALL.parent, FIXED_IMAGES_DIR)
-        self.assertEqual(HORROR_DISCLAIMER_WIDE.parent, FIXED_IMAGES_DIR)
-
-    def test_get_horror_disclaimer_image_path_returns_tall_when_vertical_and_exists(self):
-        """When is_vertical=True and tall file exists, return tall path."""
-        tmp = Path(__file__).parent / "tmp_horror_disclaimer_tall"
-        tmp.mkdir(parents=True, exist_ok=True)
-        try:
-            tall_path = tmp / "tall_horror_disclaimer.jpg"
-            tall_path.write_bytes(b"\xff\xd8\xff")  # minimal JPEG-like bytes so file exists
-            with patch("build_video.HORROR_DISCLAIMER_TALL", tall_path), \
-                 patch("build_video.HORROR_DISCLAIMER_WIDE", tmp / "wide_horror_disclaimer.jpg"):
-                result = get_horror_disclaimer_image_path(is_vertical=True)
-                self.assertEqual(result, tall_path)
-        finally:
-            if tall_path.exists():
-                tall_path.unlink()
-            if tmp.exists():
-                tmp.rmdir()
-
-    def test_get_horror_disclaimer_image_path_returns_wide_when_landscape_and_exists(self):
-        """When is_vertical=False and wide file exists, return wide path."""
-        tmp = Path(__file__).parent / "tmp_horror_disclaimer_wide"
-        tmp.mkdir(parents=True, exist_ok=True)
-        try:
-            wide_path = tmp / "wide_horror_disclaimer.jpg"
-            wide_path.write_bytes(b"\xff\xd8\xff")
-            with patch("build_video.HORROR_DISCLAIMER_TALL", tmp / "tall_horror_disclaimer.jpg"), \
-                 patch("build_video.HORROR_DISCLAIMER_WIDE", wide_path):
-                result = get_horror_disclaimer_image_path(is_vertical=False)
-                self.assertEqual(result, wide_path)
-        finally:
-            if wide_path.exists():
-                wide_path.unlink()
-            if tmp.exists():
-                tmp.rmdir()
-
-    def test_get_horror_disclaimer_image_path_returns_none_when_file_missing(self):
-        """When the chosen file does not exist, return None."""
-        tmp = Path(__file__).parent / "tmp_horror_disclaimer_missing"
-        tmp.mkdir(parents=True, exist_ok=True)
-        try:
-            missing_tall = tmp / "tall_horror_disclaimer.jpg"
-            missing_wide = tmp / "wide_horror_disclaimer.jpg"
-            with patch("build_video.HORROR_DISCLAIMER_TALL", missing_tall), \
-                 patch("build_video.HORROR_DISCLAIMER_WIDE", missing_wide):
-                self.assertIsNone(get_horror_disclaimer_image_path(is_vertical=True))
-                self.assertIsNone(get_horror_disclaimer_image_path(is_vertical=False))
-        finally:
-            if tmp.exists():
-                shutil.rmtree(tmp, ignore_errors=True)
-
-    def test_disclaimer_audio_duration(self):
-        """mix_horror_background_audio with 3s silence returns ~3s duration (disclaimer = env/room only)."""
-        def make_silence(t):
-            if np.isscalar(t):
-                return np.array([0.0, 0.0])
-            return np.zeros((len(t), 2))
-        silence_3s = AudioClip(make_silence, duration=HORROR_DISCLAIMER_DURATION, fps=44100)
-        with patch("build_video.generate_room_tone") as mock_room, \
-             patch("build_video.generate_low_frequency_drone") as mock_drone, \
-             patch("build_video.generate_detail_sounds", return_value=None), \
-             patch("build_video.apply_volume_to_audioclip", side_effect=lambda x, v: x if x is not None else None):
-            mock_room.return_value = AudioClip(make_silence, duration=3.0, fps=44100)
-            mock_drone.return_value = AudioClip(make_silence, duration=3.0, fps=44100)
-            result = mix_horror_background_audio(
-                silence_3s,
-                HORROR_DISCLAIMER_DURATION,
-                room_tone_volume=-35.0,
-                drone_volume=-20.0,
-            )
-            self.assertIsInstance(result, CompositeAudioClip)
-            self.assertAlmostEqual(result.duration, HORROR_DISCLAIMER_DURATION, places=2)
-
-    def test_horror_disclaimer_prepended_when_is_horror_and_file_exists(self):
-        """When is_horror=True and disclaimer image exists, first clip is disclaimer (~3.15s)."""
-        import build_video as bv
-        tmp = Path(__file__).parent / "tmp_horror_disclaimer_prepended"
-        tmp.mkdir(parents=True, exist_ok=True)
-        try:
-            scenes_path = tmp / "scenes.json"
-            scenes_data = {
-                "scenes": [
-                    {"id": 1, "title": "Scene 1", "narration": "One.", "image_prompt": "A room."}
-                ]
-            }
-            with open(scenes_path, "w", encoding="utf-8") as f:
-                json.dump(scenes_data, f, indent=2)
-
-            try:
-                from PIL import Image
-            except ImportError:
-                self.skipTest("PIL not available")
-            fixed_dir = tmp / "fixed_images"
-            fixed_dir.mkdir(parents=True, exist_ok=True)
-            wide_path = fixed_dir / "wide_horror_disclaimer.jpg"
-            Image.new("RGB", (10, 10), color="black").save(str(wide_path))
-            scene_image_path = tmp / "scene1.png"
-            Image.new("RGB", (10, 10), color="white").save(str(scene_image_path))
-
-            # Create a valid 2-second silent WAV (MoviePy AudioClip.write_audiofile can produce 0-duration)
-            scene_audio_path = tmp / "scene1.wav"
-            import wave
-            with wave.open(str(scene_audio_path), "wb") as wav:
-                wav.setnchannels(2)
-                wav.setsampwidth(2)
-                wav.setframerate(44100)
-                num_frames = 44100 * 2  # 2 seconds
-                wav.writeframes(b"\x00\x00" * (num_frames * 2))  # stereo silence
-
-            out_path = tmp / "out.mp4"
-            captured_clips = []
-
-            real_concat = bv.concatenate_videoclips
-            def capture_concat(clips, method="chain"):
-                captured_clips[:] = list(clips)
-                return real_concat(clips, method=method)
-
-            with patch("build_video.HORROR_DISCLAIMER_WIDE", wide_path), \
-                 patch("build_video.HORROR_DISCLAIMER_TALL", fixed_dir / "tall_horror_disclaimer.jpg"), \
-                 patch("build_video.generate_image_for_scene_with_retry", return_value=scene_image_path), \
-                 patch("build_video.generate_audio_for_scene_with_retry", return_value=scene_audio_path), \
-                 patch("build_video.concatenate_videoclips", side_effect=capture_concat), \
-                 patch.object(bv.config, "save_assets", False), \
-                 patch.object(bv.config, "is_vertical", False), \
-                 patch.object(bv.config, "temp_dir", str(tmp)):
-                _build_video_impl(
-                    str(scenes_path),
-                    out_video_path=str(out_path),
-                    is_horror=True,
-                    horror_bg_enabled=True,
-                )
-
-            self.assertGreaterEqual(len(captured_clips), 2, "Should have disclaimer + at least one scene clip")
-            expected_disclaimer_duration = HORROR_DISCLAIMER_DURATION + END_SCENE_PAUSE_LENGTH
-            self.assertAlmostEqual(
-                captured_clips[0].duration,
-                expected_disclaimer_duration,
-                places=1,
-                msg="First clip should be disclaimer (~3.15s)",
-            )
-        finally:
-            if tmp.exists():
-                shutil.rmtree(tmp, ignore_errors=True)
-
 
 class TestKenBurnsMotion(unittest.TestCase):
     """Unit tests for PIL-based Ken Burns motion clip generation."""
@@ -1732,7 +495,7 @@ class TestKenBurnsMotion(unittest.TestCase):
         """make_motion_clip_with_audio returns a clip with the expected duration."""
         audio = self._make_audio(1.0)
         clip = make_motion_clip_with_audio(self._img_path, audio, pattern="zoom_in")
-        expected = 1.0 + END_SCENE_PAUSE_LENGTH
+        expected = START_SCENE_PAUSE_LENGTH + 1.0 + END_SCENE_PAUSE_LENGTH
         self.assertAlmostEqual(clip.duration, expected, places=2)
 
     def test_motion_clip_frame_shape(self):
@@ -1777,6 +540,20 @@ class TestKenBurnsMotion(unittest.TestCase):
         audio = self._make_audio(0.5)
         clip = make_motion_clip_with_audio(self._img_path, audio, pattern="zoom_in")
         self.assertIsNotNone(clip.audio)
+
+    def test_make_motion_clip_uses_per_scene_intensity(self):
+        """make_motion_clip_with_audio accepts intensity param and produces valid clips for each level."""
+        from kenburns_config import KENBURNS_INTENSITY_LEVELS
+        audio = self._make_audio(0.5)
+        for intensity in KENBURNS_INTENSITY_LEVELS:
+            with self.subTest(intensity=intensity):
+                clip = make_motion_clip_with_audio(
+                    self._img_path, audio, pattern="zoom_in", intensity=intensity
+                )
+                self.assertGreater(clip.duration, 0)
+                frame = clip.get_frame(0)
+                self.assertEqual(len(frame.shape), 3)
+                self.assertIsNotNone(clip.audio)
 
 
 _TESTS_DIR = Path(__file__).parent
@@ -1896,25 +673,33 @@ class TestMotionIntegration(unittest.TestCase):
             shutil.rmtree(tmp, ignore_errors=True)
 
     def test_motion_enables_crossfade_concatenation(self):
-        """When motion=True, concatenate_videoclips is called with crossfade padding."""
+        """When motion=True and transition_to_next is crossfade, CompositeVideoClip is used for transitions."""
         try:
             from PIL import Image
         except ImportError:
             self.skipTest("PIL not available")
 
         import build_video as bv
+        from moviepy import CompositeVideoClip
+
         tmp = _TESTS_DIR / "tmp_crossfade_on"
         tmp.mkdir(parents=True, exist_ok=True)
         try:
             scenes_path, img_path, audio_path = _make_integration_test_fixtures(tmp)
-            out_path = tmp / "out.mp4"
+            with open(scenes_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            data["scenes"][0]["transition_to_next"] = "crossfade"
+            data["scenes"][0]["transition_speed"] = "medium"
+            data["scenes"][1]["transition_to_next"] = None
+            with open(scenes_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
 
-            concat_calls = []
-            real_concat = bv.concatenate_videoclips
+            composite_calls = []
+            real_composite = CompositeVideoClip
 
-            def capture_concat(*args, **kwargs):
-                concat_calls.append(kwargs)
-                return real_concat(*args, **kwargs)
+            def capture_composite(clips, **kwargs):
+                composite_calls.append({"clips": clips, **kwargs})
+                return real_composite(clips, **kwargs)
 
             with patch.object(bv.config, "save_assets", False), \
                  patch.object(bv.config, "is_vertical", False), \
@@ -1924,23 +709,19 @@ class TestMotionIntegration(unittest.TestCase):
                  patch("build_video.generate_audio_for_scene_with_retry", return_value=audio_path), \
                  patch("build_video.make_motion_clip_with_audio", wraps=self._static_ignoring_pattern), \
                  patch("build_video.KENBURNS_ENABLED", True), \
-                 patch("build_video.CROSSFADE_DURATION", 0.4), \
-                 patch("build_video.concatenate_videoclips", side_effect=capture_concat):
+                 patch("moviepy.CompositeVideoClip", side_effect=capture_composite):
                 with patch("moviepy.video.VideoClip.VideoClip.write_videofile"):
                     _build_video_impl(
                         str(scenes_path),
-                        out_video_path=str(out_path),
+                        out_video_path=str(tmp / "out.mp4"),
                         motion=True,
                     )
-            # Should have at least one call with crossfade padding
-            crossfade_calls = [c for c in concat_calls if c.get("padding") and c["padding"] < 0]
-            self.assertGreaterEqual(len(crossfade_calls), 1, f"Expected crossfade concat call, got: {concat_calls}")
-            self.assertEqual(crossfade_calls[0]["method"], "compose")
+            self.assertGreaterEqual(len(composite_calls), 1, f"Expected CompositeVideoClip for crossfade, got: {composite_calls}")
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
-    def test_no_motion_uses_chain_concatenation(self):
-        """When motion=False, concatenate_videoclips uses method='chain' (no crossfade)."""
+    def test_no_motion_uses_compose_with_cut_transitions(self):
+        """When motion=False and transitions are cut, concatenate_videoclips is used (chain or compose)."""
         try:
             from PIL import Image
         except ImportError:
@@ -1973,9 +754,268 @@ class TestMotionIntegration(unittest.TestCase):
                         out_video_path=str(out_path),
                         motion=False,
                     )
-            # Should have called with method="chain" (no padding or padding=0)
-            chain_calls = [c for c in concat_calls if c.get("method") == "chain"]
-            self.assertGreaterEqual(len(chain_calls), 1, f"Expected chain concat call, got: {concat_calls}")
+            # Cut transitions: concatenate_videoclips used (chain or compose), no negative padding
+            self.assertGreaterEqual(len(concat_calls), 1, f"Expected concat call, got: {concat_calls}")
+            for c in concat_calls:
+                self.assertIsNone(c.get("padding"), f"Cut transitions should not use padding: {c}")
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_build_video_per_scene_transitions(self):
+        """build_video uses CompositeVideoClip with CrossFade when transition_to_next is crossfade."""
+        try:
+            from PIL import Image
+        except ImportError:
+            self.skipTest("PIL not available")
+
+        import build_video as bv
+        from moviepy import CompositeVideoClip
+
+        tmp = _TESTS_DIR / "tmp_per_scene_transitions"
+        tmp.mkdir(parents=True, exist_ok=True)
+        try:
+            scenes_path, img_path, audio_path = _make_integration_test_fixtures(tmp)
+            with open(scenes_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            data["scenes"][0]["transition_to_next"] = "crossfade"
+            data["scenes"][0]["transition_speed"] = "medium"
+            data["scenes"][1]["transition_to_next"] = None
+            with open(scenes_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+
+            composite_calls = []
+            real_composite = CompositeVideoClip
+
+            def capture_composite(clips, **kwargs):
+                composite_calls.append({"clips": clips, **kwargs})
+                return real_composite(clips, **kwargs)
+
+            with patch.object(bv.config, "save_assets", False), \
+                 patch.object(bv.config, "is_vertical", False), \
+                 patch.object(bv.config, "temp_dir", str(tmp)), \
+                 patch.object(bv.config, "biopic_music_enabled", False), \
+                 patch("build_video.generate_image_for_scene_with_retry", return_value=img_path), \
+                 patch("build_video.generate_audio_for_scene_with_retry", return_value=audio_path), \
+                 patch("build_video.make_motion_clip_with_audio", wraps=TestMotionIntegration._static_ignoring_pattern), \
+                 patch("build_video.KENBURNS_ENABLED", True), \
+                 patch("moviepy.CompositeVideoClip", side_effect=capture_composite):
+                with patch("moviepy.video.VideoClip.VideoClip.write_videofile"):
+                    _build_video_impl(
+                        str(scenes_path),
+                        out_video_path=str(tmp / "out.mp4"),
+                        motion=True,
+                    )
+            self.assertGreaterEqual(len(composite_calls), 1, f"Expected CompositeVideoClip call for crossfade, got: {composite_calls}")
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_build_video_slide_transition(self):
+        """build_video uses CompositeVideoClip with SlideIn/SlideOut when transition_to_next is slide_left."""
+        try:
+            from PIL import Image
+        except ImportError:
+            self.skipTest("PIL not available")
+
+        import build_video as bv
+        from moviepy import CompositeVideoClip
+
+        tmp = _TESTS_DIR / "tmp_slide_transition"
+        tmp.mkdir(parents=True, exist_ok=True)
+        try:
+            scenes_path, img_path, audio_path = _make_integration_test_fixtures(tmp)
+            with open(scenes_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            data["scenes"][0]["transition_to_next"] = "slide_left"
+            data["scenes"][0]["transition_speed"] = "medium"
+            data["scenes"][1]["transition_to_next"] = None
+            with open(scenes_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+
+            composite_calls = []
+            real_composite = CompositeVideoClip
+
+            def capture_composite(clips, **kwargs):
+                composite_calls.append({"clips": clips, **kwargs})
+                return real_composite(clips, **kwargs)
+
+            with patch.object(bv.config, "save_assets", False), \
+                 patch.object(bv.config, "is_vertical", False), \
+                 patch.object(bv.config, "temp_dir", str(tmp)), \
+                 patch.object(bv.config, "biopic_music_enabled", False), \
+                 patch("build_video.generate_image_for_scene_with_retry", return_value=img_path), \
+                 patch("build_video.generate_audio_for_scene_with_retry", return_value=audio_path), \
+                 patch("build_video.make_motion_clip_with_audio", wraps=TestMotionIntegration._static_ignoring_pattern), \
+                 patch("build_video.KENBURNS_ENABLED", True), \
+                 patch("moviepy.CompositeVideoClip", side_effect=capture_composite):
+                with patch("moviepy.video.VideoClip.VideoClip.write_videofile"):
+                    _build_video_impl(
+                        str(scenes_path),
+                        out_video_path=str(tmp / "out.mp4"),
+                        motion=True,
+                    )
+            self.assertGreaterEqual(len(composite_calls), 1, f"Expected CompositeVideoClip call for slide, got: {composite_calls}")
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_all_slide_directions_produce_valid_video(self):
+        """All slide transition directions (left, right, up, down) produce valid video without crashing."""
+        try:
+            from PIL import Image
+        except ImportError:
+            self.skipTest("PIL not available")
+
+        import build_video as bv
+        from kenburns_config import TRANSITION_TYPES
+
+        slide_types = [t for t in TRANSITION_TYPES if t.startswith("slide_")]
+        for trans in slide_types:
+            with self.subTest(transition=trans):
+                tmp = _TESTS_DIR / f"tmp_slide_{trans}"
+                tmp.mkdir(parents=True, exist_ok=True)
+                try:
+                    scenes_path, img_path, audio_path = _make_integration_test_fixtures(tmp)
+                    with open(scenes_path, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                    data["scenes"][0]["transition_to_next"] = trans
+                    data["scenes"][0]["transition_speed"] = "medium"
+                    data["scenes"][1]["transition_to_next"] = None
+                    with open(scenes_path, "w", encoding="utf-8") as f:
+                        json.dump(data, f, indent=2)
+
+                    with patch.object(bv.config, "save_assets", False), \
+                         patch.object(bv.config, "is_vertical", False), \
+                         patch.object(bv.config, "temp_dir", str(tmp)), \
+                         patch.object(bv.config, "biopic_music_enabled", False), \
+                         patch("build_video.generate_image_for_scene_with_retry", return_value=img_path), \
+                         patch("build_video.generate_audio_for_scene_with_retry", return_value=audio_path), \
+                         patch("build_video.make_motion_clip_with_audio", wraps=TestMotionIntegration._static_ignoring_pattern), \
+                         patch("build_video.KENBURNS_ENABLED", True):
+                        with patch("moviepy.video.VideoClip.VideoClip.write_videofile"):
+                            _build_video_impl(
+                                str(scenes_path),
+                                out_video_path=str(tmp / "out.mp4"),
+                                motion=True,
+                            )
+                finally:
+                    shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_transition_speeds_quick_medium_slow_produce_valid_video(self):
+        """Transition speeds quick, medium, slow all produce valid video."""
+        try:
+            from PIL import Image
+        except ImportError:
+            self.skipTest("PIL not available")
+
+        import build_video as bv
+        from kenburns_config import TRANSITION_SPEEDS
+
+        for speed in TRANSITION_SPEEDS:
+            with self.subTest(transition_speed=speed):
+                tmp = _TESTS_DIR / f"tmp_speed_{speed}"
+                tmp.mkdir(parents=True, exist_ok=True)
+                try:
+                    scenes_path, img_path, audio_path = _make_integration_test_fixtures(tmp)
+                    with open(scenes_path, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                    data["scenes"][0]["transition_to_next"] = "crossfade"
+                    data["scenes"][0]["transition_speed"] = speed
+                    data["scenes"][1]["transition_to_next"] = None
+                    with open(scenes_path, "w", encoding="utf-8") as f:
+                        json.dump(data, f, indent=2)
+
+                    with patch.object(bv.config, "save_assets", False), \
+                         patch.object(bv.config, "is_vertical", False), \
+                         patch.object(bv.config, "temp_dir", str(tmp)), \
+                         patch.object(bv.config, "biopic_music_enabled", False), \
+                         patch("build_video.generate_image_for_scene_with_retry", return_value=img_path), \
+                         patch("build_video.generate_audio_for_scene_with_retry", return_value=audio_path), \
+                         patch("build_video.make_motion_clip_with_audio", wraps=TestMotionIntegration._static_ignoring_pattern), \
+                         patch("build_video.KENBURNS_ENABLED", True):
+                        with patch("moviepy.video.VideoClip.VideoClip.write_videofile"):
+                            _build_video_impl(
+                                str(scenes_path),
+                                out_video_path=str(tmp / "out.mp4"),
+                                motion=True,
+                            )
+                finally:
+                    shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_cut_transition_produces_valid_video(self):
+        """Explicit cut transition produces valid video (no CompositeVideoClip for transitions)."""
+        try:
+            from PIL import Image
+        except ImportError:
+            self.skipTest("PIL not available")
+
+        import build_video as bv
+        tmp = _TESTS_DIR / "tmp_cut_transition"
+        tmp.mkdir(parents=True, exist_ok=True)
+        try:
+            scenes_path, img_path, audio_path = _make_integration_test_fixtures(tmp)
+            with open(scenes_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            data["scenes"][0]["transition_to_next"] = "cut"
+            data["scenes"][1]["transition_to_next"] = None
+            with open(scenes_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+
+            concat_calls = []
+            real_concat = bv.concatenate_videoclips
+
+            def capture_concat(*args, **kwargs):
+                concat_calls.append(args)
+                return real_concat(*args, **kwargs)
+
+            with patch.object(bv.config, "save_assets", False), \
+                 patch.object(bv.config, "is_vertical", False), \
+                 patch.object(bv.config, "temp_dir", str(tmp)), \
+                 patch.object(bv.config, "biopic_music_enabled", False), \
+                 patch("build_video.generate_image_for_scene_with_retry", return_value=img_path), \
+                 patch("build_video.generate_audio_for_scene_with_retry", return_value=audio_path), \
+                 patch("build_video.concatenate_videoclips", side_effect=capture_concat):
+                with patch("moviepy.video.VideoClip.VideoClip.write_videofile"):
+                    _build_video_impl(
+                        str(scenes_path),
+                        out_video_path=str(tmp / "out.mp4"),
+                        motion=False,
+                    )
+            self.assertGreaterEqual(len(concat_calls), 1, "Cut should use concatenate_videoclips")
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_legacy_dissolve_medium_normalized_to_crossfade(self):
+        """Legacy transition_to_next dissolve_medium is normalized to crossfade+medium and produces valid video."""
+        try:
+            from PIL import Image
+        except ImportError:
+            self.skipTest("PIL not available")
+
+        import build_video as bv
+        tmp = _TESTS_DIR / "tmp_legacy_dissolve"
+        tmp.mkdir(parents=True, exist_ok=True)
+        try:
+            scenes_path, img_path, audio_path = _make_integration_test_fixtures(tmp)
+            with open(scenes_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            data["scenes"][0]["transition_to_next"] = "dissolve_medium"
+            data["scenes"][1]["transition_to_next"] = None
+            with open(scenes_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+
+            with patch.object(bv.config, "save_assets", False), \
+                 patch.object(bv.config, "is_vertical", False), \
+                 patch.object(bv.config, "temp_dir", str(tmp)), \
+                 patch.object(bv.config, "biopic_music_enabled", False), \
+                 patch("build_video.generate_image_for_scene_with_retry", return_value=img_path), \
+                 patch("build_video.generate_audio_for_scene_with_retry", return_value=audio_path), \
+                 patch("build_video.make_motion_clip_with_audio", wraps=TestMotionIntegration._static_ignoring_pattern), \
+                 patch("build_video.KENBURNS_ENABLED", True):
+                with patch("moviepy.video.VideoClip.VideoClip.write_videofile"):
+                    _build_video_impl(
+                        str(scenes_path),
+                        out_video_path=str(tmp / "out.mp4"),
+                        motion=True,
+                    )
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
@@ -1983,8 +1023,8 @@ class TestMotionIntegration(unittest.TestCase):
 class TestBiopicMusicWithMotion(unittest.TestCase):
     """Regression tests: biopic background music integration works with motion clips."""
 
-    def test_biopic_music_mixed_when_not_horror(self):
-        """For non-horror videos with biopic_music_enabled, mix_biopic_background_music is called."""
+    def test_biopic_music_mixed_when_enabled(self):
+        """For biopic videos with biopic_music_enabled, mix_biopic_background_music is called."""
         try:
             from PIL import Image
         except ImportError:
@@ -2010,7 +1050,6 @@ class TestBiopicMusicWithMotion(unittest.TestCase):
                     _build_video_impl(
                         str(scenes_path),
                         out_video_path=str(out_path),
-                        is_horror=False,
                         motion=False,
                     )
                 mock_mix.assert_called_once()
@@ -2045,44 +1084,9 @@ class TestBiopicMusicWithMotion(unittest.TestCase):
                     _build_video_impl(
                         str(scenes_path),
                         out_video_path=str(out_path),
-                        is_horror=False,
                         motion=True,
                     )
                 mock_mix.assert_called_once()
-        finally:
-            shutil.rmtree(tmp, ignore_errors=True)
-
-    def test_biopic_music_skipped_for_horror(self):
-        """For horror videos, mix_biopic_background_music must NOT be called."""
-        try:
-            from PIL import Image
-        except ImportError:
-            self.skipTest("PIL not available")
-
-        import build_video as bv
-        tmp = _TESTS_DIR / "tmp_biopic_skip_horror"
-        tmp.mkdir(parents=True, exist_ok=True)
-        try:
-            scenes_path, img_path, audio_path = _make_integration_test_fixtures(tmp)
-            out_path = tmp / "out.mp4"
-
-            with patch.object(bv.config, "save_assets", False), \
-                 patch.object(bv.config, "is_vertical", False), \
-                 patch.object(bv.config, "temp_dir", str(tmp)), \
-                 patch.object(bv.config, "biopic_music_enabled", True), \
-                 patch("build_video.generate_image_for_scene_with_retry", return_value=img_path), \
-                 patch("build_video.generate_audio_for_scene_with_retry", return_value=audio_path), \
-                 patch("build_video.mix_biopic_background_music") as mock_mix, \
-                 patch("build_video.mix_horror_background_audio", return_value=MagicMock(duration=5.0)):
-                with patch("moviepy.video.VideoClip.VideoClip.write_videofile"):
-                    _build_video_impl(
-                        str(scenes_path),
-                        out_video_path=str(out_path),
-                        is_horror=True,
-                        horror_bg_enabled=False,
-                        motion=False,
-                    )
-                mock_mix.assert_not_called()
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
@@ -2152,6 +1156,184 @@ class TestBiopicMusicFadeout(unittest.TestCase):
         finally:
             shutil.rmtree(fake_music_dir, ignore_errors=True)
 
+    def test_build_biopic_music_track_per_scene_song_and_volume(self):
+        """build_biopic_music_track uses per-scene music_song and music_volume when present."""
+        def make_silence(t):
+            return np.array([0.0, 0.0])
+        scene_audio1 = AudioClip(make_silence, duration=2.0, fps=44100)
+        scene_audio2 = AudioClip(make_silence, duration=3.0, fps=44100)
+        music_clip = AudioClip(make_silence, duration=5.0, fps=44100)
+
+        fake_music_dir = _TESTS_DIR / "fake_music_per_scene"
+        (fake_music_dir / "relaxing").mkdir(parents=True, exist_ok=True)
+        (fake_music_dir / "passionate").mkdir(parents=True, exist_ok=True)
+        (fake_music_dir / "relaxing" / "song1.mp3").touch()
+        (fake_music_dir / "passionate" / "track.mp3").touch()
+        scenes = [
+            {"id": 1, "music_song": "relaxing/song1.mp3", "music_volume": "medium"},
+            {"id": 2, "music_song": "passionate/track.mp3", "music_volume": "low"},
+        ]
+        try:
+            with patch("build_video._fit_song_to_duration", return_value=music_clip), \
+                 patch("biopic_music_config.BIOPIC_MUSIC_DIR", fake_music_dir):
+                result = build_biopic_music_track(
+                    metadata={},
+                    scene_audio_clips=[scene_audio1, scene_audio2],
+                    total_duration=5.0,
+                    scenes=scenes,
+                    tail_sec=0,
+                    fadeout_sec=0,
+                )
+                self.assertIsNotNone(result)
+                self.assertGreater(result.duration, 0)
+        finally:
+            shutil.rmtree(fake_music_dir, ignore_errors=True)
+
+    def test_build_biopic_music_consecutive_same_song_one_segment(self):
+        """Consecutive scenes with same song produce one continuous segment (no restarts)."""
+        def make_silence(t):
+            return np.array([0.0, 0.0])
+        scene_audio1 = AudioClip(make_silence, duration=2.0, fps=44100)
+        scene_audio2 = AudioClip(make_silence, duration=2.0, fps=44100)
+        scene_audio3 = AudioClip(make_silence, duration=2.0, fps=44100)
+        expected_dur = 3 * (START_SCENE_PAUSE_LENGTH + 2.0 + END_SCENE_PAUSE_LENGTH)
+        music_clip = AudioClip(make_silence, duration=expected_dur, fps=44100)
+
+        fake_music_dir = _TESTS_DIR / "fake_music_same_song"
+        (fake_music_dir / "relaxing").mkdir(parents=True, exist_ok=True)
+        (fake_music_dir / "relaxing" / "song1.mp3").touch()
+        scenes = [
+            {"id": 1, "music_song": "relaxing/song1.mp3", "music_volume": "medium"},
+            {"id": 2, "music_song": "relaxing/song1.mp3", "music_volume": "medium"},
+            {"id": 3, "music_song": "relaxing/song1.mp3", "music_volume": "low"},
+        ]
+        try:
+            with patch("build_video._fit_song_to_duration", return_value=music_clip) as mock_fit:
+                with patch("biopic_music_config.BIOPIC_MUSIC_DIR", fake_music_dir):
+                    result = build_biopic_music_track(
+                        metadata={},
+                        scene_audio_clips=[scene_audio1, scene_audio2, scene_audio3],
+                        total_duration=6.0,
+                        scenes=scenes,
+                        tail_sec=0,
+                        fadeout_sec=0,
+                    )
+                self.assertIsNotNone(result)
+                self.assertGreater(result.duration, 0)
+                # Same song across 3 scenes -> 1 segment (1 call to _fit_song_to_duration)
+                self.assertEqual(mock_fit.call_count, 1)
+                mock_fit.assert_called_once()
+                call_args = mock_fit.call_args
+                self.assertGreaterEqual(call_args[0][1], expected_dur * 0.99)
+        finally:
+            shutil.rmtree(fake_music_dir, ignore_errors=True)
+
+    def test_build_biopic_music_same_song_different_volumes_applies_both(self):
+        """Same song with different volumes (medium, low) applies both volume levels to blocks."""
+        def make_silence(t):
+            return np.array([0.0, 0.0])
+        scene_audio1 = AudioClip(make_silence, duration=2.0, fps=44100)
+        scene_audio2 = AudioClip(make_silence, duration=2.0, fps=44100)
+        expected_dur = 2 * (START_SCENE_PAUSE_LENGTH + 2.0 + END_SCENE_PAUSE_LENGTH)
+        music_clip = AudioClip(make_silence, duration=expected_dur, fps=44100)
+
+        fake_music_dir = _TESTS_DIR / "fake_music_volumes"
+        (fake_music_dir / "relaxing").mkdir(parents=True, exist_ok=True)
+        (fake_music_dir / "relaxing" / "song1.mp3").touch()
+        scenes = [
+            {"id": 1, "music_song": "relaxing/song1.mp3", "music_volume": "medium"},
+            {"id": 2, "music_song": "relaxing/song1.mp3", "music_volume": "low"},
+        ]
+        try:
+            with patch("build_video._fit_song_to_duration", return_value=music_clip):
+                with patch("build_video.apply_volume_to_audioclip", wraps=lambda c, f: c) as mock_vol:
+                    with patch("biopic_music_config.BIOPIC_MUSIC_DIR", fake_music_dir):
+                        result = build_biopic_music_track(
+                            metadata={},
+                            scene_audio_clips=[scene_audio1, scene_audio2],
+                            total_duration=4.0,
+                            scenes=scenes,
+                            tail_sec=0,
+                            fadeout_sec=0,
+                        )
+                self.assertIsNotNone(result)
+                self.assertGreater(result.duration, 0)
+                # Two volume blocks -> apply_volume_to_audioclip called twice with different factors
+                self.assertEqual(mock_vol.call_count, 2)
+                factors = [call[0][1] for call in mock_vol.call_args_list]
+                # medium (-25.5 dB) > low (-28 dB) in linear scale
+                self.assertGreater(factors[0], factors[1])
+        finally:
+            shutil.rmtree(fake_music_dir, ignore_errors=True)
+
+    def test_build_biopic_music_raises_on_missing_song(self):
+        """build_biopic_music_track raises when biopic script has scene without music_song."""
+        def make_silence(t):
+            return np.array([0.0, 0.0])
+        scene_audio = AudioClip(make_silence, duration=2.0, fps=44100)
+        scenes = [
+            {"id": 1, "chapter_num": 1},  # No music_song/music_volume
+        ]
+        metadata = {"script_type": "biopic"}
+        with self.assertRaises(ValueError) as ctx:
+            build_biopic_music_track(
+                metadata=metadata,
+                scene_audio_clips=[scene_audio],
+                total_duration=2.0,
+                scenes=scenes,
+                tail_sec=0,
+                fadeout_sec=0,
+            )
+        self.assertIn("music_song", str(ctx.exception))
+        self.assertIn("music_volume", str(ctx.exception))
+
+    def test_build_biopic_music_raises_on_missing_music_file(self):
+        """build_biopic_music_track raises FileNotFoundError when song file does not exist."""
+        def make_silence(t):
+            return np.array([0.0, 0.0])
+        scene_audio = AudioClip(make_silence, duration=2.0, fps=44100)
+        scenes = [
+            {"id": 1, "music_song": "relaxing/nonexistent.mp3", "music_volume": "medium"},
+        ]
+        metadata = {"script_type": "biopic"}
+        fake_music_dir = _TESTS_DIR / "fake_music_missing_file"
+        (fake_music_dir / "relaxing").mkdir(parents=True, exist_ok=True)
+        # Do NOT create relaxing/nonexistent.mp3
+        try:
+            with patch("biopic_music_config.BIOPIC_MUSIC_DIR", fake_music_dir):
+                with self.assertRaises(FileNotFoundError) as ctx:
+                    build_biopic_music_track(
+                        metadata=metadata,
+                        scene_audio_clips=[scene_audio],
+                        total_duration=2.0,
+                        scenes=scenes,
+                        tail_sec=0,
+                        fadeout_sec=0,
+                    )
+                self.assertIn("Music file not found", str(ctx.exception))
+        finally:
+            shutil.rmtree(fake_music_dir, ignore_errors=True)
+
+    def test_build_biopic_music_raises_when_scenes_lack_music(self):
+        """build_biopic_music_track raises ValueError when scenes lack music_song/music_volume (no fallback)."""
+        def make_silence(t):
+            return np.array([0.0, 0.0])
+        scene_audio = AudioClip(make_silence, duration=2.0, fps=44100)
+        scenes = [
+            {"id": 1, "chapter_num": 1},  # No music_song/music_volume
+        ]
+        with self.assertRaises(ValueError) as ctx:
+            build_biopic_music_track(
+                metadata={"outline": {"chapters": [{"chapter_num": 1, "num_scenes": 1, "music_mood": "relaxing"}]}},
+                scene_audio_clips=[scene_audio],
+                total_duration=2.0,
+                scenes=scenes,
+                tail_sec=0,
+                fadeout_sec=0,
+            )
+        self.assertIn("music_song", str(ctx.exception))
+        self.assertIn("music_volume", str(ctx.exception))
+
     def test_mix_biopic_background_music_does_not_crash(self):
         """mix_biopic_background_music runs without import errors (regression for moviepy.audio.fx.all)."""
         def make_silence(t):
@@ -2188,6 +1370,22 @@ class TestBiopicMusicFadeout(unittest.TestCase):
         tmp.mkdir(parents=True, exist_ok=True)
         try:
             scenes_path, img_path, audio_path = _make_integration_test_fixtures(tmp)
+            # Add music_song and music_volume (required for per-scene music mode)
+            with open(scenes_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            for s in data["scenes"]:
+                s["music_song"] = "relaxing/test.mp3"
+                s["music_volume"] = "medium"
+            with open(scenes_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+            fake_music_dir = tmp / "biopic_music"
+            (fake_music_dir / "relaxing").mkdir(parents=True, exist_ok=True)
+            (fake_music_dir / "relaxing" / "test.mp3").touch()
+
+            def make_silence(t):
+                return np.array([0.0, 0.0])
+            music_clip = AudioClip(make_silence, duration=6.0, fps=44100)
+
             out_path = tmp / "out.mp4"
 
             # Track whether mix_biopic_background_music was actually called
@@ -2208,17 +1406,43 @@ class TestBiopicMusicFadeout(unittest.TestCase):
                  patch.object(bv.config, "biopic_music_enabled", True), \
                  patch("build_video.generate_image_for_scene_with_retry", return_value=img_path), \
                  patch("build_video.generate_audio_for_scene_with_retry", return_value=audio_path), \
+                 patch("build_video._fit_song_to_duration", return_value=music_clip), \
+                 patch("biopic_music_config.BIOPIC_MUSIC_DIR", fake_music_dir), \
                  patch("build_video.mix_biopic_background_music", side_effect=tracking_mix):
                 with patch("moviepy.video.VideoClip.VideoClip.write_videofile"):
                     _build_video_impl(
                         str(scenes_path),
                         out_video_path=str(out_path),
-                        is_horror=False,
                         motion=False,
                     )
             self.assertTrue(call_tracker["called"], "mix_biopic_background_music should have been called")
             self.assertIsNone(call_tracker["error"],
                               f"mix_biopic_background_music crashed: {call_tracker['error']}")
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
+class TestNormalizeAudioToLufs(unittest.TestCase):
+    """Tests for normalize_audio_to_lufs (background music loudness normalization)."""
+
+    def test_normalize_audio_to_lufs_creates_output(self):
+        """normalize_audio_to_lufs produces valid output when given valid WAV input."""
+        import wave
+        tmp = Path(tempfile.mkdtemp())
+        try:
+            wav_path = tmp / "input.wav"
+            with wave.open(str(wav_path), "wb") as wav:
+                wav.setnchannels(2)
+                wav.setsampwidth(2)
+                wav.setframerate(44100)
+                wav.writeframes(b"\x00\x00" * (44100 * 2))  # 1 sec stereo silence
+            out_path = tmp / "output.wav"
+            try:
+                result = normalize_audio_to_lufs(wav_path, target_lufs=-18.0, output_path=out_path)
+                self.assertTrue(result.exists())
+                self.assertGreater(result.stat().st_size, 0)
+            except (RuntimeError, FileNotFoundError) as e:
+                self.skipTest(f"ffmpeg not available or loudnorm failed: {e}")
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 

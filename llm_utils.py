@@ -1,16 +1,23 @@
 """
-Unified LLM utilities for text and image generation.
-Dispatches to OpenAI or Google (Gemini) based on .env TEXT_PROVIDER / IMAGE_PROVIDER.
+Unified LLM utilities for text, image, and speech generation.
+Dispatches to OpenAI, xAI (Grok), or Google (Gemini) based on .env TEXT_PROVIDER / IMAGE_PROVIDER.
+TTS dispatches to OpenAI, ElevenLabs, or Google based on TTS_PROVIDER.
 
 .env variables (defaults preserve OpenAI-only behavior):
-  TEXT_PROVIDER      - "openai" or "google" (default: openai)
+  TEXT_PROVIDER      - "openai", "xai", or "google" (default: openai)
   TEXT_MODEL_OPENAI  - OpenAI chat model (default: gpt-5.2)
+  TEXT_MODEL_XAI     - xAI Grok model (default: grok-4-1-fast-reasoning)
   TEXT_MODEL_GOOGLE  - Gemini model (default: gemini-2.0-flash)
-  IMAGE_PROVIDER     - "openai" or "google" (default: openai)
+  IMAGE_PROVIDER     - "openai", "xai", or "google" (default: openai)
   IMAGE_MODEL_OPENAI - OpenAI image model (default: gpt-image-1.5)
+  IMAGE_MODEL_XAI    - xAI image model (default: grok-imagine-image)
   IMAGE_MODEL_GOOGLE - Google image-capable model (default: gemini-2.0-flash-exp)
-  OPENAI_API_KEY     - Required for OpenAI text/images
+  TTS_PROVIDER       - "openai", "elevenlabs", or "google" (default: google)
+  OPENAI_API_KEY     - Required for OpenAI text/images/TTS
+  XAI_API_KEY        - Required for xAI (Grok) text/images
   GOOGLE_API_KEY     - Required for Google (Gemini) text/images (GEMINI_API_KEY also supported)
+  GOOGLE_APPLICATION_CREDENTIALS - Required for Google Cloud TTS (service account JSON)
+  ELEVENLABS_API_KEY - Required for ElevenLabs TTS
 """
 
 import os
@@ -30,17 +37,49 @@ load_dotenv()
 # Provider and model from env (defaults: openai for backward compatibility)
 TEXT_PROVIDER = os.getenv("TEXT_PROVIDER", "openai").lower()
 TEXT_MODEL_OPENAI = os.getenv("TEXT_MODEL_OPENAI", "gpt-5.2")
+TEXT_MODEL_XAI = os.getenv("TEXT_MODEL_XAI", "grok-4-1-fast-reasoning")
 TEXT_MODEL_GOOGLE = os.getenv("TEXT_MODEL_GOOGLE", "gemini-2.0-flash")
 IMAGE_PROVIDER = os.getenv("IMAGE_PROVIDER", "openai").lower()
 IMAGE_MODEL_OPENAI = os.getenv("IMAGE_MODEL_OPENAI", "gpt-image-1.5")
+IMAGE_MODEL_XAI = os.getenv("IMAGE_MODEL_XAI", "grok-imagine-image")
 IMAGE_MODEL_GOOGLE = os.getenv("IMAGE_MODEL_GOOGLE", "gemini-2.0-flash-exp")
+
+# TTS provider and settings
+TTS_PROVIDER = os.getenv("TTS_PROVIDER", "google").lower()
+OPENAI_TTS_MODEL = os.getenv("OPENAI_TTS_MODEL", "gpt-4o-mini-tts-2025-12-15")
+OPENAI_TTS_VOICE = os.getenv("OPENAI_TTS_VOICE", "marin")
+ELEVENLABS_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID", "JBFqnCBsd6RMkjVDRZzb")
+ELEVENLABS_MODEL = os.getenv("ELEVENLABS_MODEL", "eleven_multilingual_v2")
+GOOGLE_TTS_VOICE = os.getenv("GOOGLE_TTS_VOICE", "en-US-Studio-Q")
+GOOGLE_TTS_LANGUAGE = os.getenv("GOOGLE_TTS_LANGUAGE", "en-US")
+GOOGLE_TTS_PITCH = float(os.getenv("GOOGLE_TTS_PITCH", "-1.0"))
+GOOGLE_VOICE_TYPE = os.getenv("GOOGLE_VOICE_TYPE", "").lower()
+GOOGLE_GEMINI_MALE_SPEAKER = os.getenv("GOOGLE_GEMINI_MALE_SPEAKER", "Charon")
+GOOGLE_GEMINI_FEMALE_SPEAKER = os.getenv("GOOGLE_GEMINI_FEMALE_SPEAKER", "")
+GEMINI_TTS_TEXT_PADDING = "   "
+OPENAI_TTS_STYLE_PROMPT = (
+    "Read the following text in a calm, neutral, and consistent tone. "
+    "Maintain stable volume and pitch throughout. Do not add emotional "
+    "inflection, dramatic emphasis, or noticeable changes in speaking speed. "
+)
 
 
 def get_text_model_display() -> str:
     """Return a short string for logging: provider / model (e.g. 'openai / gpt-5.2')."""
     prov = TEXT_PROVIDER.lower()
-    model = TEXT_MODEL_OPENAI if prov == "openai" else TEXT_MODEL_GOOGLE
+    if prov == "openai":
+        model = TEXT_MODEL_OPENAI
+    elif prov == "xai":
+        model = TEXT_MODEL_XAI
+    else:
+        model = TEXT_MODEL_GOOGLE
     return f"{prov} / {model}"
+
+
+def get_provider_for_step(step: str) -> str:
+    """Return provider for pipeline step. Uses TEXT_PROVIDER_<STEP> if set, else TEXT_PROVIDER."""
+    val = os.getenv(f"TEXT_PROVIDER_{step.upper()}")
+    return (val or TEXT_PROVIDER).lower()
 
 
 def _resolve_json_schema(schema: dict | type) -> dict:
@@ -75,6 +114,59 @@ def _ensure_openai_schema(schema: dict) -> dict:
     return result
 
 
+def _xai_text(
+    messages: list[dict[str, str]],
+    model: str | None,
+    temperature: float,
+    schema_dict: dict | None,
+    response_format: dict | None,
+    **kwargs: Any,
+) -> str:
+    """Generate text using xAI (Grok) via OpenAI-compatible API."""
+    api_key = os.getenv("XAI_API_KEY")
+    if not api_key:
+        raise ValueError("XAI_API_KEY is not set. Set it in .env for xAI (Grok) text.")
+    from openai import OpenAI
+    client = OpenAI(api_key=api_key, base_url="https://api.x.ai/v1")
+    model_name = model or TEXT_MODEL_XAI
+    req: dict[str, Any] = {
+        "model": model_name,
+        "messages": messages,
+        "temperature": temperature,
+        **kwargs,
+    }
+    if schema_dict is not None:
+        openai_schema = _ensure_openai_schema(schema_dict)
+        schema_name = openai_schema.get("title", "response")
+        req["response_format"] = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": schema_name,
+                "strict": True,
+                "schema": openai_schema,
+            },
+        }
+    elif response_format is not None:
+        req["response_format"] = response_format
+    last_error = None
+    for attempt in range(1, _LLM_MAX_RETRIES + 1):
+        try:
+            response = client.chat.completions.create(**req)
+            return response.choices[0].message.content or ""
+        except Exception as e:
+            last_error = e
+            status = getattr(e, "status_code", None) or getattr(e, "code", None)
+            retryable = status in (429, 500, 502, 503) or "connection" in str(type(e).__name__).lower()
+            if not retryable or attempt >= _LLM_MAX_RETRIES:
+                raise
+            delay = _LLM_BASE_DELAY * (2 ** (attempt - 1))
+            print(f"[LLM] Attempt {attempt}/{_LLM_MAX_RETRIES} failed ({e}). Retrying in {delay:.1f}s...")
+            time.sleep(delay)
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError("xAI text generation failed.")
+
+
 def generate_text(
     messages: list[dict[str, str]],
     model: str | None = None,
@@ -85,12 +177,12 @@ def generate_text(
     **kwargs: Any,
 ) -> str:
     """
-    Generate text from messages using OpenAI or Google Gemini.
+    Generate text from messages using OpenAI, xAI (Grok), or Google Gemini.
 
     Args:
         messages: List of {"role": "user"|"system"|"assistant", "content": str} (OpenAI shape).
-        model: Model name; if None, use env TEXT_MODEL_OPENAI or TEXT_MODEL_GOOGLE.
-        provider: "openai" or "google"; if None, use env TEXT_PROVIDER.
+        model: Model name; if None, use env TEXT_MODEL_OPENAI, TEXT_MODEL_XAI, or TEXT_MODEL_GOOGLE.
+        provider: "openai", "xai", or "google"; if None, use env TEXT_PROVIDER.
         temperature: Sampling temperature.
         response_format: Optional e.g. {"type": "json_object"} for JSON mode.
         response_json_schema: Optional JSON schema (dict or Pydantic BaseModel) for structured
@@ -103,9 +195,9 @@ def generate_text(
         The assistant reply as a single string.
     """
     prov = (provider or TEXT_PROVIDER).lower()
-    if prov not in ("openai", "google"):
+    if prov not in ("openai", "xai", "google"):
         raise ValueError(
-            f"TEXT_PROVIDER must be 'openai' or 'google'. Got: {prov}. "
+            f"TEXT_PROVIDER must be 'openai', 'xai', or 'google'. Got: {prov}. "
             "Set TEXT_PROVIDER in .env or pass provider=."
         )
 
@@ -113,6 +205,16 @@ def generate_text(
     schema_dict: dict | None = None
     if response_json_schema is not None:
         schema_dict = _resolve_json_schema(response_json_schema)
+
+    if prov == "xai":
+        return _xai_text(
+            messages=messages,
+            model=model,
+            temperature=temperature,
+            schema_dict=schema_dict,
+            response_format=response_format,
+            **kwargs,
+        )
 
     if prov == "openai":
         api_key = os.getenv("OPENAI_API_KEY")
@@ -256,6 +358,48 @@ def generate_text(
     return text
 
 
+def _size_to_aspect_ratio(size: str) -> str:
+    """Map pixel size to xAI aspect_ratio."""
+    mapping = {
+        "1536x1024": "16:9",
+        "1024x1536": "9:16",
+        "1024x1024": "1:1",
+    }
+    return mapping.get(size, "16:9")
+
+
+def _xai_image(
+    prompt: str,
+    output_path: Path | None,
+    size: str,
+    model_name: str,
+    output_format: str,
+    **kwargs: Any,
+) -> bytes | Path:
+    """Generate image using xAI (Grok) via xai_sdk."""
+    api_key = os.getenv("XAI_API_KEY")
+    if not api_key:
+        raise ValueError("XAI_API_KEY is not set. Set it in .env for xAI (Grok) images.")
+    from xai_sdk import Client
+    client = Client(api_key=api_key)
+    aspect_ratio = _size_to_aspect_ratio(size)
+    response = client.image.sample(
+        prompt=prompt,
+        model=model_name,
+        aspect_ratio=aspect_ratio,
+        image_format="base64",
+    )
+    img_bytes = getattr(response, "image", None)
+    if not img_bytes:
+        raise RuntimeError("xAI image response had no image data")
+    if output_path is not None:
+        output_path = Path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_bytes(img_bytes)
+        return output_path
+    return img_bytes
+
+
 def _openai_image(
     prompt: str,
     output_path: Path | None,
@@ -350,14 +494,14 @@ def generate_image(
     **kwargs: Any,
 ) -> bytes | Path:
     """
-    Generate an image from a text prompt using OpenAI or Google.
+    Generate an image from a text prompt using OpenAI, xAI (Grok), or Google.
 
     Args:
         prompt: The image description.
         output_path: If set, write image here and return Path; else return bytes.
-        size: e.g. "1536x1024", "1024x1024"; provider-specific.
-        model: Model name; if None, use env IMAGE_MODEL_OPENAI or IMAGE_MODEL_GOOGLE.
-        provider: "openai" or "google"; if None, use env IMAGE_PROVIDER.
+        size: e.g. "1536x1024", "1024x1024"; provider-specific (xAI maps to aspect_ratio).
+        model: Model name; if None, use env IMAGE_MODEL_OPENAI, IMAGE_MODEL_XAI, or IMAGE_MODEL_GOOGLE.
+        provider: "openai", "xai", or "google"; if None, use env IMAGE_PROVIDER.
         output_format: "png" or "jpeg"; used for file extension / OpenAI response_format when applicable.
         **kwargs: Passed through (e.g. moderation="low" for OpenAI).
 
@@ -366,15 +510,25 @@ def generate_image(
     """
     kwargs.setdefault("moderation", "low")
     prov = (provider or IMAGE_PROVIDER).lower()
-    if prov not in ("openai", "google"):
+    if prov not in ("openai", "xai", "google"):
         raise ValueError(
-            f"IMAGE_PROVIDER must be 'openai' or 'google'. Got: {prov}. "
+            f"IMAGE_PROVIDER must be 'openai', 'xai', or 'google'. Got: {prov}. "
             "Set IMAGE_PROVIDER in .env or pass provider=."
         )
     size = size or "1024x1024"
     if prov == "openai":
         model_name = model or IMAGE_MODEL_OPENAI
         return _openai_image(
+            prompt=prompt,
+            output_path=Path(output_path) if output_path else None,
+            size=size,
+            model_name=model_name,
+            output_format=output_format,
+            **kwargs,
+        )
+    if prov == "xai":
+        model_name = model or IMAGE_MODEL_XAI
+        return _xai_image(
             prompt=prompt,
             output_path=Path(output_path) if output_path else None,
             size=size,
@@ -391,3 +545,176 @@ def generate_image(
         output_format=output_format,
         **kwargs,
     )
+
+
+def generate_speech(
+    text: str,
+    output_path: Path | str,
+    emotion: str | None = None,
+    narration_instructions: str | None = None,
+    use_female_voice: bool = False,
+    provider: str | None = None,
+) -> Path:
+    """
+    Generate speech from text using OpenAI, ElevenLabs, or Google TTS.
+
+    Args:
+        text: The text to synthesize.
+        output_path: Path to write the audio file (MP3).
+        emotion: Optional emotion string for Gemini/OpenAI style hints.
+        narration_instructions: Optional instructions (e.g. biopic narration style) for Gemini/OpenAI.
+        use_female_voice: If True, use female voice for Gemini.
+        provider: "openai", "elevenlabs", or "google"; if None, use env TTS_PROVIDER.
+
+    Returns:
+        Path to the generated audio file.
+    """
+    prov = (provider or os.getenv("TTS_PROVIDER", "google")).lower()
+    if prov not in ("openai", "elevenlabs", "google"):
+        raise ValueError(
+            f"TTS_PROVIDER must be 'openai', 'elevenlabs', or 'google'. Got: {prov}. "
+            "Set TTS_PROVIDER in .env or pass provider=."
+        )
+
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    last_error = None
+    for attempt in range(1, _LLM_MAX_RETRIES + 1):
+        try:
+            if prov == "openai":
+                return _openai_tts(
+                    text=text,
+                    output_path=output_path,
+                    narration_instructions=narration_instructions,
+                )
+            if prov == "elevenlabs":
+                return _elevenlabs_tts(text=text, output_path=output_path)
+            return _google_tts(
+                text=text,
+                output_path=output_path,
+                emotion=emotion,
+                narration_instructions=narration_instructions,
+                use_female_voice=use_female_voice,
+            )
+        except Exception as e:
+            last_error = e
+            status = getattr(e, "status_code", None) or getattr(e, "code", None)
+            retryable = status in (429, 500, 502, 503) or "connection" in str(type(e).__name__).lower()
+            if not retryable or attempt >= _LLM_MAX_RETRIES:
+                raise
+            delay = _LLM_BASE_DELAY * (2 ** (attempt - 1))
+            print(f"[TTS] Attempt {attempt}/{_LLM_MAX_RETRIES} failed ({e}). Retrying in {delay:.1f}s...")
+            time.sleep(delay)
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError("TTS generation failed.")
+
+
+def _openai_tts(
+    text: str,
+    output_path: Path,
+    narration_instructions: str | None = None,
+) -> Path:
+    from openai import OpenAI
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise ValueError("OPENAI_API_KEY is not set. Set it in .env for OpenAI TTS.")
+    client = OpenAI()
+    instructions = narration_instructions or OPENAI_TTS_STYLE_PROMPT
+    with client.audio.speech.with_streaming_response.create(
+        model=OPENAI_TTS_MODEL,
+        voice=OPENAI_TTS_VOICE,
+        input=text,
+        instructions=instructions,
+    ) as response:
+        response.stream_to_file(str(output_path))
+    return output_path
+
+
+def _elevenlabs_tts(text: str, output_path: Path) -> Path:
+    api_key = os.getenv("ELEVENLABS_API_KEY")
+    if not api_key:
+        raise ValueError("ELEVENLABS_API_KEY is not set. Set it in .env for ElevenLabs TTS.")
+    from elevenlabs import ElevenLabs
+    client = ElevenLabs(api_key=api_key)
+    audio_generator = client.text_to_speech.convert(
+        voice_id=ELEVENLABS_VOICE_ID,
+        text=text,
+        model_id=ELEVENLABS_MODEL,
+        voice_settings={
+            "stability": 0.75,
+            "similarity_boost": 0.75,
+            "style": 0.5,
+            "use_speaker_boost": False,
+            "speed": 1.0,
+        },
+    )
+    with open(output_path, "wb") as f:
+        for chunk in audio_generator:
+            f.write(chunk)
+    return output_path
+
+
+def _google_tts(
+    text: str,
+    output_path: Path,
+    emotion: str | None = None,
+    narration_instructions: str | None = None,
+    use_female_voice: bool = False,
+) -> Path:
+    from google.cloud import texttospeech
+    client = texttospeech.TextToSpeechClient()
+
+    voice_type = os.getenv("GOOGLE_VOICE_TYPE", "").lower()
+    tts_voice = os.getenv("GOOGLE_TTS_VOICE", GOOGLE_TTS_VOICE)
+    lang = os.getenv("GOOGLE_TTS_LANGUAGE", GOOGLE_TTS_LANGUAGE)
+    pitch = float(os.getenv("GOOGLE_TTS_PITCH", str(GOOGLE_TTS_PITCH)))
+    gemini_male = os.getenv("GOOGLE_GEMINI_MALE_SPEAKER", GOOGLE_GEMINI_MALE_SPEAKER)
+    gemini_female = os.getenv("GOOGLE_GEMINI_FEMALE_SPEAKER", GOOGLE_GEMINI_FEMALE_SPEAKER)
+
+    is_chirp = voice_type == "chirp"
+    is_gemini = voice_type == "gemini"
+
+    if is_gemini:
+        text_for_gemini = (text or "").rstrip() + GEMINI_TTS_TEXT_PADDING
+        synthesis_input = texttospeech.SynthesisInput(text=text_for_gemini)
+        if use_female_voice and gemini_female:
+            gemini_voice = gemini_female
+        elif use_female_voice and not gemini_female:
+            gemini_voice = tts_voice  # Fallback when female speaker not set
+        else:
+            gemini_voice = gemini_male
+        if not gemini_voice:
+            gemini_voice = tts_voice
+        voice = texttospeech.VoiceSelectionParams(
+            language_code=lang,
+            name=gemini_voice,
+            model_name="gemini-2.5-pro-tts",
+        )
+        audio_config = texttospeech.AudioConfig(audio_encoding=texttospeech.AudioEncoding.MP3)
+    elif is_chirp:
+        synthesis_input = texttospeech.SynthesisInput(text=text)
+        voice = texttospeech.VoiceSelectionParams(
+            language_code=lang,
+            name=tts_voice,
+        )
+        audio_config = texttospeech.AudioConfig(audio_encoding=texttospeech.AudioEncoding.MP3)
+    else:
+        synthesis_input = texttospeech.SynthesisInput(text=text)
+        voice = texttospeech.VoiceSelectionParams(
+            language_code=lang,
+            name=tts_voice,
+        )
+        audio_config = texttospeech.AudioConfig(
+            audio_encoding=texttospeech.AudioEncoding.MP3,
+            pitch=pitch,
+        )
+
+    response = client.synthesize_speech(
+        input=synthesis_input,
+        voice=voice,
+        audio_config=audio_config,
+    )
+    output_path.write_bytes(response.audio_content)
+    return output_path

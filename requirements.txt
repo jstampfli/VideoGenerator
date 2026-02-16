@@ -34,3 +34,5 @@ google-api-python-client==2.171.0
 google-auth-httplib2==0.2.0
 google-auth-oauthlib==1.2.1
 google-genai>=1.0.0
+xai-sdk>=1.0.0
+rembg>=2.0.50

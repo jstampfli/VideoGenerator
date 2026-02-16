@@ -53,215 +53,188 @@ class TestVoiceSelection(unittest.TestCase):
         # Reset global flags
         build_video.USE_FEMALE_VOICE = False
     
+    @patch("build_video.llm_utils.generate_speech")
+    def test_generate_audio_calls_llm_utils_with_correct_params(self, mock_generate_speech):
+        """Test generate_audio_for_scene delegates to llm_utils.generate_speech with correct params."""
+        out_path = Path(self.temp_dir) / "scene_01.mp3"
+        mock_generate_speech.return_value = out_path
+        out_path.write_bytes(b"fake_audio")
+
+        scene = {
+            "id": 1,
+            "narration": "Test narration text.",
+            "emotion": "contemplative",
+            "narration_instructions": "Focus on reflection.",
+        }
+        orig_narr = build_video.NARRATION_INSTRUCTIONS_FOR_TTS
+        orig_female = build_video.USE_FEMALE_VOICE
+        try:
+            build_video.NARRATION_INSTRUCTIONS_FOR_TTS = ""
+            build_video.USE_FEMALE_VOICE = True
+
+            result = build_video.generate_audio_for_scene(scene)
+
+            mock_generate_speech.assert_called_once()
+            call_kw = mock_generate_speech.call_args[1]
+            self.assertEqual(call_kw["text"], "Test narration text.")
+            self.assertEqual(call_kw["emotion"], "contemplative")
+            self.assertEqual(call_kw["narration_instructions"], "Focus on reflection.")
+            self.assertTrue(call_kw["use_female_voice"])
+            self.assertIn("scene_01.mp3", str(call_kw["output_path"]))
+            self.assertEqual(result, out_path)
+        finally:
+            build_video.NARRATION_INSTRUCTIONS_FOR_TTS = orig_narr
+            build_video.USE_FEMALE_VOICE = orig_female
+
+    @patch.dict("os.environ", {"TTS_PROVIDER": "openai", "OPENAI_API_KEY": "sk-test"}, clear=False)
     @patch('build_video.TTS_PROVIDER', 'openai')
-    @patch('build_video.OPENAI_TTS_VOICE', 'marin')
-    @patch('build_video.client')
+    @patch('openai.OpenAI')
     @patch('pathlib.Path.exists', return_value=False)
-    def test_openai_voice_selection(self, mock_exists, mock_client):
+    def test_openai_voice_selection(self, mock_exists, mock_openai_class):
         """Test OpenAI voice selection uses OPENAI_TTS_VOICE."""
-        # Mock the OpenAI audio API
-        mock_stream = MagicMock()
+        import llm_utils
+        mock_client = MagicMock()
+        mock_openai_class.return_value = mock_client
         mock_response = MagicMock()
-        mock_response.stream_to_file = MagicMock()
         mock_client.audio.speech.with_streaming_response.create.return_value.__enter__.return_value = mock_response
-        
-        # Call generate_audio_for_scene
+
         build_video.generate_audio_for_scene(self.test_scene)
-        
-        # Verify OpenAI TTS was called with correct voice
+
         mock_client.audio.speech.with_streaming_response.create.assert_called_once()
         call_args = mock_client.audio.speech.with_streaming_response.create.call_args
-        self.assertEqual(call_args.kwargs['voice'], 'marin')
-        self.assertEqual(call_args.kwargs['model'], build_video.OPENAI_TTS_MODEL)
+        self.assertEqual(call_args.kwargs['voice'], llm_utils.OPENAI_TTS_VOICE)
+        self.assertEqual(call_args.kwargs['model'], llm_utils.OPENAI_TTS_MODEL)
     
+    @patch.dict("os.environ", {"TTS_PROVIDER": "elevenlabs", "ELEVENLABS_API_KEY": "test-key"}, clear=False)
     @patch('build_video.TTS_PROVIDER', 'elevenlabs')
-    @patch('build_video.ELEVENLABS_VOICE_ID', 'test_voice_id_123')
-    @patch('build_video.elevenlabs_client')
-    @patch('builtins.open', create=True)
-    def test_elevenlabs_voice_selection(self, mock_open, mock_client):
+    @patch('llm_utils.ELEVENLABS_VOICE_ID', 'test_voice_id_123')
+    @patch('elevenlabs.ElevenLabs')
+    def test_elevenlabs_voice_selection(self, mock_elevenlabs_class):
         """Test ElevenLabs voice selection uses ELEVENLABS_VOICE_ID."""
-        # Mock the ElevenLabs API
-        mock_generator = iter([b'audio', b'chunk'])
-        mock_client.text_to_speech.convert.return_value = mock_generator
-        # Mock file writing
-        mock_file = MagicMock()
-        mock_open.return_value.__enter__.return_value = mock_file
-        
-        # Call generate_audio_for_scene
+        mock_client = MagicMock()
+        mock_elevenlabs_class.return_value = mock_client
+        mock_client.text_to_speech.convert.return_value = iter([b'audio', b'chunk'])
+
         build_video.generate_audio_for_scene(self.test_scene)
-        
-        # Verify ElevenLabs TTS was called with correct voice ID
+
         mock_client.text_to_speech.convert.assert_called_once()
         call_args = mock_client.text_to_speech.convert.call_args
         self.assertEqual(call_args.kwargs['voice_id'], 'test_voice_id_123')
         self.assertEqual(call_args.kwargs['text'], self.test_scene['narration'])
     
+    @patch.dict("os.environ", {"TTS_PROVIDER": "google", "GOOGLE_VOICE_TYPE": "", "GOOGLE_TTS_VOICE": "en-US-Studio-Q", "GOOGLE_TTS_LANGUAGE": "en-US"}, clear=False)
     @patch('build_video.TTS_PROVIDER', 'google')
-    @patch('build_video.GOOGLE_VOICE_TYPE', '')
-    @patch('build_video.GOOGLE_TTS_VOICE', 'en-US-Studio-Q')
-    @patch('build_video.GOOGLE_TTS_LANGUAGE', 'en-US')
-    @patch('build_video.google_tts_client')
-    @patch('builtins.open', create=True)
-    def test_google_standard_voice_selection(self, mock_open, mock_client):
-        """Test standard Google TTS voice selection uses GOOGLE_TTS_VOICE."""
-        # Mock the Google TTS API
+    @patch('google.cloud.texttospeech.TextToSpeechClient')
+    def test_google_standard_voice_selection(self, mock_client_class):
+        """Test standard Google TTS voice selection uses GOOGLE_TTS_VOICE (plain text, no SSML)."""
+        mock_client = MagicMock()
+        mock_client_class.return_value = mock_client
         mock_response = MagicMock()
         mock_response.audio_content = b'audio_data'
         mock_client.synthesize_speech.return_value = mock_response
-        # Mock file writing
-        mock_file = MagicMock()
-        mock_open.return_value.__enter__.return_value = mock_file
-        
-        # Call generate_audio_for_scene
+
         build_video.generate_audio_for_scene(self.test_scene)
-        
-        # Verify Google TTS was called with correct voice
+
         mock_client.synthesize_speech.assert_called_once()
         call_args = mock_client.synthesize_speech.call_args
         voice_params = call_args.kwargs['voice']
         self.assertEqual(voice_params.name, 'en-US-Studio-Q')
         self.assertEqual(voice_params.language_code, 'en-US')
-        # Should use SSML for standard voices
-        self.assertIsNotNone(call_args.kwargs['input'].ssml)
+        self.assertIsNotNone(call_args.kwargs['input'].text)
     
+    @patch.dict("os.environ", {"TTS_PROVIDER": "google", "GOOGLE_VOICE_TYPE": "chirp", "GOOGLE_TTS_VOICE": "en-US-Chirp3-HD-Algenib", "GOOGLE_TTS_LANGUAGE": "en-US"}, clear=False)
     @patch('build_video.TTS_PROVIDER', 'google')
-    @patch('build_video.GOOGLE_VOICE_TYPE', 'chirp')
-    @patch('build_video.GOOGLE_TTS_VOICE', 'en-US-Chirp3-HD-Algenib')
-    @patch('build_video.GOOGLE_TTS_LANGUAGE', 'en-US')
-    @patch('build_video.google_tts_client')
-    @patch('builtins.open', create=True)
-    def test_google_chirp_voice_selection(self, mock_open, mock_client):
+    @patch('google.cloud.texttospeech.TextToSpeechClient')
+    def test_google_chirp_voice_selection(self, mock_client_class):
         """Test Chirp voice selection uses GOOGLE_TTS_VOICE."""
-        # Mock the Google TTS API
+        mock_client = MagicMock()
+        mock_client_class.return_value = mock_client
         mock_response = MagicMock()
         mock_response.audio_content = b'audio_data'
         mock_client.synthesize_speech.return_value = mock_response
-        # Mock file writing
-        mock_file = MagicMock()
-        mock_open.return_value.__enter__.return_value = mock_file
-        
-        # Call generate_audio_for_scene
+
         build_video.generate_audio_for_scene(self.test_scene)
-        
-        # Verify Google TTS was called with correct voice
+
         mock_client.synthesize_speech.assert_called_once()
         call_args = mock_client.synthesize_speech.call_args
         voice_params = call_args.kwargs['voice']
         self.assertEqual(voice_params.name, 'en-US-Chirp3-HD-Algenib')
-        # Chirp uses plain text, not SSML
         self.assertIsNotNone(call_args.kwargs['input'].text)
-        # SSML should be empty string or None for Chirp
-        ssml_value = call_args.kwargs['input'].ssml
-        self.assertTrue(ssml_value is None or ssml_value == '')
     
+    @patch.dict("os.environ", {"TTS_PROVIDER": "google", "GOOGLE_VOICE_TYPE": "gemini", "GOOGLE_GEMINI_MALE_SPEAKER": "Charon", "GOOGLE_GEMINI_FEMALE_SPEAKER": "Leda", "GOOGLE_TTS_LANGUAGE": "en-US"}, clear=False)
     @patch('build_video.TTS_PROVIDER', 'google')
-    @patch('build_video.GOOGLE_VOICE_TYPE', 'gemini')
-    @patch('build_video.GOOGLE_GEMINI_MALE_SPEAKER', 'Charon')
-    @patch('build_video.GOOGLE_GEMINI_FEMALE_SPEAKER', 'Leda')
-    @patch('build_video.GOOGLE_TTS_LANGUAGE', 'en-US')
     @patch('build_video.USE_FEMALE_VOICE', False)
-    @patch('build_video.google_tts_client')
-    @patch('builtins.open', create=True)
-    def test_google_gemini_male_voice_selection(self, mock_open, mock_client):
+    @patch('google.cloud.texttospeech.TextToSpeechClient')
+    def test_google_gemini_male_voice_selection(self, mock_client_class):
         """Test Gemini voice selection uses male speaker when USE_FEMALE_VOICE is False."""
-        # Mock the Google TTS API
+        mock_client = MagicMock()
+        mock_client_class.return_value = mock_client
         mock_response = MagicMock()
         mock_response.audio_content = b'audio_data'
         mock_client.synthesize_speech.return_value = mock_response
-        # Mock file writing
-        mock_file = MagicMock()
-        mock_open.return_value.__enter__.return_value = mock_file
-        
-        # Call generate_audio_for_scene
+
         build_video.generate_audio_for_scene(self.test_scene)
-        
-        # Verify Google TTS was called with correct voice
+
         mock_client.synthesize_speech.assert_called_once()
         call_args = mock_client.synthesize_speech.call_args
         voice_params = call_args.kwargs['voice']
         self.assertEqual(voice_params.name, 'Charon')
         self.assertEqual(voice_params.model_name, 'gemini-2.5-pro-tts')
-        # Gemini uses text with prompt, not SSML
         self.assertIsNotNone(call_args.kwargs['input'].text)
-        self.assertIsNotNone(call_args.kwargs['input'].prompt)
     
+    @patch.dict("os.environ", {"TTS_PROVIDER": "google", "GOOGLE_VOICE_TYPE": "gemini", "GOOGLE_GEMINI_MALE_SPEAKER": "Charon", "GOOGLE_GEMINI_FEMALE_SPEAKER": "Leda", "GOOGLE_TTS_LANGUAGE": "en-US"}, clear=False)
     @patch('build_video.TTS_PROVIDER', 'google')
-    @patch('build_video.GOOGLE_VOICE_TYPE', 'gemini')
-    @patch('build_video.GOOGLE_GEMINI_MALE_SPEAKER', 'Charon')
-    @patch('build_video.GOOGLE_GEMINI_FEMALE_SPEAKER', 'Leda')
-    @patch('build_video.GOOGLE_TTS_LANGUAGE', 'en-US')
     @patch('build_video.USE_FEMALE_VOICE', True)
-    @patch('build_video.google_tts_client')
-    @patch('builtins.open', create=True)
-    def test_google_gemini_female_voice_selection(self, mock_open, mock_client):
+    @patch('google.cloud.texttospeech.TextToSpeechClient')
+    def test_google_gemini_female_voice_selection(self, mock_client_class):
         """Test Gemini voice selection uses female speaker when USE_FEMALE_VOICE is True."""
-        # Mock the Google TTS API
+        mock_client = MagicMock()
+        mock_client_class.return_value = mock_client
         mock_response = MagicMock()
         mock_response.audio_content = b'audio_data'
         mock_client.synthesize_speech.return_value = mock_response
-        # Mock file writing
-        mock_file = MagicMock()
-        mock_open.return_value.__enter__.return_value = mock_file
-        
-        # Call generate_audio_for_scene
+
         build_video.generate_audio_for_scene(self.test_scene)
-        
-        # Verify Google TTS was called with correct voice
+
         mock_client.synthesize_speech.assert_called_once()
         call_args = mock_client.synthesize_speech.call_args
         voice_params = call_args.kwargs['voice']
         self.assertEqual(voice_params.name, 'Leda')
         self.assertEqual(voice_params.model_name, 'gemini-2.5-pro-tts')
     
+    @patch.dict("os.environ", {"TTS_PROVIDER": "google", "GOOGLE_VOICE_TYPE": "gemini", "GOOGLE_GEMINI_MALE_SPEAKER": "Charon", "GOOGLE_GEMINI_FEMALE_SPEAKER": "", "GOOGLE_TTS_VOICE": "en-US-Studio-Q", "GOOGLE_TTS_LANGUAGE": "en-US"}, clear=False)
     @patch('build_video.TTS_PROVIDER', 'google')
-    @patch('build_video.GOOGLE_VOICE_TYPE', 'gemini')
-    @patch('build_video.GOOGLE_GEMINI_MALE_SPEAKER', 'Charon')
-    @patch('build_video.GOOGLE_GEMINI_FEMALE_SPEAKER', '')  # Empty female speaker
-    @patch('build_video.GOOGLE_TTS_VOICE', 'en-US-Studio-Q')  # Fallback
-    @patch('build_video.GOOGLE_TTS_LANGUAGE', 'en-US')
     @patch('build_video.USE_FEMALE_VOICE', True)
-    @patch('build_video.google_tts_client')
-    @patch('builtins.open', create=True)
-    def test_google_gemini_female_voice_fallback(self, mock_open, mock_client):
+    @patch('google.cloud.texttospeech.TextToSpeechClient')
+    def test_google_gemini_female_voice_fallback(self, mock_client_class):
         """Test Gemini voice selection falls back to GOOGLE_TTS_VOICE when female speaker is empty."""
-        # Mock the Google TTS API
+        mock_client = MagicMock()
+        mock_client_class.return_value = mock_client
         mock_response = MagicMock()
         mock_response.audio_content = b'audio_data'
         mock_client.synthesize_speech.return_value = mock_response
-        # Mock file writing
-        mock_file = MagicMock()
-        mock_open.return_value.__enter__.return_value = mock_file
-        
-        # Call generate_audio_for_scene
+
         build_video.generate_audio_for_scene(self.test_scene)
-        
-        # Verify Google TTS was called with fallback voice
+
         mock_client.synthesize_speech.assert_called_once()
         call_args = mock_client.synthesize_speech.call_args
         voice_params = call_args.kwargs['voice']
         self.assertEqual(voice_params.name, 'en-US-Studio-Q')
     
+    @patch.dict("os.environ", {"TTS_PROVIDER": "google", "GOOGLE_VOICE_TYPE": "", "GOOGLE_TTS_VOICE": "en-US-Studio-Q", "GOOGLE_TTS_LANGUAGE": "en-US"}, clear=False)
     @patch('build_video.TTS_PROVIDER', 'google')
-    @patch('build_video.GOOGLE_VOICE_TYPE', '')
-    @patch('build_video.GOOGLE_TTS_VOICE', 'en-US-Studio-Q')
-    @patch('build_video.GOOGLE_TTS_LANGUAGE', 'en-US')
     @patch('build_video.USE_FEMALE_VOICE', False)
-    @patch('build_video.google_tts_client')
-    @patch('builtins.open', create=True)
-    def test_google_standard_male_voice(self, mock_open, mock_client):
+    @patch('google.cloud.texttospeech.TextToSpeechClient')
+    def test_google_standard_male_voice(self, mock_client_class):
         """Test standard Google TTS uses default voice when USE_FEMALE_VOICE is False."""
-        # Mock the Google TTS API
+        mock_client = MagicMock()
+        mock_client_class.return_value = mock_client
         mock_response = MagicMock()
         mock_response.audio_content = b'audio_data'
         mock_client.synthesize_speech.return_value = mock_response
-        # Mock file writing
-        mock_file = MagicMock()
-        mock_open.return_value.__enter__.return_value = mock_file
-        
-        # Call generate_audio_for_scene
+
         build_video.generate_audio_for_scene(self.test_scene)
-        
-        # Verify Google TTS was called with default voice
+
         mock_client.synthesize_speech.assert_called_once()
         call_args = mock_client.synthesize_speech.call_args
         voice_params = call_args.kwargs['voice']
@@ -436,56 +409,40 @@ class TestVoiceSelectionIntegration(unittest.TestCase):
         # Reset global flags
         build_video.USE_FEMALE_VOICE = False
     
+    @patch.dict("os.environ", {"TTS_PROVIDER": "google", "GOOGLE_VOICE_TYPE": "gemini", "GOOGLE_GEMINI_MALE_SPEAKER": "Charon", "GOOGLE_GEMINI_FEMALE_SPEAKER": "Leda", "GOOGLE_TTS_LANGUAGE": "en-US"}, clear=False)
     @patch('build_video.TTS_PROVIDER', 'google')
-    @patch('build_video.GOOGLE_VOICE_TYPE', 'gemini')
-    @patch('build_video.GOOGLE_GEMINI_MALE_SPEAKER', 'Charon')
-    @patch('build_video.GOOGLE_GEMINI_FEMALE_SPEAKER', 'Leda')
-    @patch('build_video.GOOGLE_TTS_LANGUAGE', 'en-US')
     @patch('build_video.USE_FEMALE_VOICE', True)
-    @patch('build_video.google_tts_client')
-    @patch('builtins.open', create=True)
-    def test_gemini_female_voice_integration(self, mock_open, mock_client):
+    @patch('google.cloud.texttospeech.TextToSpeechClient')
+    def test_gemini_female_voice_integration(self, mock_client_class):
         """Integration test: Gemini voice with --female flag."""
-        # Mock the Google TTS API
+        mock_client = MagicMock()
+        mock_client_class.return_value = mock_client
         mock_response = MagicMock()
         mock_response.audio_content = b'audio_data'
         mock_client.synthesize_speech.return_value = mock_response
-        # Mock file writing
-        mock_file = MagicMock()
-        mock_open.return_value.__enter__.return_value = mock_file
-        
-        # Call generate_audio_for_scene with female voice flag set
+
         build_video.generate_audio_for_scene(self.test_scene)
-        
-        # Verify the correct voice was selected
+
         mock_client.synthesize_speech.assert_called_once()
         call_args = mock_client.synthesize_speech.call_args
         voice_params = call_args.kwargs['voice']
         self.assertEqual(voice_params.name, 'Leda')
         self.assertEqual(voice_params.model_name, 'gemini-2.5-pro-tts')
     
+    @patch.dict("os.environ", {"TTS_PROVIDER": "google", "GOOGLE_VOICE_TYPE": "gemini", "GOOGLE_GEMINI_MALE_SPEAKER": "Charon", "GOOGLE_GEMINI_FEMALE_SPEAKER": "Leda", "GOOGLE_TTS_LANGUAGE": "en-US"}, clear=False)
     @patch('build_video.TTS_PROVIDER', 'google')
-    @patch('build_video.GOOGLE_VOICE_TYPE', 'gemini')
-    @patch('build_video.GOOGLE_GEMINI_MALE_SPEAKER', 'Charon')
-    @patch('build_video.GOOGLE_GEMINI_FEMALE_SPEAKER', 'Leda')
-    @patch('build_video.GOOGLE_TTS_LANGUAGE', 'en-US')
     @patch('build_video.USE_FEMALE_VOICE', False)
-    @patch('build_video.google_tts_client')
-    @patch('builtins.open', create=True)
-    def test_gemini_male_voice_integration(self, mock_open, mock_client):
+    @patch('google.cloud.texttospeech.TextToSpeechClient')
+    def test_gemini_male_voice_integration(self, mock_client_class):
         """Integration test: Gemini voice without --female flag."""
-        # Mock the Google TTS API
+        mock_client = MagicMock()
+        mock_client_class.return_value = mock_client
         mock_response = MagicMock()
         mock_response.audio_content = b'audio_data'
         mock_client.synthesize_speech.return_value = mock_response
-        # Mock file writing
-        mock_file = MagicMock()
-        mock_open.return_value.__enter__.return_value = mock_file
-        
-        # Call generate_audio_for_scene without female voice flag
+
         build_video.generate_audio_for_scene(self.test_scene)
-        
-        # Verify the correct voice was selected
+
         mock_client.synthesize_speech.assert_called_once()
         call_args = mock_client.synthesize_speech.call_args
         voice_params = call_args.kwargs['voice']

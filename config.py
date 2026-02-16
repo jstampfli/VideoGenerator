@@ -34,6 +34,7 @@ class Config:
     generate_short_thumbnails = False  # Whether to generate thumbnails for shorts (usually not needed)
     generate_refinement_diffs = False  # Whether to generate refinement diff JSON files
     use_research = True  # Whether to fetch Wikipedia research for script depth (--no-research to disable)
+    chapter_transitions = False  # Whether to insert chapter transition scenes (title cards); use --chapter-transitions to enable
     
     @property
     def total_scenes(self):

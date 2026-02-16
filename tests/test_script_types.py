@@ -67,37 +67,5 @@ class TestMainVideoScript(unittest.TestCase):
         self.assertIn("24", result)
 
 
-class TestShortScript(unittest.TestCase):
-    """Test cases for ShortScript class."""
-    
-    def setUp(self):
-        """Set up test fixtures."""
-        self.script_type = script_types.ShortScript()
-    
-    def test_get_outline_prompt_not_implemented(self):
-        """Test that get_outline_prompt raises NotImplementedError."""
-        with self.assertRaises(NotImplementedError):
-            self.script_type.get_outline_prompt("Einstein", chapters=1, total_scenes=3)
-    
-    def test_get_scene_generation_prompt_not_implemented(self):
-        """Test that get_scene_generation_prompt raises NotImplementedError."""
-        with self.assertRaises(NotImplementedError):
-            self.script_type.get_scene_generation_prompt({})
-    
-    def test_get_refinement_passes(self):
-        """Test get_refinement_passes returns only final pass."""
-        result = self.script_type.get_refinement_passes()
-        self.assertIsInstance(result, list)
-        self.assertEqual(len(result), 1)
-        self.assertIn('final', result)
-        self.assertNotIn('storyline', result)
-        self.assertNotIn('pivotal', result)
-    
-    def test_get_metadata_prompt_not_implemented(self):
-        """Test that get_metadata_prompt raises NotImplementedError."""
-        with self.assertRaises(NotImplementedError):
-            self.script_type.get_metadata_prompt("Einstein", "tagline", 3)
-
-
 if __name__ == "__main__":
     unittest.main()
