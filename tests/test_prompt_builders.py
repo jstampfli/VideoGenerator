@@ -419,6 +419,13 @@ class TestBuildMetadataPrompt(unittest.TestCase):
         self.assertIn("secret_mystery", result.lower())
         self.assertIn("known_but_misunderstood", result.lower())
 
+    def test_metadata_prompt_thumbnail_text_story_specific(self):
+        """Metadata prompt must instruct thumbnail_text to tease the twist, not use dry labels."""
+        result = prompt_builders.build_metadata_prompt("Eisenhower", "D-Day commander", 30)
+        self.assertIn("TEASES THE TWIST", result)
+        self.assertIn("THE GENERAL WHO WARNED", result)  # Good example
+        self.assertIn("MILITARY-INDUSTRIAL WARNING", result)  # Bad example (dry label)
+
 
 class TestResearchContextInjection(unittest.TestCase):
     """Test that prompts include RESEARCH CONTEXT when research_context is provided."""

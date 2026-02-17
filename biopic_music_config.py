@@ -13,12 +13,16 @@ BIOPIC_MUSIC_DEFAULT_MOODS = ["relaxing", "passionate", "happy"]
 BIOPIC_MUSIC_VOLUME_DB = float(os.getenv("BIOPIC_MUSIC_VOLUME", "-24.5"))
 
 # Per-scene volume levels (used by film composer pass)
-BIOPIC_MUSIC_VOLUME_LOW_DB = -26.0
-BIOPIC_MUSIC_VOLUME_MEDIUM_DB = -24.0
+BIOPIC_MUSIC_VOLUME_LOW_DB = -28.0
+BIOPIC_MUSIC_VOLUME_MEDIUM_DB = -25.0
 BIOPIC_MUSIC_VOLUME_LOUD_DB = -22.0
 
 # Crossfade duration in seconds between chapter segments
 BIOPIC_MUSIC_CROSSFADE_SEC = float(os.getenv("BIOPIC_MUSIC_CROSSFADE", "1.5"))
+
+# Seconds to shift the crossfade forward—prepend to new segments so the new song fades in more
+# during the next scene rather than disrupting the end of the previous. 0 = no shift.
+BIOPIC_MUSIC_CROSSFADE_OFFSET_SEC = float(os.getenv("BIOPIC_MUSIC_CROSSFADE_OFFSET", "0.4"))
 
 # Extra seconds at end of biopic videos with only background music (no narration)
 BIOPIC_END_TAIL_SEC = float(os.getenv("BIOPIC_END_TAIL", "2.0"))

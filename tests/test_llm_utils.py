@@ -261,12 +261,14 @@ class TestGenerateSpeech(unittest.TestCase):
                 pass
 
     @patch.dict("os.environ", {"TTS_PROVIDER": "openai", "OPENAI_API_KEY": "sk-test"}, clear=False)
+    @patch("llm_utils.TTS_OPENAI_STREAM", False)
     @patch("openai.OpenAI")
     def test_openai_returns_path(self, mock_openai_class):
         mock_client = MagicMock()
         mock_openai_class.return_value = mock_client
-        mock_stream = MagicMock()
-        mock_client.audio.speech.with_streaming_response.create.return_value.__enter__.return_value = mock_stream
+        mock_resp = MagicMock()
+        mock_resp.content = b"audio_data"
+        mock_client.audio.speech.create.return_value = mock_resp
 
         out = self.temp_dir / "test_openai.mp3"
         result = llm_utils.generate_speech(
@@ -276,8 +278,8 @@ class TestGenerateSpeech(unittest.TestCase):
         )
         self.assertIsInstance(result, Path)
         self.assertEqual(result, out)
-        mock_client.audio.speech.with_streaming_response.create.assert_called_once()
-        call_kw = mock_client.audio.speech.with_streaming_response.create.call_args[1]
+        mock_client.audio.speech.create.assert_called_once()
+        call_kw = mock_client.audio.speech.create.call_args[1]
         self.assertEqual(call_kw["input"], "Hello world")
         self.assertEqual(call_kw["voice"], llm_utils.OPENAI_TTS_VOICE)
 
@@ -300,6 +302,32 @@ class TestGenerateSpeech(unittest.TestCase):
         call_kw = mock_client.text_to_speech.convert.call_args[1]
         self.assertEqual(call_kw["text"], "Hello world")
         self.assertEqual(call_kw["voice_id"], llm_utils.ELEVENLABS_VOICE_ID)
+
+    @patch.dict("os.environ", {"TTS_PROVIDER": "elevenlabs", "ELEVENLABS_API_KEY": "test-key"}, clear=False)
+    @patch("elevenlabs.ElevenLabs")
+    def test_elevenlabs_previous_next_text_and_params(self, mock_elevenlabs_class):
+        """Test ElevenLabs receives previous_text, next_text, and quality params."""
+        mock_client = MagicMock()
+        mock_elevenlabs_class.return_value = mock_client
+        mock_client.text_to_speech.convert.return_value = iter([b"chunk1"])
+
+        out = self.temp_dir / "test_elevenlabs_context.mp3"
+        llm_utils.generate_speech(
+            text="Middle narration.",
+            output_path=out,
+            provider="elevenlabs",
+            previous_text="First scene narration.",
+            next_text="Last scene narration.",
+        )
+
+        mock_client.text_to_speech.convert.assert_called_once()
+        call_kw = mock_client.text_to_speech.convert.call_args[1]
+        self.assertEqual(call_kw["text"], "Middle narration.")
+        self.assertEqual(call_kw["previous_text"], "First scene narration.")
+        self.assertEqual(call_kw["next_text"], "Last scene narration.")
+        self.assertEqual(call_kw["optimize_streaming_latency"], 0)
+        self.assertEqual(call_kw["apply_text_normalization"], "on")
+        self.assertEqual(call_kw["language_code"], "en")
 
     @patch.dict(
         "os.environ",
@@ -370,6 +398,45 @@ class TestGenerateSpeech(unittest.TestCase):
         self.assertIn("openai", str(ctx.exception).lower())
         self.assertIn("elevenlabs", str(ctx.exception).lower())
         self.assertIn("google", str(ctx.exception).lower())
+
+
+class TestSanitizeTextForTts(unittest.TestCase):
+    """Test _sanitize_text_for_tts normalizes problematic characters."""
+
+    def test_em_dash_replaced(self):
+        text = "He graduates in 1915—in the legendary class."
+        result = llm_utils._sanitize_text_for_tts(text)
+        self.assertIn(" - ", result)
+        self.assertNotIn("\u2014", result)
+        self.assertEqual(result, "He graduates in 1915 - in the legendary class.")
+
+    def test_en_dash_replaced(self):
+        text = "Years 1936–1950"
+        result = llm_utils._sanitize_text_for_tts(text)
+        self.assertIn(" - ", result)
+        self.assertNotIn("\u2013", result)
+
+    def test_curly_quotes_replaced(self):
+        text = "He said \u2018hello\u2019 and \u201cgoodbye\u201d."
+        result = llm_utils._sanitize_text_for_tts(text)
+        self.assertIn("'hello'", result)
+        self.assertIn('"goodbye"', result)
+        self.assertNotIn("\u2018", result)
+        self.assertNotIn("\u2019", result)
+        self.assertNotIn("\u201c", result)
+        self.assertNotIn("\u201d", result)
+
+    def test_problematic_eisenhower_line(self):
+        """Regression: the Eisenhower scene 8 narration that caused TTS artifacts."""
+        text = "He graduates in 1915—in the legendary class 'the stars fell on'—just as the Great War erupts across Europe."
+        result = llm_utils._sanitize_text_for_tts(text)
+        self.assertIn(" - ", result)
+        self.assertNotIn("\u2014", result)
+        self.assertIn("the stars fell on", result)
+
+    def test_empty_or_none_returns_safe(self):
+        self.assertEqual(llm_utils._sanitize_text_for_tts(""), "")
+        self.assertEqual(llm_utils._sanitize_text_for_tts(None), "")
 
 
 if __name__ == "__main__":

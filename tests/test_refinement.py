@@ -394,6 +394,15 @@ class TestRefineScenes(unittest.TestCase):
             self.assertEqual(refined[0]["transition_to_next"], "crossfade")
             self.assertEqual(refined[0]["transition_speed"], "medium")
             self.assertIsNone(refined[1]["transition_to_next"])
+            # Verify Pass 4 uses balanced continuity guidance (allows within-chapter changes)
+            calls = mock_generate_text.call_args_list
+            music_call = next((c for c in calls if "film composer" in str(c).lower()), None)
+            self.assertIsNotNone(music_call, "Pass 4 music call should be present")
+            msgs = music_call[1].get("messages", [])
+            user_msg = next((m for m in msgs if m.get("role") == "user"), {})
+            user_content = user_msg.get("content", "")
+            self.assertIn("BALANCED APPROACH", user_content, "Music prompt should use balanced continuity guidance")
+            self.assertIn("within a chapter", user_content, "Music prompt should allow within-chapter changes")
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 

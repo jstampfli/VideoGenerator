@@ -533,10 +533,15 @@ def generate_image_for_scene(scene: dict, prev_scene: dict | None, global_block_
             raise
 
 
-def generate_audio_for_scene(scene: dict) -> Path:
+def generate_audio_for_scene(
+    scene: dict,
+    previous_narration: str | None = None,
+    next_narration: str | None = None,
+) -> Path:
     """
     Generate TTS audio for the given scene's narration via llm_utils.generate_speech.
     If config.save_assets is True, caches to generated_audio/. Otherwise uses temp directory.
+    previous_narration and next_narration improve continuity for ElevenLabs TTS.
     """
     if config.save_assets:
         AUDIO_DIR.mkdir(parents=True, exist_ok=True)
@@ -562,6 +567,8 @@ def generate_audio_for_scene(scene: dict) -> Path:
         emotion=emotion,
         narration_instructions=narration_instructions,
         use_female_voice=USE_FEMALE_VOICE,
+        previous_text=previous_narration,
+        next_text=next_narration,
     )
 
     if config.save_assets:
@@ -861,14 +868,22 @@ def generate_image_for_scene_with_retry(scene: dict, prev_scene: dict | None, gl
             attempt += 1
 
 
-def generate_audio_for_scene_with_retry(scene: dict) -> Path:
+def generate_audio_for_scene_with_retry(
+    scene: dict,
+    previous_narration: str | None = None,
+    next_narration: str | None = None,
+) -> Path:
     """Generate audio with retry logic for network/API failures."""
     attempt = 1
     max_attempts = 3
     base_delay = 2.0
     while True:
         try:
-            return generate_audio_for_scene(scene)
+            return generate_audio_for_scene(
+                scene,
+                previous_narration=previous_narration,
+                next_narration=next_narration,
+            )
         except Exception as e:
             if attempt >= max_attempts:
                 print(f"[RETRY][audio] Scene {scene.get('id')}: Failed after {attempt} attempts: {e}")
@@ -1017,7 +1032,13 @@ def _build_video_impl(scenes_path: str, out_video_path: str | None = None, scene
 
     def audio_job(idx: int):
         scene = scenes[idx]
-        audio_path = generate_audio_for_scene_with_retry(scene)
+        prev_narration = scenes[idx - 1]["narration"] if idx > 0 else None
+        next_narration = scenes[idx + 1]["narration"] if idx < num_scenes - 1 else None
+        audio_path = generate_audio_for_scene_with_retry(
+            scene,
+            previous_narration=prev_narration,
+            next_narration=next_narration,
+        )
         audio_clip = load_audio_with_accurate_duration(audio_path)
         print(f"[AUDIO] Scene {scene['id']}: duration={audio_clip.duration:.3f}s")
         return idx, audio_clip
@@ -1473,6 +1494,7 @@ def build_biopic_music_track(metadata: dict | None, scene_audio_clips: list, tot
             BIOPIC_MUSIC_DIR,
             BIOPIC_MUSIC_VOLUME_DB,
             BIOPIC_MUSIC_CROSSFADE_SEC,
+            BIOPIC_MUSIC_CROSSFADE_OFFSET_SEC,
             BIOPIC_MUSIC_DEFAULT_MOODS,
             volume_label_to_db,
         )
@@ -1485,6 +1507,7 @@ def build_biopic_music_track(metadata: dict | None, scene_audio_clips: list, tot
         return None
 
     crossfade = BIOPIC_MUSIC_CROSSFADE_SEC
+    crossfade_offset = BIOPIC_MUSIC_CROSSFADE_OFFSET_SEC
     num_clips = len(scene_audio_clips)
     outline = (metadata or {}).get("outline") or {}
     chapters = outline.get("chapters") or (metadata or {}).get("chapters") or []
@@ -1562,11 +1585,14 @@ def build_biopic_music_track(metadata: dict | None, scene_audio_clips: list, tot
                 block_dur = prev_cum - block_start_cum
                 if block_dur > 0:
                     volume_blocks.append((block_dur, prev_vol))
-            # Segment should end when next scene starts in video; add crossfade so new song starts at boundary
+            # Segment ends when next scene starts. Add crossfade to the segment that STARTS (not ends)
+            # so the crossfade happens during the previous scene—new song fades in before the cut.
             t_start = scene_starts[start_i] if start_i < len(scene_starts) else 0.0
             t_end = scene_starts[i] if i < len(scene_starts) else total_video_dur
             is_last_segment = i >= len(scenes)
-            total_dur = t_end - t_start + (crossfade if not is_last_segment else 0.0)
+            # Add crossfade to segments that start at a boundary (start_i > 0), not to the first segment.
+            # This keeps total duration correct after acrossfade and ensures crossfade happens during the previous scene.
+            total_dur = t_end - t_start + (crossfade if start_i > 0 else 0.0)
             # Scale volume_blocks to match target segment duration
             block_sum = sum(d for d, _ in volume_blocks)
             if block_sum > 0 and total_dur > 0 and abs(block_sum - total_dur) > 0.001:
@@ -1618,17 +1644,17 @@ def build_biopic_music_track(metadata: dict | None, scene_audio_clips: list, tot
         if len(segment_clips) == 1:
             music = segment_clips[0]
         else:
-            fps = getattr(segment_clips[0], "fps", 44100) or 44100
-
-            def _make_silence(t):
-                if np.isscalar(t):
-                    return np.array([0.0, 0.0], dtype=np.float32)
-                return np.zeros((len(t), 2), dtype=np.float32)
-
-            for i in range(1, len(segment_clips)):
-                silence = AudioClip(_make_silence, duration=crossfade, fps=fps)
-                segment_clips[i] = concatenate_audioclips([silence, segment_clips[i]])
-
+            # Prepend a small offset to new segments so the crossfade shifts forward—new song fades in
+            # more during the next scene, less disruptive at the end of the previous.
+            if crossfade_offset > 0:
+                fps = getattr(segment_clips[0], "fps", 44100) or 44100
+                def _make_silence(t):
+                    if np.isscalar(t):
+                        return np.array([0.0, 0.0], dtype=np.float32)
+                    return np.zeros((len(t), 2), dtype=np.float32)
+                for i in range(1, len(segment_clips)):
+                    silence = AudioClip(_make_silence, duration=crossfade_offset, fps=fps)
+                    segment_clips[i] = concatenate_audioclips([silence, segment_clips[i]])
             temp_dir = tempfile.mkdtemp(prefix="biopic_music_")
             try:
                 wav_paths = []
@@ -1720,12 +1746,15 @@ def build_biopic_music_track(metadata: dict | None, scene_audio_clips: list, tot
                 chapter_durations[ch_num] = max(chapter_durations[ch_num] - crossfade_overlap, 0.1)
         sorted_chapters = sorted(chapter_durations.keys())
         last_ch_num = sorted_chapters[-1] if sorted_chapters else None
-        for ch_num in sorted_chapters:
+        for idx, ch_num in enumerate(sorted_chapters):
             chapter_duration = chapter_durations[ch_num]
             if chapter_duration <= 0:
                 continue
             if ch_num == last_ch_num and tail_sec > 0:
                 chapter_duration += tail_sec
+            # Add crossfade to chapters that start (idx > 0) so crossfade happens during previous chapter
+            if idx > 0:
+                chapter_duration += crossfade
             mood = chapter_to_mood.get(ch_num) or outline_mood or "relaxing"
             mood_dir = BIOPIC_MUSIC_DIR / mood
             if not mood_dir.exists():
@@ -1764,6 +1793,9 @@ def build_biopic_music_track(metadata: dict | None, scene_audio_clips: list, tot
                 chapter_duration = max(chapter_duration, 0.1)
             if ch_idx == len(chapter_list) - 1 and tail_sec > 0:
                 chapter_duration += tail_sec
+            # Add crossfade to chapters that start (ch_idx > 0) so crossfade happens during previous chapter
+            if ch_idx > 0:
+                chapter_duration += crossfade
             mood = (ch.get("music_mood") or "relaxing").strip().lower()
             mood_dir = BIOPIC_MUSIC_DIR / mood
             if not mood_dir.exists():
@@ -1781,18 +1813,17 @@ def build_biopic_music_track(metadata: dict | None, scene_audio_clips: list, tot
     if not segment_clips:
         return None
 
-    if len(segment_clips) > 1 and crossfade > 0:
+    # Prepend crossfade_offset to new segments so the crossfade shifts forward—new song fades in
+    # more during the next scene, less disruptive at the end of the previous.
+    if len(segment_clips) > 1 and crossfade_offset > 0:
         fps = getattr(segment_clips[0], "fps", 44100) or 44100
-
-        def _make_silence(t):
+        def _make_silence_ch(t):
             if np.isscalar(t):
                 return np.array([0.0, 0.0], dtype=np.float32)
             return np.zeros((len(t), 2), dtype=np.float32)
-
         for i in range(1, len(segment_clips)):
-            silence = AudioClip(_make_silence, duration=crossfade, fps=fps)
+            silence = AudioClip(_make_silence_ch, duration=crossfade_offset, fps=fps)
             segment_clips[i] = concatenate_audioclips([silence, segment_clips[i]])
-
     if len(segment_clips) == 1:
         music = segment_clips[0]
     else:

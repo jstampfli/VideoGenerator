@@ -199,7 +199,8 @@ def get_trailer_narration_style() -> str:
 - Simple, clear, punchy language
 - Create curiosity gaps - tease information but don't fully reveal
 - Make viewers NEED to watch the full documentary
-- QUOTES (CRITICAL FOR TTS): Use quotes ONLY around proper nouns you want to emphasize (e.g. titles of works, key terms). Otherwise do NOT use any quotes—they will mess up the text-to-speech."""
+- QUOTES (CRITICAL FOR TTS): Use quotes ONLY around proper nouns you want to emphasize (e.g. titles of works, key terms). Otherwise do NOT use any quotes—they will mess up the text-to-speech.
+- TTS PUNCTUATION: Avoid em dashes (—) in narration; use " - " or commas instead."""
 
 
 def get_trailer_structure_prompt() -> str:
@@ -605,7 +606,7 @@ Generate JSON (choose thumbnail_why_type FIRST; then write title and thumbnail_d
   "title": "WHY SCENE TITLE (60-80 chars) - MUST match thumbnail_why_type. Create one curiosity gap that synergizes with the thumbnail. counterintuitive: frame the twist/unexpected (e.g. Why [Person] Did the UNTHINKABLE, The Decision That Defied Everyone); secret_mystery: frame the hidden truth (e.g. The Secret [Person] Kept Hidden, What [Person] Never Told Anyone); known_but_misunderstood: frame the real story (e.g. What Everyone Gets WRONG About [Person], The Real Story of [Person]'s Greatest Moment). Use power words: UNTOLD, REVEALED, SECRET, HIDDEN, REAL, WRONG, UNTHINKABLE. Title and thumbnail together = one package for CTR.",
   "tag_line": "Short, succinct, catchy tagline (5-10 words) that captures who they are. Examples: 'the man who changed the world', 'the codebreaker who saved millions'. Memorable and accurate.",
   "thumbnail_description": "Describe the ONE PEAK MOMENT. MUST match thumbnail_why_type and synergize with the title—same curiosity, same WHY. ONE subject only. Clean solid dark background (no figures, no letters, no half-visible elements). Subject lit so they stand out; natural contrast, not extreme or weird colors. Rule of thirds. Bold text will be placed in lower third. REPRESENT FULL VIDEO, ACCURATE.",
-  "thumbnail_text": "Short phrase (2-5 words) for thumbnail overlay. MUST match thumbnail_why_type: counterintuitive -> NOT WHAT YOU THINK, DEFIED EXPECTATIONS; secret_mystery -> THE SECRET, HIDDEN TRUTH; known_but_misunderstood -> EVERYONE GETS THIS WRONG, THE REAL STORY. Omit for default.",
+  "thumbnail_text": "Short phrase (2-5 words) that TEASES THE TWIST and makes viewers want to watch. Must help readers understand what the twist is and why they should care—create curiosity, not just name a topic. Good: Eisenhower D-Day→Farewell -> THE GENERAL WHO WARNED (teases: why would a victor warn?); Einstein 1905 -> THE SECRET OF 1905; Darwin -> EVOLUTION'S REAL STORY. Bad: MILITARY-INDUSTRIAL WARNING (dry label, no curiosity), THE SECRET (generic). The text should hint at the payoff and make viewers think 'I need to understand that.'",
   "global_block": "Visual style guide (300-400 words): semi-realistic digital painting style, color palette, dramatic lighting, how {person_of_interest} should appear consistently across {total_scenes} scenes."
 }}"""
 
@@ -639,13 +640,13 @@ Generate EXACTLY 3 different title+thumbnail pairs. The user will pick the best 
 FOR EACH PAIR - TITLE AND THUMBNAIL MUST BE SYMBIOTIC:
 1. Choose ONE WHY type for that pair (counterintuitive, secret_mystery, or known_but_misunderstood). Use a different WHY type for at least 2 of the 3 options to give variety.
 2. TITLE: Frame the curiosity using that WHY type. Power words: UNTOLD, REVEALED, SECRET, HIDDEN, REAL, WRONG, UNTHINKABLE.
-3. THUMBNAIL_TEXT: Must DIRECTLY reinforce the title. This is the short phrase that appears on the thumbnail. If title says "The Secret X Kept", thumbnail_text = "THE SECRET". If title says "What Everyone Gets WRONG", thumbnail_text = "EVERYONE GETS THIS WRONG" or "THE REAL STORY". If title says "Why X Did the UNTHINKABLE", thumbnail_text = "NOT WHAT YOU THINK" or "DEFIED EXPECTATIONS". Title and thumbnail_text are ONE symbiotic pair—they must say the same thing in different words.
+3. THUMBNAIL_TEXT: Short phrase (2-5 words) that TEASES THE TWIST and makes viewers want to watch. Help readers understand what the twist is and why they should care—create curiosity, not dry topic labels. Good: Eisenhower D-Day→Farewell -> THE GENERAL WHO WARNED (teases: why would a victor warn?); Einstein -> THE SECRET OF 1905; Darwin -> EVOLUTION'S REAL STORY. Bad: MILITARY-INDUSTRIAL WARNING (dry label), THE SECRET (generic). Text should hint at the payoff and make viewers think "I need to understand that."
 4. THUMBNAIL_DESCRIPTION: Describe the ONE peak moment. Same WHY type. Clean solid dark background. RULE OF THIRDS: Subject on intersection of thirds (left or right third), text in lower third band. REPRESENT FULL VIDEO, ACCURATE.
 
-THE THREE WHY TYPES (use different ones across the 3 options):
-- counterintuitive: Defies expectations. Title: "Why [Person] Did the UNTHINKABLE", "The Decision Nobody Saw Coming". thumbnail_text: "NOT WHAT YOU THINK", "DEFIED EXPECTATIONS".
-- secret_mystery: Hidden truth. Title: "The Secret [Person] Took to the Grave", "What [Person] Never Wanted You to Know". thumbnail_text: "THE SECRET", "HIDDEN TRUTH".
-- known_but_misunderstood: Familiar story most get wrong. Title: "What Everyone Gets WRONG About [Person]", "The Real [Person] (Not the Myth)". thumbnail_text: "EVERYONE GETS THIS WRONG", "THE REAL STORY".
+THE THREE WHY TYPES (use different ones across the 3 options; thumbnail_text must TEASE THE TWIST for each):
+- counterintuitive: Defies expectations. thumbnail_text: phrase that hints at the twist and creates curiosity (e.g. THE GENERAL WHO WARNED for Eisenhower—not "MILITARY-INDUSTRIAL WARNING").
+- secret_mystery: Hidden truth. thumbnail_text: phrase that teases what's hidden (e.g. THE SECRET OF 1905 for Einstein—not "THE SECRET").
+- known_but_misunderstood: Familiar story most get wrong. thumbnail_text: phrase that teases the real story (e.g. EVOLUTION'S REAL STORY for Darwin—not "THE REAL STORY").
 
 RULE OF THIRDS (CRITICAL for thumbnail_description): Describe composition using the 9-part grid. Subject must be on a THIRD (left third line or right third line, or at an intersection). NOT centered. Text goes in the LOWER third band only. The composition must follow this grid.
 
@@ -654,7 +655,7 @@ Generate JSON with exactly 3 thumbnail_options (each has title, thumbnail_descri
   "tag_line": "Short tagline (5-10 words) for this documentary.",
   "global_block": "Visual style guide (300-400 words): semi-realistic digital painting style, color palette, dramatic lighting, how {person_of_interest} should appear consistently across {total_scenes} scenes.",
   "thumbnail_options": [
-    {{"title": "Option 1 title (60-80 chars)", "thumbnail_description": "Peak moment. Subject on left or right third. Text in lower third. Clean background.", "thumbnail_why_type": "counterintuitive|secret_mystery|known_but_misunderstood", "thumbnail_text": "2-5 words that DIRECTLY reinforce the title"}},
+    {{"title": "Option 1 title (60-80 chars)", "thumbnail_description": "Peak moment. Subject on left or right third. Text in lower third. Clean background.", "thumbnail_why_type": "counterintuitive|secret_mystery|known_but_misunderstood", "thumbnail_text": "2-5 words that TEASE THE TWIST—make viewers curious, hint at payoff (not dry labels)"}},
     {{"title": "Option 2 title (different angle)", "thumbnail_description": "...", "thumbnail_why_type": "...", "thumbnail_text": "..."}},
     {{"title": "Option 3 title (different angle)", "thumbnail_description": "...", "thumbnail_why_type": "...", "thumbnail_text": "..."}}
   ]
@@ -690,13 +691,13 @@ Generate EXACTLY 3 different title+thumbnail pairs. The user will pick the best 
 FOR EACH PAIR - TITLE AND THUMBNAIL MUST BE SYMBIOTIC:
 1. Choose ONE WHY type for that pair (counterintuitive, secret_mystery, or known_but_misunderstood). Use a different WHY type for at least 2 of the 3 options to give variety.
 2. TITLE: Frame the curiosity using that WHY type. Power words: UNTOLD, REVEALED, SECRET, HIDDEN, REAL, WRONG, UNTHINKABLE.
-3. THUMBNAIL_TEXT: Must DIRECTLY reinforce the title. This is the short phrase that appears on the thumbnail. If title says "The Secret X Kept", thumbnail_text = "THE SECRET". If title says "What Everyone Gets WRONG", thumbnail_text = "EVERYONE GETS THIS WRONG" or "THE REAL STORY". If title says "Why X Did the UNTHINKABLE", thumbnail_text = "NOT WHAT YOU THINK" or "DEFIED EXPECTATIONS". Title and thumbnail_text are ONE symbiotic pair—they must say the same thing in different words.
+3. THUMBNAIL_TEXT: Short phrase (2-5 words) that TEASES THE TWIST and makes viewers want to watch. Help readers understand what the twist is and why they should care—create curiosity, not dry topic labels. Good: Eisenhower D-Day→Farewell -> THE GENERAL WHO WARNED (teases: why would a victor warn?); Einstein -> THE SECRET OF 1905; Darwin -> EVOLUTION'S REAL STORY. Bad: MILITARY-INDUSTRIAL WARNING (dry label), THE SECRET (generic). Text should hint at the payoff and make viewers think "I need to understand that."
 4. THUMBNAIL_DESCRIPTION: Describe the ONE peak moment. Same WHY type. Clean solid dark background. RULE OF THIRDS: Subject on intersection of thirds (left or right third), text in lower third band. REPRESENT FULL VIDEO, ACCURATE.
 
-THE THREE WHY TYPES (use different ones across the 3 options):
-- counterintuitive: Defies expectations. Title: "Why [Person] Did the UNTHINKABLE", "The Decision Nobody Saw Coming". thumbnail_text: "NOT WHAT YOU THINK", "DEFIED EXPECTATIONS".
-- secret_mystery: Hidden truth. Title: "The Secret [Person] Took to the Grave", "What [Person] Never Wanted You to Know". thumbnail_text: "THE SECRET", "HIDDEN TRUTH".
-- known_but_misunderstood: Familiar story most get wrong. Title: "What Everyone Gets WRONG About [Person]", "The Real [Person] (Not the Myth)". thumbnail_text: "EVERYONE GETS THIS WRONG", "THE REAL STORY".
+THE THREE WHY TYPES (use different ones across the 3 options; thumbnail_text must TEASE THE TWIST for each):
+- counterintuitive: Defies expectations. thumbnail_text: phrase that hints at the twist and creates curiosity (e.g. THE GENERAL WHO WARNED for Eisenhower—not "MILITARY-INDUSTRIAL WARNING").
+- secret_mystery: Hidden truth. thumbnail_text: phrase that teases what's hidden (e.g. THE SECRET OF 1905 for Einstein—not "THE SECRET").
+- known_but_misunderstood: Familiar story most get wrong. thumbnail_text: phrase that teases the real story (e.g. EVOLUTION'S REAL STORY for Darwin—not "THE REAL STORY").
 
 RULE OF THIRDS (CRITICAL for thumbnail_description): Describe composition using the 9-part grid. Subject must be on a THIRD (left third line or right third line, or at an intersection). NOT centered. Text goes in the LOWER third band only. The composition must follow this grid.
 
@@ -704,7 +705,7 @@ Generate JSON with exactly 3 thumbnail_options (each has title, thumbnail_descri
 {{
   "tag_line": "Short tagline (5-10 words) for this documentary.",
   "thumbnail_options": [
-    {{"title": "Option 1 title (60-80 chars)", "thumbnail_description": "Peak moment. Subject on left or right third. Text in lower third. Clean background.", "thumbnail_why_type": "counterintuitive|secret_mystery|known_but_misunderstood", "thumbnail_text": "2-5 words that DIRECTLY reinforce the title"}},
+    {{"title": "Option 1 title (60-80 chars)", "thumbnail_description": "Peak moment. Subject on left or right third. Text in lower third. Clean background.", "thumbnail_why_type": "counterintuitive|secret_mystery|known_but_misunderstood", "thumbnail_text": "2-5 words that TEASE THE TWIST—make viewers curious, hint at payoff (not dry labels)"}},
     {{"title": "Option 2 title (different angle)", "thumbnail_description": "...", "thumbnail_why_type": "...", "thumbnail_text": "..."}},
     {{"title": "Option 3 title (different angle)", "thumbnail_description": "...", "thumbnail_why_type": "...", "thumbnail_text": "..."}}
   ]
@@ -864,7 +865,7 @@ Provide JSON (choose narrative_structure and thumbnail_why_type FIRST; then shor
   "tags": "10-15 SEO tags comma-separated",
   "music_mood": "Exactly one of: {moods_str}. Pick the music mood that best fits this high-energy trailer.",
   "thumbnail_prompt": "ONE subject, ONE peak moment. MUST match thumbnail_why_type and synergize with short_title. Clean solid dark background—no figures, no letters, no half-visible elements. Subject lit; natural contrast (not extreme). Rule of thirds. Bold text in lower third only. ACCURATE to short's story. Mobile-friendly.",
-  "thumbnail_text": "Short phrase (2-5 words) for thumbnail. MUST match thumbnail_why_type: counterintuitive -> NOT WHAT YOU THINK; secret_mystery -> THE SECRET; known_but_misunderstood -> EVERYONE GETS THIS WRONG. Omit for default.",
+  "thumbnail_text": "Short phrase (2-5 words) that TEASES THE TWIST and makes viewers want to watch. Help readers understand what the twist is and why they should care—create curiosity, not dry labels. Good: D-Day short -> THE GENERAL WHO WARNED or D-DAY'S SECRET; Einstein 1905 -> THE SECRET OF 1905. Bad: MILITARY-INDUSTRIAL WARNING (dry), THE SECRET (generic). Text should hint at the payoff.",
   "video_question": "The central question or curiosity this short answers. For question_first, state it in scene 1; for other structures, it can be implied or revealed later. Must be specific to this short's chosen topic.",
   "hook_expansion": "How to execute the chosen narrative_structure across 4 scenes. Scene-by-scene flow specific to that structure—not a generic formula. Describe what each scene does.",
   "key_facts": ["3-5 specific facts to include across the 4 scenes"]

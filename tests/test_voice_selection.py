@@ -88,6 +88,7 @@ class TestVoiceSelection(unittest.TestCase):
 
     @patch.dict("os.environ", {"TTS_PROVIDER": "openai", "OPENAI_API_KEY": "sk-test"}, clear=False)
     @patch('build_video.TTS_PROVIDER', 'openai')
+    @patch('llm_utils.TTS_OPENAI_STREAM', False)
     @patch('openai.OpenAI')
     @patch('pathlib.Path.exists', return_value=False)
     def test_openai_voice_selection(self, mock_exists, mock_openai_class):
@@ -96,12 +97,13 @@ class TestVoiceSelection(unittest.TestCase):
         mock_client = MagicMock()
         mock_openai_class.return_value = mock_client
         mock_response = MagicMock()
-        mock_client.audio.speech.with_streaming_response.create.return_value.__enter__.return_value = mock_response
+        mock_response.content = b"audio_data"
+        mock_client.audio.speech.create.return_value = mock_response
 
         build_video.generate_audio_for_scene(self.test_scene)
 
-        mock_client.audio.speech.with_streaming_response.create.assert_called_once()
-        call_args = mock_client.audio.speech.with_streaming_response.create.call_args
+        mock_client.audio.speech.create.assert_called_once()
+        call_args = mock_client.audio.speech.create.call_args
         self.assertEqual(call_args.kwargs['voice'], llm_utils.OPENAI_TTS_VOICE)
         self.assertEqual(call_args.kwargs['model'], llm_utils.OPENAI_TTS_MODEL)
     

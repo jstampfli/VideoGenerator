@@ -63,6 +63,29 @@ OPENAI_TTS_STYLE_PROMPT = (
     "inflection, dramatic emphasis, or noticeable changes in speaking speed. "
 )
 
+# TTS text preprocessing: normalize chars that cause cutouts/artifacts (default on)
+TTS_PREPROCESS_TEXT = os.getenv("TTS_PREPROCESS_TEXT", "1").lower() in ("1", "true", "yes")
+TTS_OPENAI_STREAM = os.getenv("TTS_OPENAI_STREAM", "0").lower() in ("1", "true", "yes")
+
+
+def _sanitize_text_for_tts(text: str) -> str:
+    """
+    Normalize problematic characters before TTS to reduce cutouts and artifacts.
+    Em dashes and curly quotes can cause cutouts or mispronunciation.
+    """
+    if not text or not isinstance(text, str):
+        return text or ""
+    s = text
+    # Em dash (U+2014) and en dash (U+2013) -> hyphen with spaces
+    s = s.replace("\u2014", " - ")
+    s = s.replace("\u2013", " - ")
+    # Curly/smart quotes -> straight quotes
+    s = s.replace("\u2018", "'")  # left single
+    s = s.replace("\u2019", "'")  # right single
+    s = s.replace("\u201c", '"')  # left double
+    s = s.replace("\u201d", '"')  # right double
+    return s.strip()
+
 
 def get_text_model_display() -> str:
     """Return a short string for logging: provider / model (e.g. 'openai / gpt-5.2')."""
@@ -554,6 +577,8 @@ def generate_speech(
     narration_instructions: str | None = None,
     use_female_voice: bool = False,
     provider: str | None = None,
+    previous_text: str | None = None,
+    next_text: str | None = None,
 ) -> Path:
     """
     Generate speech from text using OpenAI, ElevenLabs, or Google TTS.
@@ -565,6 +590,8 @@ def generate_speech(
         narration_instructions: Optional instructions (e.g. biopic narration style) for Gemini/OpenAI.
         use_female_voice: If True, use female voice for Gemini.
         provider: "openai", "elevenlabs", or "google"; if None, use env TTS_PROVIDER.
+        previous_text: Optional text before this segment (ElevenLabs only, improves continuity).
+        next_text: Optional text after this segment (ElevenLabs only, improves continuity).
 
     Returns:
         Path to the generated audio file.
@@ -579,6 +606,13 @@ def generate_speech(
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
+    if TTS_PREPROCESS_TEXT:
+        text = _sanitize_text_for_tts(text)
+        if previous_text is not None:
+            previous_text = _sanitize_text_for_tts(previous_text)
+        if next_text is not None:
+            next_text = _sanitize_text_for_tts(next_text)
+
     last_error = None
     for attempt in range(1, _LLM_MAX_RETRIES + 1):
         try:
@@ -589,7 +623,12 @@ def generate_speech(
                     narration_instructions=narration_instructions,
                 )
             if prov == "elevenlabs":
-                return _elevenlabs_tts(text=text, output_path=output_path)
+                return _elevenlabs_tts(
+                    text=text,
+                    output_path=output_path,
+                    previous_text=previous_text,
+                    next_text=next_text,
+                )
             return _google_tts(
                 text=text,
                 output_path=output_path,
@@ -622,37 +661,66 @@ def _openai_tts(
         raise ValueError("OPENAI_API_KEY is not set. Set it in .env for OpenAI TTS.")
     client = OpenAI()
     instructions = narration_instructions or OPENAI_TTS_STYLE_PROMPT
-    with client.audio.speech.with_streaming_response.create(
-        model=OPENAI_TTS_MODEL,
-        voice=OPENAI_TTS_VOICE,
-        input=text,
-        instructions=instructions,
-    ) as response:
-        response.stream_to_file(str(output_path))
+    if TTS_OPENAI_STREAM:
+        with client.audio.speech.with_streaming_response.create(
+            model=OPENAI_TTS_MODEL,
+            voice=OPENAI_TTS_VOICE,
+            input=text,
+            instructions=instructions,
+        ) as response:
+            response.stream_to_file(str(output_path))
+    else:
+        response = client.audio.speech.create(
+            model=OPENAI_TTS_MODEL,
+            voice=OPENAI_TTS_VOICE,
+            input=text,
+            instructions=instructions,
+        )
+        output_path.write_bytes(response.content)
     return output_path
 
 
-def _elevenlabs_tts(text: str, output_path: Path) -> Path:
+def _elevenlabs_tts(
+    text: str,
+    output_path: Path,
+    previous_text: str | None = None,
+    next_text: str | None = None,
+) -> Path:
     api_key = os.getenv("ELEVENLABS_API_KEY")
     if not api_key:
         raise ValueError("ELEVENLABS_API_KEY is not set. Set it in .env for ElevenLabs TTS.")
     from elevenlabs import ElevenLabs
     client = ElevenLabs(api_key=api_key)
-    audio_generator = client.text_to_speech.convert(
-        voice_id=ELEVENLABS_VOICE_ID,
-        text=text,
-        model_id=ELEVENLABS_MODEL,
-        voice_settings={
+    kwargs = {
+        "voice_id": ELEVENLABS_VOICE_ID,
+        "text": text,
+        "model_id": ELEVENLABS_MODEL,
+        "output_format": "mp3_44100_128",
+        "optimize_streaming_latency": 0,
+        "apply_text_normalization": "on",
+        "language_code": "en",
+        "voice_settings": {
             "stability": 0.75,
             "similarity_boost": 0.75,
             "style": 0.5,
             "use_speaker_boost": False,
             "speed": 1.0,
         },
-    )
-    with open(output_path, "wb") as f:
-        for chunk in audio_generator:
-            f.write(chunk)
+    }
+    if previous_text is not None:
+        kwargs["previous_text"] = previous_text
+    if next_text is not None:
+        kwargs["next_text"] = next_text
+    result = client.text_to_speech.convert(**kwargs)
+    # SDK may return bytes or an iterator; handle both for compatibility
+    if isinstance(result, bytes):
+        output_path.write_bytes(result)
+    else:
+        chunks = list(result)
+        if chunks and isinstance(chunks[0], bytes):
+            output_path.write_bytes(b"".join(chunks))
+        else:
+            output_path.write_bytes(bytes(chunks))
     return output_path
 
 

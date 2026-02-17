@@ -242,7 +242,8 @@ THREE PRINCIPLES (every scene must satisfy all three):
   * Camera directions like "Close-up of", "Wide shot:", "Pan to"
   * Any production/editing terminology
   Write ONLY words that should be spoken by a narrator's voice.
-- QUOTES (CRITICAL FOR TTS): Use quotes ONLY around proper nouns you want to emphasize (e.g. titles of works, key terms). Otherwise do NOT use any quotes—they will mess up the text-to-speech. No quoted dialogue, no quoted phrases for emphasis, no scare quotes."""
+- QUOTES (CRITICAL FOR TTS): Use quotes ONLY around proper nouns you want to emphasize (e.g. titles of works, key terms). Otherwise do NOT use any quotes—they will mess up the text-to-speech. No quoted dialogue, no quoted phrases for emphasis, no scare quotes.
+- TTS PUNCTUATION: Avoid em dashes (—) in narration; use " - " or commas instead. Em dashes can cause audio cutouts."""
     
     return base_style
 
@@ -1521,7 +1522,7 @@ YOUR TASK: Review these scenes and improve them. Look for:
 11. WEIRD OR UNNATURAL SENTENCES - phrases that sound odd when spoken, overly flowery language, vague statements
 12. REPETITIVE LANGUAGE - same words or phrases used too frequently
 13. CLARITY ISSUES - sentences that are confusing or hard to understand when spoken aloud
-14. NARRATION STYLE VIOLATIONS - film directions ("Cut to:", "Smash cut—"), camera directions ("Close-up of", "Wide shot"), production terminology, or unnecessary quotes (use quotes ONLY for proper nouns to emphasize—e.g. titles of works; otherwise no quotes, they mess up TTS)
+14. NARRATION STYLE VIOLATIONS - film directions ("Cut to:", "Smash cut"), camera directions ("Close-up of", "Wide shot"), production terminology, unnecessary quotes (use quotes ONLY for proper nouns; otherwise no quotes, they mess up TTS), or em dashes (use " - " or commas instead)
 15. MISSING CONNECTIONS - scenes that don't reference what came before when they should
 16. PACING ISSUES - scenes that feel rushed or too slow for the story beat
 17. FACTUAL INCONSISTENCIES - any contradictions or inaccuracies
@@ -1695,11 +1696,15 @@ Each scene object must include: id, title, narration, image_prompt, emotion, yea
                             "scene_type": s.get("scene_type", ""),
                         })
                     songs_list = "\n".join(f"  - {s}" for s in all_songs)
-                    continuity_guidance = """SONG CONTINUITY (STRICT PREFERENCE):
-- DEFAULT: Keep the SAME song as the previous scene. Do NOT change unless there is a strong reason.
-- Change songs ONLY when: (1) a new chapter begins (chapter_num changes), (2) a major mood shift (e.g., tense → triumphant, contemplative → urgent), or (3) scene_type changes dramatically.
-- Do NOT change songs for minor emotional variations—use volume (low/medium/loud) to reflect subtle shifts instead.
-- Prefer fewer song changes overall; continuity is more important than matching every nuance."""
+                    continuity_guidance = """SONG CONTINUITY (BALANCED APPROACH):
+- SONG LIMIT: Use at most 2 different songs per chapter. Within a chapter, prefer one song; change only once if a major story beat (e.g., pivot from setup to climax) truly warrants it.
+- DEFAULT: Keep the same song across consecutive scenes when the emotional tone is similar.
+- Change songs when: (1) a new chapter begins (chapter_num changes), (2) a major emotional pivot within a chapter (e.g., calm setup → urgent climax). Never exceed 2 songs per chapter.
+- VOLUME must match the script narration and plot:
+  - low: Setup, backstory, reflection, grave/somber moments, quiet tension, aftermath. Use when narration is contemplative or explanatory.
+  - medium: Main narrative flow, important revelations, steady build. Use for most scenes—the default when stakes are present but not peak.
+  - loud: Climactic moments, breakthroughs, confrontations, triumphs, peak tension. Use when the narration or plot hits a high point—the moment the scene has been building toward.
+- Match volume to the emotional arc of each scene's narration: build volume as tension or stakes rise; drop to low for reflective or transitional beats. Volume should feel intentional, not random."""
                     music_prompt = f"""You are a film composer selecting background music for a documentary. For each scene, pick exactly one song from the available list and a volume level (low, medium, or loud).
 
 {continuity_guidance}
@@ -1711,7 +1716,7 @@ SCENES:
 {json.dumps(scene_summaries, indent=2, ensure_ascii=False)}
 
 Return a JSON array with one object per scene: {{"id": <scene_id>, "music_song": "<exact path from list>", "music_volume": "low"|"medium"|"loud"}}."""
-                    system_content = "You are a film composer selecting background music for documentaries. STRONGLY prefer keeping the same song across consecutive scenes; change only for chapter boundaries or major mood shifts. Use volume (low/medium/loud) for subtle mood variations. Pick ONLY from the provided song list."
+                    system_content = "You are a film composer selecting background music for documentaries. Use at most 2 songs per chapter. Match volume to each scene's narration and plot—low for setup/reflection, medium for main flow, loud for climactic peaks. Pick ONLY from the provided song list."
                     music_schema = build_music_selection_schema(all_songs)
                     content = llm_utils.generate_text(
                         messages=[
