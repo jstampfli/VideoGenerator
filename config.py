@@ -10,7 +10,7 @@ import os
 # Default to openai when unset so existing behavior is unchanged
 TEXT_PROVIDER = os.getenv("TEXT_PROVIDER", "openai").lower()
 TEXT_MODEL_OPENAI = os.getenv("TEXT_MODEL_OPENAI", "gpt-5.2")
-TEXT_MODEL_GOOGLE = os.getenv("TEXT_MODEL_GOOGLE", "gemini-2.0-flash")
+TEXT_MODEL_GOOGLE = os.getenv("TEXT_MODEL_GOOGLE", "gemini-3.1-pro-preview")
 IMAGE_PROVIDER = os.getenv("IMAGE_PROVIDER", "openai").lower()
 IMAGE_MODEL_OPENAI = os.getenv("IMAGE_MODEL_OPENAI", "gpt-image-1.5")
 IMAGE_MODEL_GOOGLE = os.getenv("IMAGE_MODEL_GOOGLE", "gemini-2.0-flash-exp")
